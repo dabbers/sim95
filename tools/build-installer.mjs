@@ -130,6 +130,7 @@ const portal = {
   PAL: ["Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.", "#003087"],
   TUBE: ["Movies: watch them, put yours up, give them stars. They play in SimPlayer.", "#CC0000"],
   STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
+  DNS: ["Register your own domain name (.sim, .com, .net, .org), point it at any machine, and host your site here.", "#000066"],
 };
 const appInf = (app) => {
   const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
@@ -429,6 +430,36 @@ END SUB
     done: `Print("The Sim Shell is open, and sshd is listening on port 22. Next time, start C:\\PROGRAMS\\SIMSH.SPK from Files.")`,
     code: () => startService + read("simsh/src/SIMSHRC.SPK"),
   },
+  simdns: {
+    folder: "DNS",
+    vapor: { folder: "DNS", id: "SIMDNS", name: "SimDNS", kind: "web", category: "Internet", run: "/", tasks: "NAMED", startup: "NAMED.RUN", about: "Domain names for the SIM95 network: a name server (NAMED), SimNIC the registrar, DIG, and a web server that hosts many sites on one machine. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "SimDNS",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It makes this
+' machine a name server and a registrar. The name server, C:\\PROGRAMS\\NAMED.SPK,
+' answers for the zones in C:\\DNS (listed in C:\\DNS\\NAMED.CNF); it starts now
+' and with the machine (C:\\SYSTEM\\STARTUP\\NAMED.RUN). SimNIC, the registrar,
+' becomes the home page (the stock INDEX.HTM moves to WELCOME.HTM), or goes in
+' C:\\WEB\\DNS on a SimHost machine. It also writes DIG.SPK (ask a name server)
+' and RESOLVE.SPK (the resolver, for your own programs), and replaces the web
+' server with one that serves several sites by name (C:\\WEB\\VHOSTS.TXT). The
+' old web server is kept as C:\\PROGRAMS\\HTTPD.ORG and comes back if SimDNS is
+' uninstalled. Accounts and domains in C:\\NICDATA and zones in C:\\DNS are left
+' alone, so running this again upgrades SimDNS.`,
+    copy: [["simdns/WEB", "C:\\WEB"]],
+    generated: [
+      { dest: "C:\\PROGRAMS\\NAMED.SPK", text: () => read("simdns/src/NAMED.SPK") },
+      { dest: "C:\\PROGRAMS\\DIG.SPK", text: () => read("simdns/src/DIG.SPK") + "\n" + read("simdns/src/RESOLVE.SPK") },
+      { dest: "C:\\PROGRAMS\\RESOLVE.SPK", text: () => read("simdns/src/RESOLVE.SPK") },
+      // the web server is the machine's own: Vapor must never delete it (it
+      // goes back to HTTPD.ORG by itself when NAMED.SPK is gone)
+      { dest: "C:\\PROGRAMS\\HTTPD.SPK", text: () => read("simdns/src/HTTPD.SPK"), keep: true },
+    ],
+    dirs: [],
+    first: ["MoveHomePage()", "DnsSetup()"],
+    last: [`StartService("NAMED", "C:\\PROGRAMS\\NAMED.SPK", "NAMED.RUN")`, "RestartWeb()"],
+    url: "/",
+    code: () => startService + moveHomePage + "\n" + read("simdns/SETUP.SPK"),
+  },
   eliza: {
     folder: "ELIZA",
     vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with Language-Model-of-Certain-Size manners, games, jokes and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
@@ -454,7 +485,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", simdns: "NIC.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);
@@ -529,7 +560,9 @@ END SUB
   });
   out += app.code();
   // the header Vapor reads, so this installer can be published in a Vapor store
-  if (app.vapor) out = withHeader({ ...app.vapor, files: files.map((f) => f.dest).join(";") }, out);
+  // (a file marked keep, such as a system program it replaces, is left off,
+  // so uninstalling never deletes it)
+  if (app.vapor) out = withHeader({ ...app.vapor, files: files.filter((f) => !f.keep).map((f) => f.dest).join(";") }, out);
   return { text: out, files: files.length };
 }
 

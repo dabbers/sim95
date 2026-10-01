@@ -117,3 +117,41 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
 * **ASP pages in subfolders work:** `<%@ import file="X.SPK" %>` is relative
   to the page, and `SERVER.ScriptName` is the page's disk path
   (`C:\WEB\BOOK\HOME.ASP`), so a page can find its own folder from it.
+
+## The web server, names and addresses (found for SimDNS)
+
+* **`HTTPD.SPK` is only written when a disk is made.** The stock web server
+  is part of the fresh disk image, which SIM95 writes on a machine's first
+  boot (no saved disk yet). A normal boot loads the saved disk as it is and
+  writes nothing back, so a changed `C:\PROGRAMS\HTTPD.SPK` stays. The one
+  other time it comes back is **Reinstall** on the start-up error screen
+  (shown only when `C:\SYSTEM\CORE.SYS` is missing), which rebuilds the whole
+  disk from the image and keeps only `C:\MYFILES` and `USERS.INI`; that wipes
+  `C:\WEB` and every app anyway.
+* **How the web server starts.** At boot, everything in `C:\SYSTEM\STARTUP`
+  runs (`WEB.RUN` holds `C:\PROGRAMS\HTTPD.SPK`), then the services list:
+  `web`, `files` and `chat` (`HTTPD.SPK`, `FILESVC.SPK`, `CHATSVC.SPK`), each
+  started if it is switched on in `C:\SYSTEM\SETTINGS.INI` (`services.web`,
+  on unless it says 0/false/off) and not already running. "Running" means a
+  process whose path is that file. The list is checked again whenever
+  `SETTINGS.INI` changes, and a service switched off has its processes
+  killed. `C:\SYSTEM\HTTPD.EXE` is a built-in that just starts the same file.
+  So the way to replace the web server is to write a new
+  `C:\PROGRAMS\HTTPD.SPK`, then kill the task named `HTTPD` and `SYS.Run` the
+  file (only if one was running: if it is off in Settings, leave it off).
+* **`Connect` takes an address as well as a name.** A dotted quad
+  (`65.16.0.3`) is used as it is, without asking the network server, and
+  `NET.Resolve("65.16.0.3")` returns it unchanged. `localhost`, `127.0.0.1`,
+  the machine's own name and the first part of it are its own address, also
+  without asking. Connecting to an address sidesteps the "two lookups of one
+  name" problem above.
+* **SPARK has no file times.** `FS` has `Size`, but nothing says when a file
+  changed. A program that wants to notice changes (NAMED.SPK reloading its
+  zones) keeps the text and compares.
+* **`ASP.Render` reads everything from the request text it is given:** the
+  request line becomes `REQUEST.Path` and `QueryString`, and the headers
+  `REQUEST.Host` and `REQUEST.Header`. So a web server can change the request
+  before handing it over, which is how SimDNS's `HTTPD.SPK` shows a page at
+  `/www.coolsite.sim/page.asp` the path `/page.asp`.
+* **`<%= ... %>` writes text as it is**, not HTML-encoded: use
+  `SERVER.HtmlEncode` for anything a visitor typed.

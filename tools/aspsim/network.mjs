@@ -7,6 +7,7 @@
 //   const pid = a.run("C:\\PROGRAMS\\HTTPD.SPK");
 //   await a.request("GET", "/")             // pages, as before (no network)
 //   await a.fetch("BRAVO", "/")              // a real HTTP GET over the network
+import fs from "node:fs";
 import { load, machine } from "./sim.mjs";
 
 const SERVER = "65.255.255.1";
@@ -164,6 +165,9 @@ export class Network {
     const S = await load();
     const stack = new S.Stack({ hostname, jitter: () => 1, transport: this.hub.transport() });
     const m = await machine(hostname, stack);
+    // SIM95_HTTPD=file: every machine has that web server instead of the stock
+    // one, so a suite can be run again against a replacement (SimDNS's).
+    if (process.env.SIM95_HTTPD) m.write("C:\\PROGRAMS\\HTTPD.SPK", fs.readFileSync(process.env.SIM95_HTTPD, "utf8"));
     const ui = new UI();
     const net = {
       connect: (pid, h, p) => stack.connect(pid, h, p), listen: (pid, p, f) => stack.listen(pid, p, f),

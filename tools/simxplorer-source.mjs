@@ -1,5 +1,6 @@
-// What C:\PROGRAMS\SIMXPLOR.SPK is: the JavaScript engine, the browser, and a
-// copy of SimPlayer (simplayer/src/PLAYER.SPK) built in, so movies play in a
+// What C:\PROGRAMS\SIMXPLOR.SPK is: the JavaScript engine, the browser, the
+// SimDNS resolver (simdns/src/RESOLVE.SPK, whose names all start with Rs), and
+// a copy of SimPlayer (simplayer/src/PLAYER.SPK) built in, so movies play in a
 // window of the browser's own without a separate download.
 //
 // SPARK has one namespace per program, and the player's names (win, state,
@@ -47,4 +48,4 @@ export function embedPlayer(src = read("simplayer/src/PLAYER.SPK")) {
   return "' ================================================================ SimPlayer, built in\n" + out;
 }
 
-export const simxplorerSource = () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") + "\n" + embedPlayer();
+export const simxplorerSource = () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") + "\n" + read("simdns/src/RESOLVE.SPK") + "\n" + embedPlayer();

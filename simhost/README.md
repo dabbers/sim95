@@ -17,6 +17,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
 | SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
 | SimStats | `http://HOST/stats/` | `C:\WEB\STATS` |
+| SimDNS (SimNIC) | `http://HOST/dns/` | `C:\WEB\DNS` |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
 `http://HOST/` becomes a front page that lists them. Each web app's installer leaves an `APP.INF` (name, blurb, colour) in its folder, and the front page lists every folder that has one, so apps added later show up without reinstalling SimHost. Each app keeps its data
@@ -93,6 +94,12 @@ Two things to know after moving:
 * **Simxplorer** sets its search engine to `/ask/` and its Mail button to
   `/mail/` when it finds them in their folders.
 * **Clippy** searches with the AskSim on the machine.
+* **SimDNS** gives the apps names of their own: register a domain at
+  `/dns/` and press *Point these names at the apps*, and `book.yourname.sim`
+  is SimBook, `mail.yourname.sim` ColdMail, and so on, for Simxplorer users
+  with this machine as their name server (see [SimDNS](../simdns/)). Move In
+  doesn't bring `C:\DNS` over: zones point at machine names, and the old
+  machine's would point at a machine that is about to close.
 * **Vapor** installs web apps into their folders without asking to take the
   home page. **Open** goes to the app's folder, and **Uninstall** removes
   the files from there.

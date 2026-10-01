@@ -1,0 +1,772 @@
+' NIC.SPK - SimNIC, the domain name registrar (InterNIC, 1996). Every page
+' pulls this in with <%@ import file="NIC.SPK" %>.
+'
+' A domain registered here is a zone this machine's name server (NAMED.SPK)
+' answers for. SimNIC writes the zone file and lists it in NAMED.CNF; NAMED
+' sees the change within a few seconds. Records point names at machines
+' with CNAMEs ("www CNAME alpha"), since addresses change and names don't.
+'
+'   C:\NICDATA\USERS\<user>.TXT     an account, key=value (password salted + hashed)
+'   C:\NICDATA\SESSIONS\<id>.TXT    who a sign-in cookie belongs to, and its form token
+'   C:\NICDATA\DOMAINS.TXT          domain|owner|registered|expires|zone file|status
+'   C:\NICDATA\ORDERS\<order>.TXT   a registration waiting to be paid for with SimPal
+'   C:\NICDATA\LOCK\                exists while a page is handing out a domain
+'   C:\DNS\NAMED.CNF                "primary coolsite.sim COOLSITE.SIM", one a zone
+'   C:\DNS\<file>                   the zone files
+'   C:\WEB\VHOSTS.TXT               sites this machine's web server serves by name
+'   C:\WEB\SITES\<NAME>             the pages of a site hosted here
+'
+' Status is "active", or "unpaid" while its owner is off paying at SimPal
+' (it is held for HOLDMINUTES, then anyone may have it).
+
+CONST DATADIR = "C:\NICDATA"
+CONST DNSDIR = "C:\DNS"
+CONST NAMEDCNF = "C:\DNS\NAMED.CNF"
+CONST VHOSTFILE = "C:\WEB\VHOSTS.TXT"
+CONST SITESDIR = "C:\WEB\SITES"
+CONST COOKIE = "simnic"
+CONST TLDS = "|sim|com|net|org|"
+CONST NICPRICE = "70.00"            ' two years, as InterNIC charged in 1996
+CONST NICPAL = "simnic"        ' the SimPal account the money goes to
+CONST HOLDMINUTES = 15
+CONST MAXDOMAINS = 10            ' each, so My Domains fits a page
+CONST MAXRECORDS = 40            ' each zone, so its page fits a message
+CONST MAXNAME = 40
+
+VAR viewer AS String
+VAR formToken AS String
+VAR whyNot AS String             ' what a failed action said
+
+' ---------------------------------------------------------------- the disk
+
+' Where these pages are: C:\WEB, or C:\WEB\DNS on a SimHost machine.
+FUNCTION AppDir () AS String
+    VAR page AS String
+    page = SERVER.ScriptName
+    RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
+END FUNCTION
+
+' Where SimNIC is on the web, by this machine's name: http://host/ or http://host/dns/
+FUNCTION SiteUrl () AS String
+    IF AppDir().Upper() = "C:\WEB" THEN RETURN "http://" + SERVER.Name.Lower() + "/"
+    RETURN "http://" + SERVER.Name.Lower() + "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
+SUB EnsureDisk ()
+    VAR dir AS String
+    VAR dirs AS Array OF String
+    dirs = [DATADIR, DATADIR + "\USERS", DATADIR + "\SESSIONS", DATADIR + "\ORDERS", DNSDIR, SITESDIR]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    NEXT
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    s = s.Replace(Chr(13), "").Replace(Chr(10), " ").Replace("|", " ").Trim()
+    IF s.Length > most THEN s = s.Substring(0, most)
+    RETURN s
+END FUNCTION
+
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+' ---------------------------------------------------------------- accounts (as SimBook's)
+
+FUNCTION ValidUser (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(u, "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION UserPath (u AS String) AS String
+    RETURN DATADIR + "\USERS\" + u + ".TXT"
+END FUNCTION
+
+FUNCTION UserExists (u AS String) AS Bool
+    IF NOT ValidUser(u) THEN RETURN FALSE
+    RETURN FS.Exists(UserPath(u))
+END FUNCTION
+
+FUNCTION Field (rec AS Array OF String, key AS String) AS String
+    VAR line AS String
+    FOR EACH line IN rec
+        IF line.StartsWith(key + "=") THEN RETURN Unesc(line.Substring(key.Length + 1, line.Length - key.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION NameOf (u AS String) AS String
+    IF NOT UserExists(u) THEN RETURN u
+    RETURN Field(FS.Read(UserPath(u)).Lines(), "name")
+END FUNCTION
+
+' Not real cryptography - SIM95 has none - but the password itself never
+' touches the disk. Two running hashes over salt + password, kept under 2^31.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION
+
+FUNCTION NewToken () AS String
+    RETURN Hex(268435456 + Rnd(1879048191))
+END FUNCTION
+
+' "" on success, otherwise what is wrong.
+FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
+    VAR salt AS String
+    EnsureDisk()
+    IF NOT ValidUser(u) THEN RETURN "Pick a user name of 3 to 8 letters or digits."
+    IF FS.Exists(UserPath(u)) THEN RETURN "Somebody already has the name " + u + "."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    name = Clip(name, MAXNAME)
+    IF name = "" THEN RETURN "Tell us your name (or your company's)."
+    salt = NewToken()
+    FS.Write(UserPath(u), "name=" + Esc(name) + Chr(10) + "salt=" + salt + Chr(10) + "pass=" + Hash(salt, pw) + Chr(10) + "joined=" + TIME.Date + Chr(10))
+    RETURN ""
+END FUNCTION
+
+FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN FALSE
+    rec = FS.Read(UserPath(u)).Lines()
+    RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+' ---------------------------------------------------------------- sessions
+' The form token stops another site from acting in your name: every form
+' that changes something carries it (TokenField), and every page that
+' changes something checks it (RequireToken), as SimBook does.
+
+SUB SignIn (u AS String)
+    VAR token AS String
+    EnsureDisk()
+    token = NewToken()
+    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u + Chr(10) + NewToken() + NewToken())
+    RESPONSE.SetCookie(COOKIE, token)
+END SUB
+
+FUNCTION SessionPath () AS String
+    VAR token AS String
+    token = REQUEST.Cookie(COOKIE)
+    IF token = "" OR token.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(token, "0123456789ABCDEF") THEN RETURN ""
+    RETURN DATADIR + "\SESSIONS\" + token + ".TXT"
+END FUNCTION
+
+SUB SignOut ()
+    VAR path AS String
+    path = SessionPath()
+    IF path <> "" THEN
+        IF FS.Exists(path) THEN FS.Delete(path)
+    END IF
+    RESPONSE.SetCookie(COOKIE, "")
+END SUB
+
+' Who the cookie says is signed in, or "". Also sets formToken.
+FUNCTION CurrentUser () AS String
+    VAR path AS String
+    VAR lines AS Array OF String
+    VAR u AS String
+    path = SessionPath()
+    IF path = "" THEN RETURN ""
+    IF NOT FS.Exists(path) THEN RETURN ""
+    lines = FS.Read(path).Lines()
+    IF lines.Count < 2 THEN RETURN ""
+    u = lines[0].Trim()
+    IF NOT UserExists(u) THEN RETURN ""
+    formToken = lines[1].Trim()
+    RETURN u
+END FUNCTION
+
+SUB RequireLogin ()
+    viewer = CurrentUser()
+    IF viewer = "" THEN RESPONSE.Redirect("index.asp?why=" + UrlEnc("Please log in first."))
+END SUB
+
+SUB RequireToken ()
+    VAR sent AS String
+    sent = REQUEST.Form("t")
+    IF sent = "" THEN sent = REQUEST.Query("t")
+    IF sent = "" OR sent <> formToken THEN RESPONSE.Redirect("home.asp?why=" + UrlEnc("That did not come from a SimNIC page, so nothing was changed."))
+END SUB
+
+FUNCTION TokenField () AS String
+    RETURN "<input type=""hidden"" name=""t"" value=""" + formToken + """>"
+END FUNCTION
+
+' ---------------------------------------------------------------- the lock
+' Two pages can run at once (one waits, the other runs), so handing out a
+' name is done holding a lock: a folder, which only one page can make.
+
+FUNCTION NicLock () AS Bool
+    VAR tries AS Integer
+    VAR got AS Bool
+    VAR at AS String
+    EnsureDisk()
+    WHILE NOT got AND tries < 150
+        tries = tries + 1
+        TRY
+            FS.MakeDir(DATADIR + "\LOCK")
+            got = TRUE
+        CATCH err
+            got = FALSE
+        END TRY
+        IF NOT got THEN
+            at = ReadOr(DATADIR + "\LOCK\AT.TXT", "")
+            IF (at <> "" AND TIME.Now - Int(Val(at)) > 10) OR (at = "" AND tries MOD 50 = 0) THEN
+                NicUnlock()
+            ELSE
+                SYS.Sleep(20)
+            END IF
+        END IF
+    END WHILE
+    IF got THEN FS.Write(DATADIR + "\LOCK\AT.TXT", Str(TIME.Now))
+    RETURN got
+END FUNCTION
+
+SUB NicUnlock ()
+    TRY
+        IF FS.Exists(DATADIR + "\LOCK\AT.TXT") THEN FS.Delete(DATADIR + "\LOCK\AT.TXT")
+        IF FS.Exists(DATADIR + "\LOCK") THEN FS.Delete(DATADIR + "\LOCK")
+    CATCH err
+    END TRY
+END SUB
+
+' ---------------------------------------------------------------- domain names
+
+' "CoolSite.SIM " -> "coolsite.sim"; "" when it can't be a domain here.
+FUNCTION CleanDomain (d AS String) AS String
+    VAR p AS Array OF String
+    d = d.Trim().Lower()
+    IF d.StartsWith("http://") THEN d = d.Substring(7, d.Length - 7)
+    IF d.StartsWith("www.") THEN d = d.Substring(4, d.Length - 4)
+    IF d.Contains("/") THEN d = d.Substring(0, d.IndexOf("/"))
+    IF d.EndsWith(".") THEN d = d.Substring(0, d.Length - 1)
+    p = d.Split(".")
+    IF p.Count <> 2 THEN RETURN ""
+    IF NOT TLDS.Contains("|" + p[1] + "|") THEN RETURN ""
+    IF p[0].Length < 2 OR p[0].Length > 24 THEN RETURN ""
+    IF NOT OnlyFrom(p[0], "abcdefghijklmnopqrstuvwxyz0123456789-") THEN RETURN ""
+    IF p[0].StartsWith("-") OR p[0].EndsWith("-") THEN RETURN ""
+    RETURN d
+END FUNCTION
+
+' The line in DOMAINS.TXT for a domain, split, or an empty array. An unpaid
+' hold that has run out counts as nothing.
+FUNCTION DomainRec (d AS String) AS Array OF String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR none AS Array OF String
+    FOR EACH line IN ReadOr(DATADIR + "\DOMAINS.TXT", "").Lines()
+        p = line.Split("|")
+        IF p.Count >= 6 THEN
+            IF p[0] = d THEN
+                IF p[5] = "unpaid" AND TIME.Now - Int(Val(p[2])) > HOLDMINUTES * 60 THEN RETURN none
+                RETURN p
+            END IF
+        END IF
+    NEXT
+    RETURN none
+END FUNCTION
+
+FUNCTION CountDomains () AS Integer
+    VAR line AS String
+    VAR n AS Integer
+    FOR EACH line IN ReadOr(DATADIR + "\DOMAINS.TXT", "").Lines()
+        IF line.EndsWith("|active") THEN n = n + 1
+    NEXT
+    RETURN n
+END FUNCTION
+
+FUNCTION IsFree (d AS String) AS Bool
+    RETURN DomainRec(d).Count = 0
+END FUNCTION
+
+' Is the domain this user's, and active?
+FUNCTION Owns (u AS String, d AS String) AS Bool
+    VAR p AS Array OF String
+    p = DomainRec(d)
+    IF p.Count < 6 THEN RETURN FALSE
+    RETURN p[1] = u AND p[5] = "active"
+END FUNCTION
+
+' Every active domain of a user, sorted.
+FUNCTION DomainsOf (u AS String) AS Array OF String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR out AS Array OF String
+    FOR EACH line IN ReadOr(DATADIR + "\DOMAINS.TXT", "").Lines()
+        p = line.Split("|")
+        IF p.Count >= 6 THEN
+            IF p[1] = u AND p[5] = "active" THEN out.Add(p[0])
+        END IF
+    NEXT
+    out.Sort()
+    RETURN out
+END FUNCTION
+
+' DOMAINS.TXT with the line for d replaced by line ("" takes it out).
+SUB SetDomainLine (d AS String, line AS String)
+    VAR out AS Array OF String
+    VAR l AS String
+    FOR EACH l IN ReadOr(DATADIR + "\DOMAINS.TXT", "").Lines()
+        IF l.Trim() = "" OR l.StartsWith(d + "|") THEN CONTINUE
+        out.Add(l)
+    NEXT
+    IF line <> "" THEN out.Add(line)
+    FS.Write(DATADIR + "\DOMAINS.TXT", out.Join(Chr(10)) + Chr(10))
+END SUB
+
+' Two years from today: "1996-07-04" -> "1998-07-04".
+FUNCTION TwoYears () AS String
+    RETURN Str(Int(Val(TIME.Date.Substring(0, 4))) + 2) + TIME.Date.Substring(4, TIME.Date.Length - 4)
+END FUNCTION
+
+' Should registering cost SimBucks? Only with SimPal on this machine, and a
+' SimPal account for SimNIC to be paid into.
+FUNCTION PayOn () AS Bool
+    RETURN FS.Exists("C:\PALDATA") AND FS.Exists("C:\PROGRAMS\PALCHECK.SPK") AND FS.Exists("C:\PALDATA\USERS\" + NICPAL + ".TXT")
+END FUNCTION
+
+FUNCTION SimPalHere () AS Bool
+    RETURN FS.Exists("C:\PALDATA")
+END FUNCTION
+
+' Where SimPal takes payments on this machine (PALCHECK.SPK's PalPayUrl).
+FUNCTION PayUrl () AS String
+    IF FS.Exists("C:\WEB\PAL\PAL.SPK") THEN RETURN "http://" + SERVER.Name.Lower() + "/pal/pay.asp"
+    RETURN "http://" + SERVER.Name.Lower() + "/pay.asp"
+END FUNCTION
+
+' Registers d to u: free, or held while they pay ("" and the order number
+' in whyNot). Returns "" when done, or what is wrong.
+FUNCTION Register (u AS String, d AS String) AS String
+    VAR order AS String
+    IF d = "" THEN RETURN "That is not a domain name SimNIC can register: try something like coolsite.sim (.sim, .com, .net or .org)."
+    IF DomainsOf(u).Count >= MAXDOMAINS THEN RETURN "SimNIC registers at most " + Str(MAXDOMAINS) + " domains per contact."
+    IF NOT NicLock() THEN RETURN "SimNIC is very busy. Please try again."
+    IF NOT IsFree(d) THEN
+        NicUnlock()
+        RETURN "Sorry, " + d + " is already registered."
+    END IF
+    IF PayOn() THEN
+        order = NewToken()
+        FS.Write(DATADIR + "\ORDERS\" + order + ".TXT", d + "|" + u + "|" + Str(TIME.Now))
+        SetDomainLine(d, d + "|" + u + "|" + Str(TIME.Now) + "||" + "|unpaid")
+        NicUnlock()
+        whyNot = order
+        RETURN ""
+    END IF
+    Activate(u, d)
+    NicUnlock()
+    whyNot = ""
+    RETURN ""
+END FUNCTION
+
+' Makes d u's: its zone file, its line in NAMED.CNF, and DOMAINS.TXT. Call
+' it holding the lock.
+SUB Activate (u AS String, d AS String)
+    VAR file AS String
+    VAR p AS Array OF String
+    EnsureDisk()
+    p = DomainRec(d)
+    file = ""
+    IF p.Count >= 6 THEN file = p[4]
+    IF file = "" THEN file = ZoneFileFor(d)
+    IF NOT FS.Exists(DNSDIR + "\" + file) THEN
+        FS.Write(DNSDIR + "\" + file, "; " + d + " - registered to " + u + " at SimNIC on " + TIME.Date + Chr(10) _
+            + "; Written by SimNIC on " + SERVER.Name.Lower() + ". Change the records there, or here with Notes." + Chr(10) _
+            + "$TTL 60" + Chr(10) _
+            + "@        IN  SOA    " + SERVER.Name.Lower() + " hostmaster ( " + TIME.Date.Replace("-", "") + "01 )" + Chr(10) _
+            + "@        IN  NS     " + SERVER.Name.Lower() + Chr(10))
+    END IF
+    IF NOT (Chr(10) + ReadOr(NAMEDCNF, "")).Lower().Contains(Chr(10) + "primary " + d + " ") THEN
+        FS.Append(NAMEDCNF, "primary " + d + " " + file + Chr(10))
+    END IF
+    SetDomainLine(d, d + "|" + u + "|" + TIME.Date + "|" + TwoYears() + "|" + file + "|active")
+END SUB
+
+' A file name for a zone: COOLSITE.SIM, or COOLSI01.SIM if that is taken.
+FUNCTION ZoneFileFor (d AS String) AS String
+    VAR label AS String
+    VAR ext AS String
+    VAR n AS Integer
+    VAR name AS String
+    label = d.Split(".")[0].Replace("-", "").Upper()
+    ext = d.Split(".")[1].Upper()
+    IF label.Length > 8 THEN label = label.Substring(0, 8)
+    name = label + "." + ext
+    IF NOT FS.Exists(DNSDIR + "\" + name) THEN RETURN name
+    IF label.Length > 6 THEN label = label.Substring(0, 6)
+    FOR n = 1 TO 99
+        name = label + Str(n).PadLeft(2).Replace(" ", "0") + "." + ext
+        IF NOT FS.Exists(DNSDIR + "\" + name) THEN RETURN name
+    NEXT
+    RETURN "Z" + Hex(Rnd(65536)) + "." + ext
+END FUNCTION
+
+FUNCTION ZonePath (d AS String) AS String
+    VAR p AS Array OF String
+    p = DomainRec(d)
+    IF p.Count < 6 THEN RETURN ""
+    RETURN DNSDIR + "\" + p[4]
+END FUNCTION
+
+' ---------------------------------------------------------------- records
+' A zone file is its head (comments, $TTL, the SOA and the domain's NS: kept
+' as they are) and then its records, one a line: name IN TYPE value.
+
+FUNCTION Words (s AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR p AS String
+    FOR EACH p IN s.Replace(Chr(9), " ").Split(" ")
+        IF p <> "" THEN out.Add(p)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Is this line of a zone file part of its head?
+FUNCTION IsHead (line AS String) AS Bool
+    VAR w AS Array OF String
+    VAR t AS String
+    t = line.Trim()
+    IF t = "" OR t.StartsWith(";") OR t.StartsWith("$") THEN RETURN TRUE
+    w = Words(t.Replace("(", " ").Replace(")", " "))
+    IF w.Contains("SOA") OR w.Contains("soa") THEN RETURN TRUE
+    IF w.Count >= 3 AND w[0] = "@" AND (w[w.Count - 2].Upper() = "NS") THEN RETURN TRUE
+    RETURN FALSE
+END FUNCTION
+
+' The record lines of a zone (not its head).
+FUNCTION Records (d AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR inside AS Bool
+    FOR EACH line IN ReadOr(ZonePath(d), "").Lines()
+        IF inside THEN
+            IF line.Contains(")") THEN inside = FALSE
+            CONTINUE
+        END IF
+        IF line.Contains("(") AND NOT line.Contains(")") THEN
+            inside = TRUE
+            CONTINUE
+        END IF
+        IF NOT IsHead(line) THEN out.Add(line.Replace(Chr(13), ""))
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Writes the zone again: its head as it was, then these records.
+SUB SaveRecords (d AS String, recs AS Array OF String)
+    VAR head AS Array OF String
+    VAR line AS String
+    VAR inside AS Bool
+    FOR EACH line IN ReadOr(ZonePath(d), "").Lines()
+        IF inside THEN
+            head.Add(line)
+            IF line.Contains(")") THEN inside = FALSE
+            CONTINUE
+        END IF
+        IF line.Contains("(") AND NOT line.Contains(")") THEN
+            head.Add(line)
+            inside = TRUE
+            CONTINUE
+        END IF
+        IF IsHead(line) AND line.Trim() <> "" THEN head.Add(line)
+    NEXT
+    FOR EACH line IN recs
+        head.Add(line)
+    NEXT
+    FS.Write(ZonePath(d), head.Join(Chr(10)) + Chr(10))
+END SUB
+
+' One record as a zone file line, lined up.
+FUNCTION RecordLine (owner AS String, rtype AS String, value AS String) AS String
+    RETURN owner.PadRight(8) + " IN  " + rtype.PadRight(6) + " " + value
+END FUNCTION
+
+' Takes a record from the form apart and checks it. Sets recOwner,
+' recType, recValue; returns "" or what is wrong.
+VAR recOwner AS String
+VAR recType AS String
+VAR recValue AS String
+
+FUNCTION CheckRecord (owner AS String, rtype AS String, value AS String) AS String
+    VAR w AS Array OF String
+    owner = owner.Trim().Lower()
+    rtype = rtype.Trim().Upper()
+    value = value.Trim()
+    IF owner = "" THEN owner = "@"
+    IF owner.EndsWith(".") THEN RETURN "Give the name without the domain: www, not www.coolsite.sim."
+    IF owner <> "@" THEN
+        IF owner.Length > MAXNAME OR NOT OnlyFrom(owner, "abcdefghijklmnopqrstuvwxyz0123456789-.*") OR owner.StartsWith(".") OR owner.Contains("..") THEN RETURN "A name is letters, digits and hyphens, like www or shop.east (or @ for the domain itself)."
+        IF owner.Contains("*") AND NOT (owner = "*" OR owner.StartsWith("*.")) THEN RETURN "A * stands for any name, and goes first: *.east"
+    END IF
+    SELECT CASE rtype
+        CASE "CNAME"
+            value = value.Lower()
+            IF value.EndsWith(".") THEN value = value.Substring(0, value.Length - 1)
+            IF value = "" OR value.Length > 60 OR NOT OnlyFrom(value, "abcdefghijklmnopqrstuvwxyz0123456789-.@") THEN RETURN "A CNAME points at a machine (alpha) or another name (www.coolsite.sim)."
+        CASE "A"
+            IF NOT IsAddress(value) THEN RETURN "An A record needs an address like 65.16.0.7. Addresses change when a machine restarts, so a CNAME to the machine's name is usually better."
+        CASE "MX"
+            w = Words(value.Lower())
+            IF w.Count = 1 THEN w.Insert(0, "10")
+            IF w.Count <> 2 THEN RETURN "An MX record is a preference and a mail machine: 10 alpha"
+            IF NOT OnlyFrom(w[0], "0123456789") OR w[0].Length > 4 OR NOT OnlyFrom(w[1], "abcdefghijklmnopqrstuvwxyz0123456789-.") THEN RETURN "An MX record is a preference and a mail machine: 10 alpha"
+            value = w[0] + " " + w[1]
+        CASE "TXT"
+            value = value.Replace("""", "'")
+            IF value = "" OR value.Length > 200 OR value.Contains(Chr(10)) OR value.Contains(Chr(13)) THEN RETURN "A TXT record is one line of up to 200 characters."
+            value = """" + value + """"
+        CASE "NS"
+            value = value.Lower()
+            IF value.EndsWith(".") THEN value = value.Substring(0, value.Length - 1)
+            IF owner = "@" THEN RETURN "This domain's own name server is SimNIC's. An NS record hands a part of it (east) to another machine's SimDNS."
+            IF value = "" OR value.Length > 60 OR NOT OnlyFrom(value, "abcdefghijklmnopqrstuvwxyz0123456789-.") THEN RETURN "An NS record names the machine running SimDNS for that part of your domain: bravo"
+        CASE ELSE
+            RETURN "SimNIC can make CNAME, A, MX, TXT and NS records."
+    END SELECT
+    recOwner = owner
+    recType = rtype
+    recValue = value
+    RETURN ""
+END FUNCTION
+
+FUNCTION IsAddress (s AS String) AS Bool
+    VAR p AS String
+    IF s.Split(".").Count <> 4 THEN RETURN FALSE
+    FOR EACH p IN s.Split(".")
+        IF p = "" OR p.Length > 3 OR NOT OnlyFrom(p, "0123456789") THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' Adds a record to d (a CNAME takes the place of one already at that name).
+' Returns "" or what is wrong.
+FUNCTION AddRecord (d AS String, owner AS String, rtype AS String, value AS String) AS String
+    VAR recs AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR w AS Array OF String
+    VAR why AS String
+    why = CheckRecord(owner, rtype, value)
+    IF why <> "" THEN RETURN why
+    recs = Records(d)
+    FOR EACH line IN recs
+        w = Words(line)
+        IF w.Count >= 3 THEN
+            IF recType = "CNAME" AND w[0].Lower() = recOwner AND RecTypeOf(w) = "CNAME" THEN CONTINUE
+            IF w[0].Lower() = recOwner AND RecTypeOf(w) = recType AND RecValueOf(line, w) = recValue THEN CONTINUE
+        END IF
+        out.Add(line)
+    NEXT
+    IF out.Count >= MAXRECORDS THEN RETURN "A domain at SimNIC has at most " + Str(MAXRECORDS) + " records."
+    out.Add(RecordLine(recOwner, recType, recValue))
+    SaveRecords(d, out)
+    RETURN ""
+END FUNCTION
+
+' A record line's type: the word after IN (or after the name).
+FUNCTION RecTypeOf (w AS Array OF String) AS String
+    VAR i AS Integer
+    FOR i = 1 TO w.Count - 1
+        IF "|CNAME|A|MX|TXT|NS|".Contains("|" + w[i].Upper() + "|") THEN RETURN w[i].Upper()
+    NEXT
+    RETURN "?"
+END FUNCTION
+
+FUNCTION RecValueOf (line AS String, w AS Array OF String) AS String
+    VAR i AS Integer
+    VAR out AS Array OF String
+    VAR seen AS Bool
+    IF line.Contains("""") THEN RETURN line.Substring(line.IndexOf(""""), line.Length - line.IndexOf("""")).Trim()
+    FOR i = 1 TO w.Count - 1
+        IF seen THEN out.Add(w[i])
+        IF NOT seen AND "|CNAME|A|MX|TXT|NS|".Contains("|" + w[i].Upper() + "|") THEN seen = TRUE
+    NEXT
+    RETURN out.Join(" ")
+END FUNCTION
+
+SUB DeleteRecord (d AS String, n AS Integer)
+    VAR recs AS Array OF String
+    recs = Records(d)
+    IF n < 0 OR n >= recs.Count THEN RETURN
+    recs.RemoveAt(n)
+    SaveRecords(d, recs)
+END SUB
+
+' ---------------------------------------------------------------- hosting
+' "Host it here": the domain (and www.) become a site on this machine's web
+' server, in a folder of its own, and point here with CNAMEs.
+
+' The site's folder, if it is hosted here, from VHOSTS.TXT; else "".
+FUNCTION SiteFolder (d AS String) AS String
+    VAR line AS String
+    FOR EACH line IN ReadOr(VHOSTFILE, "").Lines()
+        IF line.Lower().StartsWith(d + "|") THEN RETURN line.Substring(d.Length + 1, line.Length - d.Length - 1).Trim()
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' Adds name|folder to VHOSTS.TXT (or moves name to folder).
+SUB SetVhost (name AS String, folder AS String)
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(VHOSTFILE, "").Lines()
+        IF line.Trim() = "" OR line.Lower().StartsWith(name + "|") THEN CONTINUE
+        out.Add(line)
+    NEXT
+    out.Add(name + "|" + folder)
+    FS.Write(VHOSTFILE, out.Join(Chr(10)) + Chr(10))
+END SUB
+
+FUNCTION HostHere (d AS String) AS String
+    VAR folder AS String
+    VAR label AS String
+    VAR n AS Integer
+    VAR here AS String
+    EnsureDisk()
+    here = SERVER.Name.Lower()
+    folder = SiteFolder(d)
+    IF folder = "" THEN
+        label = d.Split(".")[0].Replace("-", "").Upper()
+        IF label.Length > 8 THEN label = label.Substring(0, 8)
+        folder = SITESDIR + "\" + label
+        WHILE FS.Exists(folder) AND n < 99
+            n = n + 1
+            IF label.Length > 6 THEN label = label.Substring(0, 6)
+            folder = SITESDIR + "\" + label + Str(n).PadLeft(2).Replace(" ", "0")
+        END WHILE
+        IF FS.Exists(folder) THEN RETURN "There is no room for another site in " + SITESDIR + "."
+        FS.MakeDir(folder)
+    ELSEIF NOT FS.Exists(folder) THEN
+        FS.MakeDir(folder)
+    END IF
+    IF NOT FS.Exists(folder + "\INDEX.HTM") AND NOT FS.Exists(folder + "\INDEX.ASP") THEN
+        FS.Write(folder + "\INDEX.HTM", "<html><head><title>" + d + "</title></head>" + Chr(10) _
+            + "<body bgcolor=""#FFFFFF"">" + Chr(10) + "<center><h1>" + d + "</h1>" + Chr(10) _
+            + "<p><font size=""4"">Coming soon!</font></p>" + Chr(10) _
+            + "<p><b>This site is under construction.</b> Please come back soon.</p>" + Chr(10) _
+            + "<hr width=""50%""><p><font size=""2"">Registered at SimNIC. Hosted on " + here + ".</font></p></center>" + Chr(10) _
+            + "</body></html>" + Chr(10))
+    END IF
+    SetVhost(d, folder)
+    SetVhost("www." + d, folder)
+    AddRecord(d, "@", "CNAME", here)
+    AddRecord(d, "www", "CNAME", here)
+    RETURN ""
+END FUNCTION
+
+' The web apps on this machine, each in a folder of its own (SimHost):
+' folder|name, for those with an APP.INF or a known app in them.
+FUNCTION AppFolders () AS Array OF String
+    VAR out AS Array OF String
+    VAR f AS String
+    VAR known AS Array OF String
+    VAR k AS String
+    VAR p AS Array OF String
+    known = ["BOOK|BOOK.SPK|SimBook", "MAIL|MAIL.SPK|ColdMail", "ASK|ASK.SPK|AskSim", "GEO|GEO.SPK|GeoSimies", "ELIZA|BOT.SPK|ELIZA-95", "PAL|PAL.SPK|SimPal", "TUBE|TUBE.SPK|SimTube", "STATS|STATS.SPK|SimStats", "VAPOR|CATALOG.TXT|Vapor"]
+    FOR EACH f IN FS.List("C:\WEB")
+        IF NOT f.EndsWith("\") THEN CONTINUE
+        f = f.Substring(0, f.Length - 1).Upper()
+        IF f = "SITES" THEN CONTINUE
+        IF FS.Exists("C:\WEB\" + f + "\APP.INF") THEN
+            p = FS.Read("C:\WEB\" + f + "\APP.INF").Split("|")
+            out.Add(f + "|" + p[0].Trim())
+            CONTINUE
+        END IF
+        FOR EACH k IN known
+            p = k.Split("|")
+            IF p[0] = f AND FS.Exists("C:\WEB\" + f + "\" + p[1]) THEN out.Add(f + "|" + p[2])
+        NEXT
+    NEXT
+    RETURN out
+END FUNCTION
+
+' book.coolsite.sim for C:\WEB\BOOK, and so on: a site each, and a CNAME each.
+FUNCTION PointApps (d AS String) AS Integer
+    VAR a AS String
+    VAR n AS Integer
+    VAR prefix AS String
+    FOR EACH a IN AppFolders()
+        prefix = a.Split("|")[0].Lower()
+        IF AddRecord(d, prefix, "CNAME", SERVER.Name.Lower()) = "" THEN
+            SetVhost(prefix + "." + d, "C:\WEB\" + a.Split("|")[0])
+            n = n + 1
+        END IF
+    NEXT
+    RETURN n
+END FUNCTION
+
+' ---------------------------------------------------------------- the look
+
+FUNCTION Top (title AS String) AS String
+    RETURN "<html><head><title>" + H(title) + " - SimNIC</title>" _
+        + "<meta name=""description"" content=""SimNIC Registration Services: register your own domain name on the SIM95 network. .sim .com .net .org"">" _
+        + "<meta name=""keywords"" content=""domain name, register, registration, internic, whois, dns, .com, .net, .org, .sim, web hosting""></head>" + Chr(10) _
+        + "<body bgcolor=""#FFFFFF"" link=""#000099"" vlink=""#663399"">" + Chr(10) _
+        + "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr><td bgcolor=""#000066""><font color=""#FFFFFF"" size=""6""><b>SimNIC</b></font>" _
+        + " <font color=""#FFCC00"" size=""3""><i>Registration Services</i></font></td>" _
+        + "<td bgcolor=""#000066"" align=""right""><font color=""#FFFFFF"" size=""2""><b>.sim &nbsp; .com &nbsp; .net &nbsp; .org</b></font></td></tr>" _
+        + "<tr><td colspan=""2"" bgcolor=""#CCCCFF""><font size=""2""><a href=""index.asp"">Home</a> | <a href=""whois.asp"">WHOIS</a> | <a href=""home.asp"">My Domains</a> | <a href=""help.asp"">Help</a>" _
+        + IfText(viewer <> "", " | <a href=""logout.asp?t=" + formToken + """>Log out " + H(viewer) + "</a>") + "</font></td></tr></table>" + Chr(10)
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">SimNIC is a service of Network Simulations, Inc. under agreement with the SIM95 Foundation" _
+        + " &middot; " + H(SERVER.Name) + " &middot; " + TIME.Date + "</font></center></body></html>"
+END FUNCTION
+
+FUNCTION IfText (yes AS Bool, text AS String) AS String
+    IF yes THEN RETURN text
+    RETURN ""
+END FUNCTION
+
+FUNCTION Notice (text AS String, good AS Bool) AS String
+    IF text = "" THEN RETURN ""
+    IF good THEN RETURN "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#E0FFE0""><b>" + H(text) + "</b></td></tr></table>"
+    RETURN "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#FFF0C0""><b>" + H(text) + "</b></td></tr></table>"
+END FUNCTION
+
+' The addresses a site hosted here has: by name (Simxplorer with SimDNS)
+' and by path (Voyager, or anyone): http://www.coolsite.sim/ and http://alpha/www.coolsite.sim/
+FUNCTION Addresses (d AS String) AS String
+    RETURN "<a href=""http://www." + d + "/"">http://www." + d + "/</a> <font size=""2"">(Simxplorer, with a SimDNS name server)</font><br>" _
+        + "<a href=""http://" + SERVER.Name.Lower() + "/www." + d + "/"">http://" + SERVER.Name.Lower() + "/www." + d + "/</a> <font size=""2"">(Voyager, or any browser)</font>"
+END FUNCTION
