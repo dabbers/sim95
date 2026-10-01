@@ -27,7 +27,8 @@ the pages without touching anyone's data.
 | `index.asp` | Front door: login and register |
 | `home.asp` | News Feed: status box, plus posts by or to you and your friends |
 | `profile.asp?u=name` | Picture, information, friends, and the Wall |
-| `edit.asp` | Edit your profile, upload a picture (a Sketch `.PIC`, up to 200x200) |
+| `edit.asp` | Edit your profile |
+| `picture.asp` | Upload or remove your picture (a `.PIC`, up to 100x100) |
 | `people.asp?q=text` | Member directory and search |
 | `post.asp`, `friend.asp`, `login.asp`, `join.asp`, `logout.asp` | Form handlers that redirect back |
 
@@ -35,6 +36,21 @@ the pages without touching anyone's data.
 * **Walls**: only you and your friends can write on your Wall. Writing on your
   own Wall is your status update.
 * **Feed**: the newest 25 posts written by or to you or a friend.
+
+## Pictures and the 64K limit
+
+SIM95 carries at most 65,536 characters in one network message. Voyager sends
+a whole request as one message, and `HTTPD.SPK` sends a whole page as one.
+Sketch always saves 400x300 pictures, about 120K, so Voyager refuses to send
+one ("Message too long"). The picture page therefore hands out
+[`SHRINK.SPK`](WEB/SHRINK.SPK), which a visitor runs on their own machine. It
+turns `ME.PIC` into a 100x75 `AVATAR.PIC` of about 8K. Each 4x4 block becomes
+the colour it holds most of, ignoring white, so thin lines survive.
+
+On the server side, a page over 64K would stop the web server. So names,
+profile fields and posts are capped, and the feed, Wall and directory stop
+early. The tests fill everything with the worst content allowed (`<`, which
+grows to `&lt;`), and the biggest page comes to about 40K.
 
 ## Storage
 
@@ -75,4 +91,5 @@ node tools/aspsim/simbook.test.mjs    # run the tests
 The tests use `tools/aspsim`, a headless SIM95. It downloads the live bundle
 from sim95.kippy.io and runs the real SPARK compiler, interpreter, disk and ASP
 renderer in Node, so 8.3 names, compile errors and the page time limit all
-behave as they do on the real machine. Set `SIM95_REFRESH=1` to re-download.
+behave as they do on the real machine. It also enforces the 64K message limit
+on requests and pages. Set `SIM95_REFRESH=1` to re-download.

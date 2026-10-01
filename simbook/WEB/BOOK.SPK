@@ -28,7 +28,16 @@ CONST COOKIE = "simbook"
 CONST FEEDSIZE = 25
 CONST FEEDSCAN = 1000
 CONST MAXPOST = 1000
-CONST MAXPIC = 40000
+CONST MAXNAME = 40
+CONST SHORTFIELD = 60
+CONST LONGFIELD = 500
+CONST MAXPIC = 20000
+CONST PICSIZE = 100
+CONST PAGEROOM = 24000        ' how much feed or Wall one page may carry
+
+' HTTPD.SPK sends a whole page as one network message, and a message holds
+' 64K: a bigger page would stop the web server. So names, profile fields and
+' posts are capped, and the feed, Wall and directory stop well before that.
 
 VAR viewer AS String          ' who is signed in; "" for nobody
 
@@ -166,15 +175,16 @@ FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
     IF NOT ValidName(u) THEN RETURN "Pick a user name of 3 to 8 letters or digits."
     IF FS.Exists(UserPath(u)) THEN RETURN "Somebody already has the name " + u + "."
     IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
-    IF name.Trim() = "" THEN RETURN "Tell us your name."
+    name = Clip(name, MAXNAME)
+    IF name = "" THEN RETURN "Tell us your name."
     salt = NewToken()
-    SetField(rec, "name", name.Trim())
+    SetField(rec, "name", name)
     SetField(rec, "salt", salt)
     SetField(rec, "pass", Hash(salt, pw))
     SetField(rec, "joined", TIME.Date)
     SaveUser(u, rec)
     FS.Write(DATADIR + "\FRIENDS\" + u + ".TXT", "|")
-    FS.Append(DATADIR + "\PEOPLE.TXT", u + "|" + Esc(name.Trim()) + Chr(10))
+    FS.Append(DATADIR + "\PEOPLE.TXT", u + "|" + Esc(name) + Chr(10))
     RETURN ""
 END FUNCTION
 
@@ -198,6 +208,26 @@ END SUB
 
 FUNCTION HasPicture (u AS String) AS Bool
     RETURN FS.Exists(PICDIR + "\" + u + ".PIC")
+END FUNCTION
+
+' A picture is a SIM95PIC file: "SIM95PIC width height", then a row of hex digits
+' per line. Returns "" when it was saved, otherwise what is wrong with it.
+FUNCTION SavePicture (u AS String, pic AS String) AS String
+    VAR size AS Array OF String
+    IF pic = "" THEN RETURN "Choose a .PIC file first."
+    size = pic.Lines()[0].Trim().Split(" ")
+    IF NOT pic.StartsWith("SIM95PIC ") OR size.Count < 3 THEN RETURN "That is not a picture. Save one from Sketch as a .PIC file."
+    IF pic.Length > MAXPIC OR Val(size[1]) > PICSIZE OR Val(size[2]) > PICSIZE THEN RETURN "That picture is " + size[1] + " by " + size[2] + ". Shrink it to " + Str(PICSIZE) + " by " + Str(PICSIZE) + " or less with SHRINK.SPK below."
+    EnsureDisk()
+    FS.Write(PICDIR + "\" + u + ".PIC", pic)
+    RETURN ""
+END FUNCTION
+
+' Text from a form, trimmed and cut to a length.
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    s = s.Replace(Chr(13), "").Trim()
+    IF s.Length > most THEN s = s.Substring(0, most)
+    RETURN s
 END FUNCTION
 
 ' ---------------------------------------------------------------- sessions
@@ -322,7 +352,7 @@ FUNCTION WallHtml (u AS String) AS String
         IF lines[i] <> "" THEN
             out = out + PostHtml(lines[i], TRUE)
             shown = shown + 1
-            IF shown >= FEEDSIZE THEN BREAK
+            IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK
         END IF
     NEXT
     IF out = "" THEN RETURN "<tr><td><font size=""2"" color=""#808080"">Nothing on the Wall yet.</font></td></tr>"
@@ -348,7 +378,7 @@ FUNCTION FeedHtml (u AS String) AS String
             IF circle.Contains("|" + p[2] + "|") OR circle.Contains("|" + p[4] + "|") THEN
                 out = out + PostHtml(lines[i], FALSE)
                 shown = shown + 1
-                IF shown >= FEEDSIZE THEN BREAK
+                IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK
             END IF
         END IF
     NEXT

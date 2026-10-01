@@ -22,7 +22,7 @@ friend = IsFriend(viewer, who)
 <td width="200" valign="top">
 <%= Picture(who) %>
 <% IF mine THEN %>
-<p><font size="2"><a href="edit.asp">Edit My Profile</a></font></p>
+<p><font size="2"><a href="edit.asp">Edit My Profile</a><br><a href="picture.asp">Change My Picture</a></font></p>
 <% ELSE %>
 <form action="friend.asp" method="post">
 <input type="hidden" name="u" value="<%= who %>">

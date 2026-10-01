@@ -12,6 +12,7 @@ rec = LoadUser(viewer)
 <font size="2"><b><%= H(Field(rec, "name")) %></b><br>
 <a href="profile.asp?u=<%= viewer %>">My Profile</a><br>
 <a href="edit.asp">Edit My Profile</a><br>
+<a href="picture.asp">Change My Picture</a><br>
 <a href="profile.asp?u=<%= viewer %>#friends">My Friends (<%= Friends(viewer).Count %>)</a><br>
 <a href="people.asp">Find People</a></font>
 </td>

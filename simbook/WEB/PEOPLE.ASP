@@ -23,11 +23,12 @@ lines = ReadOr(DATADIR + "\PEOPLE.TXT", "").Lines()
      IF p.Count < 2 THEN CONTINUE
      IF q <> "" AND NOT (p[0].Contains(q.Lower()) OR Unesc(p[1]).Lower().Contains(q.Lower())) THEN CONTINUE
      found = found + 1
-     IF found > 200 THEN BREAK %>
+     IF found > 100 THEN BREAK %>
 <tr><td><font size="2"><a href="profile.asp?u=<%= p[0] %>"><b><%= H(Unesc(p[1])) %></b></a></font></td>
 <td><font size="2" color="#808080"><%= p[0] %><% IF IsFriend(viewer, p[0]) THEN %> &middot; your friend<% END IF %></font></td></tr>
 <% NEXT %>
 </table>
 <% IF found = 0 THEN %><p><font size="2" color="#808080">Nobody found.</font></p><% END IF %>
+<% IF found > 100 THEN %><p><font size="2" color="#808080">That is the first 100. Search to find somebody else.</font></p><% END IF %>
 </td></tr></table>
 <%= Bottom() %>

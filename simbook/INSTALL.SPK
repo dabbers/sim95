@@ -26,7 +26,9 @@ SUB Main ()
     File9()
     File10()
     File11()
-    Print("SimBook is installed in C:\WEB (12 files).")
+    File12()
+    File13()
+    Print("SimBook is installed in C:\WEB (14 files).")
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
 
@@ -84,7 +86,16 @@ SUB File0 ()
     t = t + "CONST FEEDSIZE = 25" + NL
     t = t + "CONST FEEDSCAN = 1000" + NL
     t = t + "CONST MAXPOST = 1000" + NL
-    t = t + "CONST MAXPIC = 40000" + NL
+    t = t + "CONST MAXNAME = 40" + NL
+    t = t + "CONST SHORTFIELD = 60" + NL
+    t = t + "CONST LONGFIELD = 500" + NL
+    t = t + "CONST MAXPIC = 20000" + NL
+    t = t + "CONST PICSIZE = 100" + NL
+    t = t + "CONST PAGEROOM = 24000        ' how much feed or Wall one page may carry" + NL
+    t = t + "" + NL
+    t = t + "' HTTPD.SPK sends a whole page as one network message, and a message holds" + NL
+    t = t + "' 64K: a bigger page would stop the web server. So names, profile fields and" + NL
+    t = t + "' posts are capped, and the feed, Wall and directory stop well before that." + NL
     t = t + "" + NL
     t = t + "VAR viewer AS String          ' who is signed in; """" for nobody" + NL
     t = t + "" + NL
@@ -222,15 +233,16 @@ SUB File0 ()
     t = t + "    IF NOT ValidName(u) THEN RETURN ""Pick a user name of 3 to 8 letters or digits.""" + NL
     t = t + "    IF FS.Exists(UserPath(u)) THEN RETURN ""Somebody already has the name "" + u + "".""" + NL
     t = t + "    IF pw.Length < 4 THEN RETURN ""Pick a password of at least 4 characters.""" + NL
-    t = t + "    IF name.Trim() = """" THEN RETURN ""Tell us your name.""" + NL
+    t = t + "    name = Clip(name, MAXNAME)" + NL
+    t = t + "    IF name = """" THEN RETURN ""Tell us your name.""" + NL
     t = t + "    salt = NewToken()" + NL
-    t = t + "    SetField(rec, ""name"", name.Trim())" + NL
+    t = t + "    SetField(rec, ""name"", name)" + NL
     t = t + "    SetField(rec, ""salt"", salt)" + NL
     t = t + "    SetField(rec, ""pass"", Hash(salt, pw))" + NL
     t = t + "    SetField(rec, ""joined"", TIME.Date)" + NL
     t = t + "    SaveUser(u, rec)" + NL
     t = t + "    FS.Write(DATADIR + ""\FRIENDS\"" + u + "".TXT"", ""|"")" + NL
-    t = t + "    FS.Append(DATADIR + ""\PEOPLE.TXT"", u + ""|"" + Esc(name.Trim()) + Chr(10))" + NL
+    t = t + "    FS.Append(DATADIR + ""\PEOPLE.TXT"", u + ""|"" + Esc(name) + Chr(10))" + NL
     t = t + "    RETURN """"" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
@@ -254,6 +266,26 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "FUNCTION HasPicture (u AS String) AS Bool" + NL
     t = t + "    RETURN FS.Exists(PICDIR + ""\"" + u + "".PIC"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' A picture is a SIM95PIC file: ""SIM95PIC width height"", then a row of hex digits" + NL
+    t = t + "' per line. Returns """" when it was saved, otherwise what is wrong with it." + NL
+    t = t + "FUNCTION SavePicture (u AS String, pic AS String) AS String" + NL
+    t = t + "    VAR size AS Array OF String" + NL
+    t = t + "    IF pic = """" THEN RETURN ""Choose a .PIC file first.""" + NL
+    t = t + "    size = pic.Lines()[0].Trim().Split("" "")" + NL
+    t = t + "    IF NOT pic.StartsWith(""SIM95PIC "") OR size.Count < 3 THEN RETURN ""That is not a picture. Save one from Sketch as a .PIC file.""" + NL
+    t = t + "    IF pic.Length > MAXPIC OR Val(size[1]) > PICSIZE OR Val(size[2]) > PICSIZE THEN RETURN ""That picture is "" + size[1] + "" by "" + size[2] + "". Shrink it to "" + Str(PICSIZE) + "" by "" + Str(PICSIZE) + "" or less with SHRINK.SPK below.""" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    FS.Write(PICDIR + ""\"" + u + "".PIC"", pic)" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Text from a form, trimmed and cut to a length." + NL
+    t = t + "FUNCTION Clip (s AS String, most AS Integer) AS String" + NL
+    t = t + "    s = s.Replace(Chr(13), """").Trim()" + NL
+    t = t + "    IF s.Length > most THEN s = s.Substring(0, most)" + NL
+    t = t + "    RETURN s" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- sessions" + NL
@@ -378,7 +410,7 @@ SUB File0 ()
     t = t + "        IF lines[i] <> """" THEN" + NL
     t = t + "            out = out + PostHtml(lines[i], TRUE)" + NL
     t = t + "            shown = shown + 1" + NL
-    t = t + "            IF shown >= FEEDSIZE THEN BREAK" + NL
+    t = t + "            IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK" + NL
     t = t + "        END IF" + NL
     t = t + "    NEXT" + NL
     t = t + "    IF out = """" THEN RETURN ""<tr><td><font size=""""2"""" color=""""#808080"""">Nothing on the Wall yet.</font></td></tr>""" + NL
@@ -404,7 +436,7 @@ SUB File0 ()
     t = t + "            IF circle.Contains(""|"" + p[2] + ""|"") OR circle.Contains(""|"" + p[4] + ""|"") THEN" + NL
     t = t + "                out = out + PostHtml(lines[i], FALSE)" + NL
     t = t + "                shown = shown + 1" + NL
-    t = t + "                IF shown >= FEEDSIZE THEN BREAK" + NL
+    t = t + "                IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK" + NL
     t = t + "            END IF" + NL
     t = t + "        END IF" + NL
     t = t + "    NEXT" + NL
@@ -464,11 +496,10 @@ SUB File1 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
-    t = t + "' EDIT.ASP - change your profile and picture. GET shows the form; POST saves it." + NL
+    t = t + "' EDIT.ASP - change your profile. GET shows the form; POST saves it." + NL
+    t = t + "' The picture has its own page, PICTURE.ASP." + NL
     t = t + "VAR rec AS Array OF String" + NL
     t = t + "VAR problem AS String" + NL
-    t = t + "VAR pic AS String" + NL
-    t = t + "VAR size AS Array OF String" + NL
     t = t + "VAR key AS String" + NL
     t = t + "VAR keys AS Array OF String" + NL
     t = t + "RequireLogin()" + NL
@@ -478,31 +509,21 @@ SUB File1 ()
     t = t + "    IF REQUEST.Form(""name"").Trim() = """" THEN" + NL
     t = t + "        problem = ""Your name cannot be empty.""" + NL
     t = t + "    ELSE" + NL
-    t = t + "        keys = [""sex"", ""birthday"", ""hometown"", ""status"", ""interests"", ""music"", ""about""]" + NL
+    t = t + "        ' Short fields and long ones; Clip keeps every page under the 64K a message can carry." + NL
+    t = t + "        keys = [""sex"", ""birthday"", ""hometown"", ""status""]" + NL
     t = t + "        FOR EACH key IN keys" + NL
-    t = t + "            SetField(rec, key, REQUEST.Form(key).Replace(Chr(13), """").Trim())" + NL
+    t = t + "            SetField(rec, key, Clip(REQUEST.Form(key), SHORTFIELD))" + NL
     t = t + "        NEXT" + NL
-    t = t + "        IF REQUEST.Form(""name"").Trim() <> Field(rec, ""name"") THEN" + NL
-    t = t + "            SetField(rec, ""name"", REQUEST.Form(""name"").Trim())" + NL
-    t = t + "            RenamePerson(viewer, REQUEST.Form(""name"").Trim())" + NL
+    t = t + "        keys = [""interests"", ""music"", ""about""]" + NL
+    t = t + "        FOR EACH key IN keys" + NL
+    t = t + "            SetField(rec, key, Clip(REQUEST.Form(key), LONGFIELD))" + NL
+    t = t + "        NEXT" + NL
+    t = t + "        IF Clip(REQUEST.Form(""name""), MAXNAME) <> Field(rec, ""name"") THEN" + NL
+    t = t + "            SetField(rec, ""name"", Clip(REQUEST.Form(""name""), MAXNAME))" + NL
+    t = t + "            RenamePerson(viewer, Clip(REQUEST.Form(""name""), MAXNAME))" + NL
     t = t + "        END IF" + NL
     t = t + "        SaveUser(viewer, rec)" + NL
-    t = t + "" + NL
-    t = t + "        ' A picture is a Sketch .PIC file: ""SIM95PIC width height"", then rows of hex digits." + NL
-    t = t + "        pic = REQUEST.Form(""pic"")" + NL
-    t = t + "        IF REQUEST.Form(""nopic"") <> """" AND HasPicture(viewer) THEN FS.Delete(PICDIR + ""\"" + viewer + "".PIC"")" + NL
-    t = t + "        IF pic <> """" THEN" + NL
-    t = t + "            size = pic.Lines()[0].Trim().Split("" "")" + NL
-    t = t + "            IF NOT pic.StartsWith(""SIM95PIC "") OR size.Count < 3 THEN" + NL
-    t = t + "                problem = ""Your profile was saved, but that is not a picture. Draw one in Sketch and save it as a .PIC file.""" + NL
-    t = t + "            ELSEIF pic.Length > MAXPIC OR Val(size[1]) > 200 OR Val(size[2]) > 200 THEN" + NL
-    t = t + "                problem = ""Your profile was saved, but the picture is too big. Keep it under 200 by 200.""" + NL
-    t = t + "            ELSE" + NL
-    t = t + "                EnsureDisk()" + NL
-    t = t + "                FS.Write(PICDIR + ""\"" + viewer + "".PIC"", pic)" + NL
-    t = t + "            END IF" + NL
-    t = t + "        END IF" + NL
-    t = t + "        IF problem = """" THEN RESPONSE.Redirect(""profile.asp?u="" + viewer)" + NL
+    t = t + "        RESPONSE.Redirect(""profile.asp?u="" + viewer)" + NL
     t = t + "    END IF" + NL
     t = t + "END IF" + NL
     t = t + "%>" + NL
@@ -523,9 +544,7 @@ SUB File1 ()
     t = t + "<tr><td valign=""top""><font size=""2"">Interests:</font></td><td><textarea name=""interests"" rows=""3"" cols=""40""><%= H(Field(rec, ""interests"")) %></textarea></td></tr>" + NL
     t = t + "<tr><td valign=""top""><font size=""2"">Favorite Music:</font></td><td><textarea name=""music"" rows=""3"" cols=""40""><%= H(Field(rec, ""music"")) %></textarea></td></tr>" + NL
     t = t + "<tr><td valign=""top""><font size=""2"">About Me:</font></td><td><textarea name=""about"" rows=""5"" cols=""40""><%= H(Field(rec, ""about"")) %></textarea></td></tr>" + NL
-    t = t + "<tr><td valign=""top""><font size=""2"">Picture:</font></td><td><input type=""file"" name=""pic"" size=""24""><br>" + NL
-    t = t + "<font size=""1"" color=""#808080"">A .PIC file from Sketch, up to 200 by 200.</font>" + NL
-    t = t + "<% IF HasPicture(viewer) THEN %><br><input type=""checkbox"" name=""nopic""> <font size=""2"">Remove my picture</font><% END IF %></td></tr>" + NL
+    t = t + "<tr><td valign=""top""><font size=""2"">Picture:</font></td><td><font size=""2""><a href=""picture.asp"">Change my picture</a></font></td></tr>" + NL
     t = t + "<tr><td></td><td><input type=""submit"" value=""Save Changes""></td></tr>" + NL
     t = t + "</table>" + NL
     t = t + "</form>" + NL
@@ -570,6 +589,7 @@ SUB File3 ()
     t = t + "<font size=""2""><b><%= H(Field(rec, ""name"")) %></b><br>" + NL
     t = t + "<a href=""profile.asp?u=<%= viewer %>"">My Profile</a><br>" + NL
     t = t + "<a href=""edit.asp"">Edit My Profile</a><br>" + NL
+    t = t + "<a href=""picture.asp"">Change My Picture</a><br>" + NL
     t = t + "<a href=""profile.asp?u=<%= viewer %>#friends"">My Friends (<%= Friends(viewer).Count %>)</a><br>" + NL
     t = t + "<a href=""people.asp"">Find People</a></font>" + NL
     t = t + "</td>" + NL
@@ -779,18 +799,72 @@ SUB File9 ()
     t = t + "     IF p.Count < 2 THEN CONTINUE" + NL
     t = t + "     IF q <> """" AND NOT (p[0].Contains(q.Lower()) OR Unesc(p[1]).Lower().Contains(q.Lower())) THEN CONTINUE" + NL
     t = t + "     found = found + 1" + NL
-    t = t + "     IF found > 200 THEN BREAK %>" + NL
+    t = t + "     IF found > 100 THEN BREAK %>" + NL
     t = t + "<tr><td><font size=""2""><a href=""profile.asp?u=<%= p[0] %>""><b><%= H(Unesc(p[1])) %></b></a></font></td>" + NL
     t = t + "<td><font size=""2"" color=""#808080""><%= p[0] %><% IF IsFriend(viewer, p[0]) THEN %> &middot; your friend<% END IF %></font></td></tr>" + NL
     t = t + "<% NEXT %>" + NL
     t = t + "</table>" + NL
     t = t + "<% IF found = 0 THEN %><p><font size=""2"" color=""#808080"">Nobody found.</font></p><% END IF %>" + NL
+    t = t + "<% IF found > 100 THEN %><p><font size=""2"" color=""#808080"">That is the first 100. Search to find somebody else.</font></p><% END IF %>" + NL
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("PEOPLE.ASP")
 END SUB
 
 SUB File10 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' PICTURE.ASP - upload or remove your profile picture. It has a page of its own" + NL
+    t = t + "' because a whole request must fit in one 64K network message: a picture that is" + NL
+    t = t + "' too big fails in Voyager before it ever reaches us, and should not take the rest" + NL
+    t = t + "' of your profile edits down with it." + NL
+    t = t + "VAR pic AS String" + NL
+    t = t + "VAR problem AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
+    t = t + "    IF REQUEST.Form(""remove"") <> """" THEN" + NL
+    t = t + "        IF HasPicture(viewer) THEN FS.Delete(PICDIR + ""\"" + viewer + "".PIC"")" + NL
+    t = t + "        RESPONSE.Redirect(""profile.asp?u="" + viewer)" + NL
+    t = t + "    END IF" + NL
+    t = t + "    pic = REQUEST.Form(""pic"")" + NL
+    t = t + "    problem = SavePicture(viewer, pic)" + NL
+    t = t + "    IF problem = """" THEN RESPONSE.Redirect(""profile.asp?u="" + viewer)" + NL
+    t = t + "END IF" + NL
+    t = t + "%>" + NL
+    t = t + "<%= Top(""My Picture"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr>" + NL
+    t = t + "<td width=""200"" valign=""top""><%= Picture(viewer) %></td>" + NL
+    t = t + "<td valign=""top"">" + NL
+    t = t + "<%= Notice(problem) %>" + NL
+    t = t + "<%= BoxTop(""Upload a Picture"") %>" + NL
+    t = t + "<form action=""picture.asp"" method=""post"">" + NL
+    t = t + "<p><input type=""file"" name=""pic"" size=""30""> <input type=""submit"" value=""Upload""></p>" + NL
+    t = t + "</form>" + NL
+    t = t + "<p><font size=""2"">A picture is a .PIC file of up to 100 by 100. Sketch saves bigger ones" + NL
+    t = t + "(400 by 300, about 120K), and Voyager cannot send anything over 64K, so shrink a" + NL
+    t = t + "Sketch picture first:</font></p>" + NL
+    t = t + "<ol><font size=""2"">" + NL
+    t = t + "<li>Draw yourself in Sketch and save it, say as <tt>C:\MYFILES\ME.PIC</tt>.</li>" + NL
+    t = t + "<li>Copy the program below into SPARK, save it as <tt>C:\MYFILES\SHRINK.SPK</tt> and press F5.</li>" + NL
+    t = t + "<li>Give it <tt>C:\MYFILES\ME.PIC</tt>. It saves <tt>C:\MYFILES\AVATAR.PIC</tt>, 100 by 75.</li>" + NL
+    t = t + "<li>Upload <tt>AVATAR.PIC</tt> here.</li>" + NL
+    t = t + "</font></ol>" + NL
+    t = t + "<form><textarea rows=""12"" cols=""70"" readonly><%= H(ReadOr(SERVER.MapPath(""/shrink.spk""), """")) %></textarea></form>" + NL
+    t = t + "<% IF HasPicture(viewer) THEN %>" + NL
+    t = t + "<%= BoxTop(""Remove My Picture"") %>" + NL
+    t = t + "<form action=""picture.asp"" method=""post"">" + NL
+    t = t + "<input type=""hidden"" name=""remove"" value=""1"">" + NL
+    t = t + "<p><input type=""submit"" value=""Remove My Picture""></p>" + NL
+    t = t + "</form>" + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "</td>" + NL
+    t = t + "</tr></table>" + NL
+    t = t + "<%= Bottom() %>" + NL
+    Put("PICTURE.ASP")
+END SUB
+
+SUB File11 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -814,7 +888,7 @@ SUB File10 ()
     Put("POST.ASP")
 END SUB
 
-SUB File11 ()
+SUB File12 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -840,7 +914,7 @@ SUB File11 ()
     t = t + "<td width=""200"" valign=""top"">" + NL
     t = t + "<%= Picture(who) %>" + NL
     t = t + "<% IF mine THEN %>" + NL
-    t = t + "<p><font size=""2""><a href=""edit.asp"">Edit My Profile</a></font></p>" + NL
+    t = t + "<p><font size=""2""><a href=""edit.asp"">Edit My Profile</a><br><a href=""picture.asp"">Change My Picture</a></font></p>" + NL
     t = t + "<% ELSE %>" + NL
     t = t + "<form action=""friend.asp"" method=""post"">" + NL
     t = t + "<input type=""hidden"" name=""u"" value=""<%= who %>"">" + NL
@@ -895,4 +969,121 @@ SUB File11 ()
     t = t + "</tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("PROFILE.ASP")
+END SUB
+
+SUB File13 ()
+    t = ""
+    t = t + "' SHRINK.SPK - makes a Sketch picture small enough to be a SimBook profile picture." + NL
+    t = t + "'" + NL
+    t = t + "' Sketch always saves 400 by 300 pictures, about 120K of text, but one network" + NL
+    t = t + "' message holds 64K, so Voyager cannot send one to a web server. This shrinks a" + NL
+    t = t + "' picture until it fits in 100 by 100 (a Sketch picture becomes 100 by 75, about" + NL
+    t = t + "' 8K) and saves it as AVATAR.PIC next to the original." + NL
+    t = t + "'" + NL
+    t = t + "'     SPARK C:\MYFILES\SHRINK.SPK C:\MYFILES\ME.PIC" + NL
+    t = t + "' or run it from SPARK with F5 and type the name when it asks." + NL
+    t = t + "'" + NL
+    t = t + "' Each block of pixels becomes the colour it holds most of, not counting white," + NL
+    t = t + "' so thin lines survive the trip." + NL
+    t = t + "" + NL
+    t = t + "CONST LIMIT = 100" + NL
+    t = t + "" + NL
+    t = t + "SUB Main ()" + NL
+    t = t + "    VAR path AS String" + NL
+    t = t + "    VAR dest AS String" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    VAR lines AS Array OF String" + NL
+    t = t + "    VAR header AS Array OF String" + NL
+    t = t + "    VAR rows AS Array OF String" + NL
+    t = t + "    VAR out AS Array OF String" + NL
+    t = t + "    VAR row AS String" + NL
+    t = t + "    VAR w AS Integer" + NL
+    t = t + "    VAR h AS Integer" + NL
+    t = t + "    VAR f AS Integer" + NL
+    t = t + "    VAR nw AS Integer" + NL
+    t = t + "    VAR nh AS Integer" + NL
+    t = t + "    VAR x AS Integer" + NL
+    t = t + "    VAR y AS Integer" + NL
+    t = t + "" + NL
+    t = t + "    IF SYS.Args.Count > 0 THEN" + NL
+    t = t + "        path = SYS.Args[0]" + NL
+    t = t + "    ELSE" + NL
+    t = t + "        path = Input(""Picture to shrink (for example C:\MYFILES\ME.PIC): "")" + NL
+    t = t + "    END IF" + NL
+    t = t + "    path = path.Trim()" + NL
+    t = t + "    TRY" + NL
+    t = t + "        text = FS.Read(path)" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "        Print(""Could not read "" + path + "": "" + err)" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END TRY" + NL
+    t = t + "" + NL
+    t = t + "    lines = text.Lines()" + NL
+    t = t + "    header = lines[0].Trim().Split("" "")" + NL
+    t = t + "    IF header[0] <> ""SIM95PIC"" OR header.Count < 3 THEN" + NL
+    t = t + "        Print(path + "" is not a picture. Save one from Sketch first."")" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    w = Int(Val(header[1]))" + NL
+    t = t + "    h = Int(Val(header[2]))" + NL
+    t = t + "" + NL
+    t = t + "    ' The smallest whole-number shrink that fits" + NL
+    t = t + "    f = 1" + NL
+    t = t + "    WHILE w > f * LIMIT OR h > f * LIMIT" + NL
+    t = t + "        f = f + 1" + NL
+    t = t + "    END WHILE" + NL
+    t = t + "    nw = MATH.Ceil(w / f)" + NL
+    t = t + "    nh = MATH.Ceil(h / f)" + NL
+    t = t + "" + NL
+    t = t + "    ' Every row as capitals, padded with white to a whole number of blocks" + NL
+    t = t + "    FOR y = 0 TO nh * f - 1" + NL
+    t = t + "        row = """"" + NL
+    t = t + "        IF y + 1 < lines.Count THEN row = lines[y + 1].Trim().Upper()" + NL
+    t = t + "        IF row.Length < nw * f THEN row = row.PadRight(nw * f).Replace("" "", ""F"")" + NL
+    t = t + "        rows.Add(row)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "" + NL
+    t = t + "    FOR y = 0 TO nh - 1" + NL
+    t = t + "        row = """"" + NL
+    t = t + "        FOR x = 0 TO nw - 1" + NL
+    t = t + "            row = row + Block(rows, x * f, y * f, f)" + NL
+    t = t + "        NEXT" + NL
+    t = t + "        out.Add(row)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "" + NL
+    t = t + "    dest = path.Upper()" + NL
+    t = t + "    IF dest.Contains(""\"") THEN" + NL
+    t = t + "        dest = dest.Substring(0, dest.Length - dest.Split(""\"")[dest.Split(""\"").Count - 1].Length) + ""AVATAR.PIC""" + NL
+    t = t + "    ELSE" + NL
+    t = t + "        dest = ""AVATAR.PIC""" + NL
+    t = t + "    END IF" + NL
+    t = t + "    FS.Write(dest, ""SIM95PIC "" + Str(nw) + "" "" + Str(nh) + Chr(10) + out.Join(Chr(10)) + Chr(10))" + NL
+    t = t + "    Print(""Saved "" + dest + "" ("" + Str(nw) + "" by "" + Str(nh) + ""). Upload that one to SimBook."")" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' The colour an f-by-f block holds most of, ignoring white; white if it is all white." + NL
+    t = t + "FUNCTION Block (rows AS Array OF String, x AS Integer, y AS Integer, f AS Integer) AS String" + NL
+    t = t + "    VAR s AS String" + NL
+    t = t + "    VAR c AS String" + NL
+    t = t + "    VAR best AS String" + NL
+    t = t + "    VAR most AS Integer" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    VAR dy AS Integer" + NL
+    t = t + "    FOR dy = 0 TO f - 1" + NL
+    t = t + "        s = s + rows[y + dy].Substring(x, f)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    s = s.Replace(""F"", """")" + NL
+    t = t + "    best = ""F""" + NL
+    t = t + "    WHILE s <> """"" + NL
+    t = t + "        c = s.CharAt(0)" + NL
+    t = t + "        n = s.Length" + NL
+    t = t + "        s = s.Replace(c, """")" + NL
+    t = t + "        IF n - s.Length > most THEN" + NL
+    t = t + "            most = n - s.Length" + NL
+    t = t + "            best = c" + NL
+    t = t + "        END IF" + NL
+    t = t + "    END WHILE" + NL
+    t = t + "    RETURN best" + NL
+    t = t + "END FUNCTION" + NL
+    Put("SHRINK.SPK")
 END SUB

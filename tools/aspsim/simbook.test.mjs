@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
-import { machine, browser } from "./sim.mjs";
+import { machine, browser, MESSAGE_LIMIT } from "./sim.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let failures = 0;
@@ -26,7 +26,7 @@ async function fresh() {
 }
 async function join(m, u, name, pw = "secret") {
   const b = browser(m);
-  ok(await b.post("/join.asp", { name, u, pw, pw2: pw }));
+  assert.equal(ok(await b.post("/join.asp", { name, u, pw, pw2: pw })).url, "/edit.asp?new=1", "could not register " + u);
   return b;
 }
 
@@ -87,27 +87,75 @@ await test("register rejects bad names, taken names and mismatched passwords", a
   assert.match(r.body, /3 to 8 letters/);
 });
 
-await test("edit profile saves fields, escapes them, and keeps a picture", async () => {
-  const pic = "SIM95PIC 2 2\n9C\nC9\n";
+// What Sketch saves: always 400 by 300. A black line across a white page, with a red blob.
+function sketchPicture() {
+  const rows = [];
+  for (let y = 0; y < 300; y++) {
+    let r = "";
+    for (let x = 0; x < 400; x++) r += y === 150 ? "0" : (x >= 40 && x < 80 && y >= 40 && y < 80 ? "9" : "F");
+    rows.push(r);
+  }
+  return "SIM95PIC 400 300\n" + rows.join("\n") + "\n";
+}
+
+await test("edit profile saves fields and escapes them", async () => {
   const r = ok(await ann.post("/edit.asp", {
     name: "Ann <Example>", sex: "Female", birthday: "1980-02-04", hometown: "Cambridge | MA",
-    status: "It's Complicated", interests: "line one\r\nline two", music: "", about: "100% real", pic,
+    status: "It's Complicated", interests: "line one\r\nline two", music: "", about: "100% real",
   }));
   assert.equal(r.url, "/profile.asp?u=ann");
   assert.match(r.body, /Ann &lt;Example&gt;/);
   assert.match(r.body, /Cambridge \| MA/);
   assert.match(r.body, /line one<br>line two/);
   assert.match(r.body, /100% real/);
-  assert.match(r.body, /<img src="pics\/ann.pic"/);
-  assert.equal(m.read("C:\\WEB\\PICS\\ANN.PIC"), pic);
+  assert.match(r.body, /<img src="nopic.pic"/);
+  ok(await ann.post("/edit.asp", { name: "Ann Example", status: "It's Complicated" }));
   const e = ok(await ann.get("/edit.asp"));
-  assert.match(e.body, /<option selected>It's Complicated<\/option>/);
+  assert.match(e.body, /<option selected>It&#39;s Complicated<\/option>|<option selected>It's Complicated<\/option>/);
 });
 
-await test("edit rejects something that is not a picture", async () => {
-  const r = ok(await ann.post("/edit.asp", { name: "Ann Example", pic: "<html>not a pic" }));
+await test("a picture straight from Sketch is too big for Voyager to send", async () => {
+  await assert.rejects(ann.post("/picture.asp", { pic: sketchPicture() }), /Message too long/);
+});
+
+await test("SHRINK.SPK makes a Sketch picture uploadable, keeping thin lines", async () => {
+  // On the visitor's own machine
+  const home = await machine("ANNSPC");
+  home.write("C:\\MYFILES\\ME.PIC", sketchPicture());
+  const said = await home.runScript(fs.readFileSync(path.join(root, "simbook/WEB/SHRINK.SPK"), "utf8"), { input: ["c:\\myfiles\\me.pic"] });
+  assert.match(said.join("\n"), /Saved C:\\MYFILES\\AVATAR.PIC \(100 by 75\)/);
+  const avatar = home.read("C:\\MYFILES\\AVATAR.PIC");
+  const rows = avatar.trim().split("\n");
+  assert.equal(rows[0], "SIM95PIC 100 75");
+  assert.equal(rows.length, 76);
+  assert.ok(rows.slice(1).every((r) => r.length === 100));
+  assert.equal(rows[1 + 37], "0".repeat(100), "the 1-pixel line survives");
+  assert.equal(rows[1 + 12].slice(10, 20), "9".repeat(10), "the blob survives");
+  assert.ok(avatar.length < 9000);
+  // ...then uploaded to SimBook
+  const r = ok(await ann.post("/picture.asp", { pic: avatar }));
+  assert.equal(r.url, "/profile.asp?u=ann");
+  assert.match(r.body, /<img src="pics\/ann.pic"/);
+  assert.equal(m.read("C:\\WEB\\PICS\\ANN.PIC"), avatar);
+});
+
+await test("the picture page explains the limit and hands out SHRINK.SPK", async () => {
+  const r = ok(await ann.get("/picture.asp"));
+  assert.match(r.body, /Voyager cannot send anything over 64K/);
+  assert.match(r.body, /SHRINK.SPK - makes a Sketch picture small enough/);
+  assert.match(r.body, /Remove My Picture/);
+});
+
+await test("the picture page refuses bad and oversized pictures, and can remove one", async () => {
+  let r = ok(await ann.post("/picture.asp", { pic: "<html>not a pic" }));
   assert.match(r.body, /not a picture/);
-  assert.match(m.read("C:\\WEB\\PICS\\ANN.PIC"), /^SIM95PIC/);
+  r = ok(await ann.post("/picture.asp", { pic: "SIM95PIC 101 10\n" + ("F".repeat(101) + "\n").repeat(10) }));
+  assert.match(r.body, /101 by 10. Shrink it/);
+  assert.match(m.read("C:\\WEB\\PICS\\ANN.PIC"), /^SIM95PIC 100 75/);
+  const pic = m.read("C:\\WEB\\PICS\\ANN.PIC");
+  r = ok(await ann.post("/picture.asp", { remove: "1" }));
+  assert.match(r.body, /<img src="nopic.pic"/);
+  ok(await ann.post("/picture.asp", { pic }));
 });
 
 await test("only friends can write on a Wall", async () => {
@@ -199,6 +247,28 @@ await test("the data survives a restart: it is all on disk", async () => {
   const b = browser(m2);
   ok(await b.post("/login.asp", { u: "ann", pw: "hunter2" }));
   assert.match(b.last.body, /social network/);
+});
+
+await test("every page stays under 64K even with the nastiest content allowed", async () => {
+  const big = await fresh();
+  const lt = (n) => "<".repeat(n); // each one becomes &lt;, four times longer
+  const users = [];
+  for (let i = 0; i < 120; i++) users.push("wst" + i);
+  const books = {};
+  for (const u of users) books[u] = await join(big, u, lt(100));
+  const a = books.wst0;
+  for (const u of users.slice(1, 40)) ok(await a.post("/friend.asp", { u, do: "add" }));
+  ok(await a.post("/edit.asp", { name: lt(100), sex: lt(100), birthday: lt(100), hometown: lt(100), status: lt(100), interests: lt(900), music: lt(900), about: lt(900) }));
+  for (let i = 0; i < 30; i++) ok(await books["wst" + (1 + i)].post("/post.asp", { to: "wst0", text: lt(1000) }));
+  for (let i = 0; i < 30; i++) ok(await a.post("/post.asp", { to: "wst0", text: lt(1000), back: "home" }));
+  const sizes = [];
+  for (const url of ["/home.asp", "/profile.asp?u=wst0", "/profile.asp?u=wst1", "/people.asp", "/edit.asp", "/picture.asp"]) {
+    const r = ok(await a.get(url));
+    assert.equal(r.url, url, "not signed in");
+    sizes.push(`${url} ${r.raw.length}`);
+    assert.ok(r.raw.length < MESSAGE_LIMIT - 8000, `${url} is ${r.raw.length} characters`);
+  }
+  console.log("      worst-case page sizes (limit 65536): " + sizes.join(", "));
 });
 
 // ---- the time limit, with a busy network. A page may yield 20,000 times and

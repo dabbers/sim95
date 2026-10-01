@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cacheDir = path.join(here, ".cache");
 const SITE = "https://sim95.kippy.io";
+// One network message carries at most this many characters (Wp in the bundle).
+// Voyager sends a whole request as one message, and HTTPD.SPK a whole page.
+export const MESSAGE_LIMIT = 65536;
 
 async function bundlePath() {
   const out = path.join(cacheDir, "sim95.mjs");
@@ -104,13 +107,16 @@ export async function machine(hostname = "SIM95") {
       return { status: "200 OK", headers: [], body: disk.read(file), raw: "" };
     }
     const raw = `${method} ${url} HTTP/1.0\nHost: ${hostname}\n` + (cookies ? `Cookie: ${cookies}\n` : "") + "\n" + body;
+    if (raw.length > MESSAGE_LIMIT) throw new Error(`Message too long: Voyager cannot send a ${raw.length}-character request`);
     const text = await S.render(m, file, raw, "65.240.0.9", budget ? { budget } : {});
+    if (text.length > MESSAGE_LIMIT) throw new Error(`Message too long: HTTPD.SPK would stop sending a ${text.length}-character page for ${url}`);
     const [head, ...rest] = text.split("\n\n");
     const lines = head.split("\n");
     return { status: lines[0].replace(/^HTTP\/1\.0 /, ""), headers: lines.slice(1), body: rest.join("\n\n"), raw: text };
   };
-  // Run a SPARK script (no windows, no sockets) with FS, NET, TIME and MATH.
-  m.runScript = async (source) => {
+  // Run a SPARK script (no windows, no sockets) with FS, NET, TIME, MATH, and a
+  // SYS with Args. Input() answers from `input`, one line per call.
+  m.runScript = async (source, { args = [], input = [] } = {}) => {
     const { program, errors } = S.compile(source);
     if (!program) throw new Error("Compile errors:\n" + errors.map((e) => `line ${e.line}: ${e.message}`).join("\n"));
     const out = [];
@@ -121,6 +127,7 @@ export async function machine(hostname = "SIM95") {
         if (!spaces.has(N)) {
           if (N === "FS") spaces.set(N, new S.NS("FS", S.fsns(m)));
           else if (N === "NET") spaces.set(N, new S.NS("NET", S.netns(m)));
+          else if (N === "SYS") spaces.set(N, new S.NS("SYS", { Args: () => [...args], Pid: () => 1, Ticks: () => 0 }));
           else if (N === "TIME") spaces.set(N, new S.NS("TIME", S.TIME));
           else if (N === "MATH") spaces.set(N, new S.NS("MATH", S.MATH));
           else throw new Error("Not available in the test harness: " + n);
@@ -132,6 +139,7 @@ export async function machine(hostname = "SIM95") {
         const r = S.builtins(name, args);
         if (r) return r.value;
         if (name === "Print") { out.push(args.map(String).join(" ")); return; }
+        if (name === "Input") { if (args.length) out.push(String(args[0])); return input.shift() ?? ""; }
         throw new Error("Not available in the test harness: " + name);
       },
       hostHandler: () => null,

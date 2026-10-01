@@ -1,0 +1,112 @@
+' SHRINK.SPK - makes a Sketch picture small enough to be a SimBook profile picture.
+'
+' Sketch always saves 400 by 300 pictures, about 120K of text, but one network
+' message holds 64K, so Voyager cannot send one to a web server. This shrinks a
+' picture until it fits in 100 by 100 (a Sketch picture becomes 100 by 75, about
+' 8K) and saves it as AVATAR.PIC next to the original.
+'
+'     SPARK C:\MYFILES\SHRINK.SPK C:\MYFILES\ME.PIC
+' or run it from SPARK with F5 and type the name when it asks.
+'
+' Each block of pixels becomes the colour it holds most of, not counting white,
+' so thin lines survive the trip.
+
+CONST LIMIT = 100
+
+SUB Main ()
+    VAR path AS String
+    VAR dest AS String
+    VAR text AS String
+    VAR lines AS Array OF String
+    VAR header AS Array OF String
+    VAR rows AS Array OF String
+    VAR out AS Array OF String
+    VAR row AS String
+    VAR w AS Integer
+    VAR h AS Integer
+    VAR f AS Integer
+    VAR nw AS Integer
+    VAR nh AS Integer
+    VAR x AS Integer
+    VAR y AS Integer
+
+    IF SYS.Args.Count > 0 THEN
+        path = SYS.Args[0]
+    ELSE
+        path = Input("Picture to shrink (for example C:\MYFILES\ME.PIC): ")
+    END IF
+    path = path.Trim()
+    TRY
+        text = FS.Read(path)
+    CATCH err
+        Print("Could not read " + path + ": " + err)
+        RETURN
+    END TRY
+
+    lines = text.Lines()
+    header = lines[0].Trim().Split(" ")
+    IF header[0] <> "SIM95PIC" OR header.Count < 3 THEN
+        Print(path + " is not a picture. Save one from Sketch first.")
+        RETURN
+    END IF
+    w = Int(Val(header[1]))
+    h = Int(Val(header[2]))
+
+    ' The smallest whole-number shrink that fits
+    f = 1
+    WHILE w > f * LIMIT OR h > f * LIMIT
+        f = f + 1
+    END WHILE
+    nw = MATH.Ceil(w / f)
+    nh = MATH.Ceil(h / f)
+
+    ' Every row as capitals, padded with white to a whole number of blocks
+    FOR y = 0 TO nh * f - 1
+        row = ""
+        IF y + 1 < lines.Count THEN row = lines[y + 1].Trim().Upper()
+        IF row.Length < nw * f THEN row = row.PadRight(nw * f).Replace(" ", "F")
+        rows.Add(row)
+    NEXT
+
+    FOR y = 0 TO nh - 1
+        row = ""
+        FOR x = 0 TO nw - 1
+            row = row + Block(rows, x * f, y * f, f)
+        NEXT
+        out.Add(row)
+    NEXT
+
+    dest = path.Upper()
+    IF dest.Contains("\") THEN
+        dest = dest.Substring(0, dest.Length - dest.Split("\")[dest.Split("\").Count - 1].Length) + "AVATAR.PIC"
+    ELSE
+        dest = "AVATAR.PIC"
+    END IF
+    FS.Write(dest, "SIM95PIC " + Str(nw) + " " + Str(nh) + Chr(10) + out.Join(Chr(10)) + Chr(10))
+    Print("Saved " + dest + " (" + Str(nw) + " by " + Str(nh) + "). Upload that one to SimBook.")
+END SUB
+
+' The colour an f-by-f block holds most of, ignoring white; white if it is all white.
+FUNCTION Block (rows AS Array OF String, x AS Integer, y AS Integer, f AS Integer) AS String
+    VAR s AS String
+    VAR c AS String
+    VAR best AS String
+    VAR most AS Integer
+    VAR n AS Integer
+    VAR dy AS Integer
+    FOR dy = 0 TO f - 1
+        s = s + rows[y + dy].Substring(x, f)
+    NEXT
+    s = s.Replace("F", "")
+    best = "F"
+    WHILE s <> ""
+        c = s.CharAt(0)
+        n = s.Length
+        s = s.Replace(c, "")
+        IF n - s.Length > most THEN
+            most = n - s.Length
+            best = c
+        END IF
+    END WHILE
+    RETURN best
+END FUNCTION
