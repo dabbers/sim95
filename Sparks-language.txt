@@ -1,0 +1,1403 @@
+SPARK LANGUAGE REFERENCE                                      SIM95
+======================================================================
+
+SPARK is the programming language built into this machine. Programs
+are text files ending in .SPK. Write them in the SPARK application
+(Start > Programs > SPARK), press F5 to run, Ctrl+Break to stop.
+From the Terminal:  SPARK C:\SAMPLES\HELLO.SPK
+
+Everything in this file can be tried straight away. The examples in
+C:\SAMPLES all run. So are the applications in C:\PROGRAMS: Files,
+Notes, Chat, Sketch, Mines, Settings, Help, Network, Tasks, Monitor,
+the web server and the Files and Chat services are all SPARK programs
+- open one in SPARK, change a line, save, and run your version.
+
+
+1. SHAPE OF A PROGRAM
+----------------------------------------------------------------------
+A program is a list of VAR declarations and SUBs. Main runs first.
+
+    ' Comments start with an apostrophe.
+    VAR count AS Integer          ' a global: visible in every SUB
+
+    SUB Main ()
+        VAR name AS String        ' a local: visible only in Main
+        name = "world"
+        count = count + 1
+        Print("Hello, " + name + " (" + Str(count) + ")")
+    END SUB
+
+There are no line numbers, no GOTO and no GOSUB. Code lives in SUBs
+and FUNCTIONs. Statements end at the end of the line. Names are not
+case sensitive (Count, COUNT and count are the same variable) but the
+convention is to write keywords in capitals.
+
+A program with no window and no socket is a script: Main runs, Print
+writes to a console, and the program ends when Main returns.
+
+A program that opens a window, listens on a socket, or starts a timer
+stays alive after Main returns. It then does nothing until an EVENT
+happens - a click, a message, a tick - and the SUB you attached to that
+event runs. The program ends when its last window closes, or when it
+calls SYS.Exit(0).
+
+Handlers run one at a time, each to completion. A handler that never
+returns hangs only its own program: the rest of the machine keeps
+working, the program shows as "Not responding" in Tasks, and End Task
+kills it.
+
+
+2. DECLARATIONS AND TYPES
+----------------------------------------------------------------------
+    VAR name AS Type              declares a variable (required before use)
+    VAR n AS Integer = 5          with an initial value
+    CONST LIMIT = 100             a named constant
+
+Types:
+    Integer       whole numbers          42, -7
+    Real          decimals               3.14, 2.5e3
+    String        text in double quotes  "hello", "say ""hi"""  ("" is a quote)
+    Bool          TRUE or FALSE
+    Array OF T    a list of T            VAR names AS Array OF String
+    Handler       the name of a SUB, used for events
+    GUI_*, NET_*  the classes listed in sections 8 and 9
+
+Variables start as 0, "", FALSE, an empty array, or NOTHING (for
+objects). Integer and Real convert to each other automatically
+(Real to Integer truncates). Strings do not convert: use Str(n) to
+turn a number into text and Val(s) to turn text into a number.
+    Print("Total: " + Str(total))     ' right
+    Print("Total: " + total)          ' compile error
+
+Arrays grow with Add and are indexed from 0:
+    VAR list AS Array OF String
+    list.Add("one")
+    list = ["a", "b", "c"]            ' array literal
+    Print(list[0], list.Count)
+
+
+3. SUBROUTINES AND FUNCTIONS
+----------------------------------------------------------------------
+    SUB Greet (who AS String, times AS Integer)
+        VAR i AS Integer
+        FOR i = 1 TO times
+            Print("Hello " + who)
+        NEXT
+    END SUB
+
+    FUNCTION Square (x AS Integer) AS Integer
+        RETURN x * x
+    END FUNCTION
+
+Call them with Greet("Ann", 3) or Print(Square(7)). Numbers, strings
+and Bools are passed by value; arrays and objects by reference.
+Main takes no parameters; command-line arguments are in SYS.Args.
+Every block ends with END; the block keyword after END is optional
+but checked when present (END SUB, END IF, END WHILE, END SELECT,
+END TRY, END FUNCTION). Loops end with NEXT.
+
+
+4. CONTROL FLOW
+----------------------------------------------------------------------
+    IF x > 10 THEN
+        ...
+    ELSEIF x > 5 THEN
+        ...
+    ELSE
+        ...
+    END IF
+
+    IF done THEN RETURN                      ' single-line IF
+
+    WHILE NOT finished
+        ...
+    END WHILE
+
+    FOR i = 1 TO 10 STEP 2                   ' i must be declared with VAR
+        ...
+    NEXT
+
+    FOR EACH item IN list                    ' item must be declared with VAR
+        ...
+    NEXT
+
+    SELECT CASE command
+        CASE "quit", "exit"
+            ...
+        CASE "help"
+            ...
+        CASE ELSE
+            ...
+    END SELECT
+
+    BREAK        leaves the innermost loop
+    CONTINUE     jumps to the next iteration
+    RETURN [v]   leaves the SUB (with a value in a FUNCTION)
+
+Errors at run time (a missing file, an index past the end of an array,
+division by zero) stop the program with a dialog unless you catch them:
+
+    TRY
+        text = FS.Read("C:\MYFILES\NOTES.TXT")
+    CATCH err
+        Print("Could not read the file: " + err)    ' err is a String
+    END TRY
+
+    THROW "something went wrong"       raises your own error
+
+
+5. OPERATORS
+----------------------------------------------------------------------
+    +  -  *  /  MOD  ^        arithmetic (/ gives a Real; MOD is remainder)
+    +                         joins two Strings
+    =  <>  <  >  <=  >=       comparison (result is Bool)
+    AND  OR  NOT              logic on Bools
+    (  )                      grouping;  ^ binds tightest, then * / MOD, then + -
+
+
+6. OBJECTS AND EVENTS
+----------------------------------------------------------------------
+    VAR win AS GUI_Window                declare
+    win = GUI_Window.New("Title", 320, 200)   create with New
+    win.Title = "Hi"                     set a property
+    Print(win.Width)                     read a property
+    win.Show()                           call a method
+    win.onClose = Win_OnClose            attach an event handler
+
+A handler is a SUB whose parameters match the event. The compiler
+checks this and tells you when they do not:
+    Handler 'Sock_OnMessage' expects (NET_Connection, String) but
+    onConnect provides (NET_Connection) (line 22)
+
+Controls belong to a window: GUI_Button.New(win). Position them with
+SetBounds(x, y, width, height) in pixels from the top-left of the
+window's client area. There is no layout engine and no form designer;
+a SUB attached to win.onResize can move things when the window grows.
+
+Several buttons can share one handler; the one that was pressed has
+Focused = TRUE (see C:\SAMPLES\CALC.SPK).
+
+Keyboard operation is free: Tab moves between controls, Enter presses
+the button with Default = TRUE, Escape the one with Cancel = TRUE, and
+"&Save" makes Alt+S press that button (the & marks the mnemonic).
+
+
+7. GLOBAL FUNCTIONS
+----------------------------------------------------------------------
+
+    Str(Any) AS String
+        Number or Bool as text
+    Val(String) AS Real
+        Text as a number (0 if not a number)
+    Int(Real) AS Integer
+        Truncate to Integer
+    Chr(Integer) AS String
+        Character for a code
+    Asc(String) AS Integer
+        Code of the first character
+    Abs(Real) AS Real
+        Absolute value
+    Rnd(Integer) AS Integer
+        Rnd() → Real in [0,1); Rnd(n) → Integer in [0,n)
+    Len(Any) AS Integer
+        Length of a String or Array
+    Hex(Integer) AS String
+        Hexadecimal text
+    Print(value, ...)
+        Write a line to the console
+    Input(String) AS String   [waits]
+        Show a prompt and wait for a line of input
+    IsNothing(Any) AS Bool
+        True when an object variable is empty
+
+  String values have members:
+    s.Length AS Integer
+    s.Upper() AS String
+    s.Lower() AS String
+    s.Trim() AS String
+    s.Substring(start AS Integer, count AS Integer) AS String   From index (0-based), n characters
+    s.IndexOf(text AS String) AS Integer   -1 when absent
+    s.StartsWith(text AS String) AS Bool
+    s.EndsWith(text AS String) AS Bool
+    s.Contains(text AS String) AS Bool
+    s.Split(separator AS String) AS Array OF String
+    s.Replace(from AS String, to AS String) AS String
+    s.PadLeft(width AS Integer) AS String
+    s.PadRight(width AS Integer) AS String
+    s.CharAt(index AS Integer) AS String
+    s.Lines() AS Array OF String   Split on line breaks
+
+  Array values have members:
+    a.Count AS Integer          a.Add(value)            a.Insert(index, value)
+    a.RemoveAt(index)           a.Clear()               a.Join(separator) AS String
+    a.Sort()                    a.Reverse()             a.IndexOf(value) AS Integer
+    a.Contains(value) AS Bool   a.Get(index)            a.Set(index, value)
+    a[i] reads or writes item i (0-based)
+
+
+8. NAMESPACES (always in scope, no imports)
+----------------------------------------------------------------------
+SYS
+----------------------------------------------------------------------
+The machine and this process.
+  Properties:
+    Args AS Array OF String
+        Command-line arguments
+    Pid AS Integer
+        This process id
+    Ticks AS Integer
+        Milliseconds since the program started
+  Methods:
+    Exit(code AS Integer)
+        End the program
+    Sleep(ms AS Integer)   [waits]
+        Pause this handler (other programs keep running)
+    Run(path AS String) AS Integer
+        Start another program; returns its process id
+    Start(path AS String, args AS String) AS Integer
+        Start another program with arguments (separated by spaces); returns its process id
+    Tasks() AS Array OF String
+        Every process as "pid|name|state|windows|cpums"; state is running, waiting or hung
+    Kill(pid AS Integer)
+        End another process (End Task)
+    Beep(freq AS Integer, ms AS Integer)
+        Square-wave beep
+    Shell(path AS String)
+        Open a file with its associated program
+
+FS
+----------------------------------------------------------------------
+The disk.
+  Methods:
+    Read(path AS String) AS String
+        Whole file as text
+    Write(path AS String, text AS String)
+        Replace a file
+    Append(path AS String, text AS String)
+    Exists(path AS String) AS Bool
+    IsDir(path AS String) AS Bool
+    Delete(path AS String)
+    Rename(from AS String, to AS String)
+    MakeDir(path AS String)
+    List(path AS String) AS Array OF String
+        Names in a directory; directories end with \
+    Size(path AS String) AS Integer
+
+NET
+----------------------------------------------------------------------
+The network.
+  Properties:
+    LocalAddress AS String
+        This machine's address, e.g. 65.16.3.7
+    HostName AS String
+    Online AS Bool
+        True when connected to the network server
+    ISPs AS Array OF String
+        The ISPs a machine can dial in through, as offered by Setup
+  Methods:
+    Resolve(name AS String) AS String   [waits]
+        Address for a hostname, or "" (waits)
+    Ping(host AS String) AS Integer   [waits]
+        Round trip in ms, or -1 (waits)
+    Machines() AS Array OF String   [waits]
+        Every machine as "NAME ADDRESS MS" (waits)
+
+ASP
+----------------------------------------------------------------------
+ActiveSparkPages: run a server page (.ASP) and get back the whole HTTP
+response. Used by HTTPD.SPK; see section 12.
+  Methods:
+    Render(file AS String, request AS String, fromAddress AS String) AS String   [waits]
+        Run the page at file for a raw HTTP request; returns status line, headers and body ready to Send
+
+TIME
+----------------------------------------------------------------------
+Clock and calendar.
+  Properties:
+    Clock AS String
+        "14:05:09"
+    Date AS String
+        "1996-07-04"
+    Ticks AS Integer
+        Milliseconds since midnight
+    Now AS Integer
+        Seconds since 1970
+
+MATH
+----------------------------------------------------------------------
+Maths.
+  Properties:
+    Pi AS Real
+  Methods:
+    Sqrt(Real) AS Real
+    Sin(Real) AS Real
+    Cos(Real) AS Real
+    Tan(Real) AS Real
+    Atan(Real) AS Real
+    Exp(Real) AS Real
+    Log(Real) AS Real
+    Floor(Real) AS Integer
+    Ceil(Real) AS Integer
+    Round(Real) AS Integer
+    Min(Real, Real) AS Real
+    Max(Real, Real) AS Real
+    Abs(Real) AS Real
+
+
+9. NETWORK CLASSES
+----------------------------------------------------------------------
+NET_Socket
+----------------------------------------------------------------------
+A network socket: listen on a port or connect to a host. Keeps the
+program alive while open.
+    New()
+  Properties:
+    IsOpen AS Bool
+        True while listening or connected
+    Port AS Integer
+        Local port when listening
+  Methods:
+    Listen(port AS Integer)
+        Accept connections on a port; onConnect fires for each one
+    Connect(host AS String, port AS Integer) AS NET_Connection   [waits]
+        Open a connection to host:port (waits); the connection is also delivered to onConnect
+    Send(text AS String)
+        Send to every open connection of this socket
+    Close()
+        Stop listening and close every connection
+  Events:
+    onConnect(conn AS NET_Connection)
+        A connection arrived (pending — call Accept or Reject) or an outbound Connect completed
+    onMessage(conn AS NET_Connection, message AS String)
+        A message arrived on a connection
+    onClose(conn AS NET_Connection)
+        A connection closed
+    onError(message AS String)
+        Something failed, e.g. the port is in use
+
+NET_Monitor
+----------------------------------------------------------------------
+Sees every packet this machine sends or receives, like Monitor does.
+Keeps the program alive while started.
+    New()
+  Properties:
+    IsOn AS Bool
+        True between Start and Stop
+  Methods:
+    Start()
+        Begin delivering packets to onPacket
+    Stop()
+  Events:
+    onPacket(direction AS String, source AS String, destination AS String, kind AS String, payload AS String)
+        A packet went by; direction is "in" or "out", source and destination are "address:port", kind is open, data, close, reject, ping, pong or name
+
+NET_Connection
+----------------------------------------------------------------------
+One connection between two machines. Inbound connections arrive
+pending.
+  Properties:
+    FromAddress AS String
+        Address of the other machine
+    FromPort AS Integer
+        Port on the other machine
+    IsOpen AS Bool
+    IsPending AS Bool
+        True until Accept or Reject is called
+    Tag (read/write) AS String
+        Free text for your own use
+  Methods:
+    Accept()
+        Accept a pending inbound connection
+    Reject()
+        Refuse a pending inbound connection
+    Send(text AS String)
+        Send one message
+    Receive(timeoutMs AS Integer) AS String   [waits]
+        Wait for the next message (up to timeoutMs); an error when the connection closes or time runs out. Messages go here only when the socket has no onMessage handler
+    Close()
+
+
+
+NOTES ON NET_Socket
+----------------------------------------------------------------------
+A server:
+    sock = NET_Socket.New()
+    sock.onConnect = Sock_OnConnect
+    sock.onMessage = Sock_OnMessage
+    sock.Listen(80)
+
+An inbound connection arrives PENDING. Your onConnect handler must
+call conn.Accept() or conn.Reject(). If it returns without doing
+either, the connection is dropped and a warning is printed to the
+output pane. That is what a listening port is: a promise to answer.
+
+A client:
+    conn = sock.Connect("othermachine", 80)      ' waits until connected
+    conn.Send("GET / HTTP/1.0")
+Connect raises an error (catch it with TRY) when nobody answers:
+"Connection refused" when the port is closed, "Connection timed out"
+when the machine is not there, "Unknown host" when the name is unknown.
+
+Messages are whole strings: one Send on one side is one onMessage on
+the other. Voyager joins the messages it receives with line breaks
+until the server closes, so a web server can Send its response line
+by line and then Close.
+
+Every machine has a Files service on port 139, a Chat service on
+6667 and, when HTTPD.SPK is running, a web server on 80. Read
+C:\DOCS\NETWORK.TXT for the protocols.
+
+
+A COMPLETE NETWORKED, WINDOWED PROGRAM
+----------------------------------------------------------------------
+This web server logs each visit in a window and counts hits in its
+title. Save it as C:\MYFILES\MYWEB.SPK, stop the shipped web server in
+Settings (or change the port), run it, and open http://YOURNAME/ from
+another machine's Voyager.
+
+    VAR win AS GUI_Window
+    VAR log AS GUI_ListBox
+    VAR sock AS NET_Socket
+    VAR hits AS Integer
+
+    SUB Main ()
+        win = GUI_Window.New("My Web Server", 360, 240)
+        win.onClose = Win_OnClose
+        log = GUI_ListBox.New(win)
+        log.SetBounds(8, 8, 336, 196)
+        sock = NET_Socket.New()
+        sock.onConnect = Sock_OnConnect
+        sock.onMessage = Sock_OnMessage
+        sock.Listen(80)
+        win.Status = "Listening on " + NET.LocalAddress + " port 80"
+        win.Show()
+    END SUB
+
+    SUB Sock_OnConnect (conn AS NET_Connection)
+        conn.Accept()
+        log.Add(TIME.Clock + "  " + conn.FromAddress)
+        hits = hits + 1
+        win.Title = "My Web Server (" + Str(hits) + " hits)"
+    END SUB
+
+    SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+        IF message.StartsWith("GET ") THEN
+            conn.Send("HTTP/1.0 200 OK")
+            conn.Send("Content-Type: text/html")
+            conn.Send("")
+            conn.Send("<html><body><h1>Hit number " + Str(hits) + "</h1></body></html>")
+        END IF
+        conn.Close()
+    END SUB
+
+    SUB Win_OnClose ()
+        sock.Close()
+        SYS.Exit(0)
+    END SUB
+
+
+KEY NAMES FOR onKey
+----------------------------------------------------------------------
+Letters and digits arrive as typed ("a", "A", "7"); other keys by name:
+Enter, Escape, Tab, Backspace, Delete, Space, ArrowUp, ArrowDown,
+ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1..F12.
+With modifiers: "Ctrl+S", "Alt+X", "Shift+Tab", "Ctrl+Shift+Z".
+Menu shortcuts are written the same way after a tab character:
+    menu.AddItem("&File", "&Save" + Chr(9) + "Ctrl+S")
+
+
+ICON NAMES FOR GUI_Window.Icon
+----------------------------------------------------------------------
+app, notes, terminal, spark, voyager, chat, network, settings, tasks,
+sketch, mines, monitor, help, folder, file, txt, spk, htm, pic,
+computer, info, warn, error, question.
+
+
+PICTURES
+----------------------------------------------------------------------
+GUI_Canvas.Picture(x, y, data) draws a SIM95PIC picture - the text
+format Sketch saves (.PIC). The first line is "SIM95PIC width height",
+then one row per line, one hex digit (0-F, the palette index) per pixel.
+
+CANVAS PALETTE
+----------------------------------------------------------------------
+ 0 black     1 maroon    2 green     3 olive     4 navy      5 purple
+ 6 teal      7 silver    8 gray      9 red      10 lime     11 yellow
+12 blue     13 magenta  14 cyan     15 white
+
+
+10. GUI CLASSES (generated from the widget registry; identical to the built-in applications' controls)
+----------------------------------------------------------------------
+All controls except GUI_Window are created with ClassName.New(parent) where parent is a window or another control.
+All of them share: Text, Visible, Enabled, X, Y, Width, Height, Tag, TabStop, Focused;
+SetBounds(x, y, w, h), Focus(), Destroy(); and the event onKey(key AS String).
+Methods marked [waits] pause the handler until the user answers (MessageBox.Show, FileDialog.ShowOpen, Console.ReadLine).
+
+GUI_Window
+----------------------------------------------------------------------
+A top-level window with title bar, optional menu and status bar. Width
+and height are the client area.
+    New(title AS String, width AS Integer, height AS Integer)
+  Properties:
+    Title (read/write) AS String
+    Status (read/write) AS String
+        Text of the status bar; empty hides the bar
+    X (read/write) AS Integer
+        Left edge on the desktop; -1 centres
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    Resizable (read/write) AS Bool
+    State (read/write) AS String
+        "normal", "minimized" or "maximized"
+    Active AS Bool
+        True while this is the focused window
+    Modal (read/write) AS Bool
+        Blocks the program's other windows while visible
+    Icon (read/write) AS String
+        Name of the icon shown in the title bar and taskbar
+    Tag (read/write) AS String
+    Text (read/write) AS String
+        Alias of Title
+  Methods:
+    Show()
+        Make the window visible and bring it to front
+    Hide()
+    Close()
+        Fire onClose and destroy the window
+    Focus()
+    Center()
+        Centre on the desktop
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+    Destroy()
+  Events:
+    onClose()
+        The user closed the window (it is destroyed after the handler returns)
+    onKey(key AS String)
+    onResize()
+        Client size changed; read Width and Height
+    onActivate()
+
+GUI_Label
+----------------------------------------------------------------------
+Static text.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Align (read/write) AS String
+        "left", "center" or "right"
+    Bold (read/write) AS Bool
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+
+GUI_Button
+----------------------------------------------------------------------
+A push button. Text may contain & before the mnemonic letter.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Default (read/write) AS Bool
+        Enter presses this button
+    Cancel (read/write) AS Bool
+        Escape presses this button
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    Click()
+        Press the button from code
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onClick()
+
+GUI_TextBox
+----------------------------------------------------------------------
+Single-line text entry.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Password (read/write) AS Bool
+    ReadOnly (read/write) AS Bool
+    MaxLength (read/write) AS Integer
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    SelectAll()
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onChange()
+    onEnter()
+        Enter was pressed
+
+GUI_TextArea
+----------------------------------------------------------------------
+Multi-line text editor with scrollbars.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    ReadOnly (read/write) AS Bool
+    WordWrap (read/write) AS Bool
+    Syntax (read/write) AS String
+        "" or "SPARK" for syntax colouring
+    SelStart (read/write) AS Integer
+    SelLength (read/write) AS Integer
+    Line AS Integer
+        Cursor line (1-based)
+    Column AS Integer
+        Cursor column (1-based)
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    GotoLine(line AS Integer)
+        Move the cursor to a line and scroll it into view
+    Insert(text AS String)
+        Insert text at the cursor
+    SelectAll()
+    GetLine(line AS Integer) AS String
+        Text of one line (1-based)
+    LineCount() AS Integer
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onChange()
+    onCursor()
+        The cursor moved
+
+GUI_CheckBox
+----------------------------------------------------------------------
+A check box.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Checked (read/write) AS Bool
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onChange()
+
+GUI_RadioButton
+----------------------------------------------------------------------
+One of a group; Group names the group.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Checked (read/write) AS Bool
+    Group (read/write) AS String
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onChange()
+
+GUI_ListBox
+----------------------------------------------------------------------
+A scrolling list of strings.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Items (read/write) AS Array OF String
+        All items
+    Selected (read/write) AS Integer
+        Index of the selected item, -1 for none
+    Count AS Integer
+    Mono (read/write) AS Bool
+        Use the fixed-pitch font
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    Add(text AS String)
+        Append an item
+    Clear()
+    RemoveAt(index AS Integer)
+    Get(index AS Integer) AS String
+        Item text at index
+    Set(index AS Integer, text AS String)
+    IndexOf(text AS String) AS Integer
+    ScrollToEnd()
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onSelect()
+        Selection changed
+    onDblClick()
+        An item was double-clicked or Enter pressed
+
+GUI_DropDown
+----------------------------------------------------------------------
+A drop-down list.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Items (read/write) AS Array OF String
+    Selected (read/write) AS Integer
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    Add(text AS String)
+    Clear()
+    Get(index AS Integer) AS String
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onSelect()
+
+GUI_Menu
+----------------------------------------------------------------------
+A menu bar for a window (or a popup menu). Item text may contain & for
+a mnemonic and a tab plus shortcut, e.g. "&Save\tCtrl+S".
+    New(parent AS GUI_Window or control)
+  Properties:
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    Tag (read/write) AS String
+  Methods:
+    AddMenu(title AS String)
+        Add a top-level menu such as "&File"
+    AddItem(menu AS String, text AS String)
+        Add an item under a menu
+    AddSeparator(menu AS String)
+    SetChecked(item AS String, checked AS Bool)
+        Check mark on an item (by text without &)
+    SetEnabled(item AS String, enabled AS Bool)
+    Clear()
+    Popup(x AS Integer, y AS Integer)
+        Show the first menu as a context menu at window coordinates
+    Destroy()
+  Events:
+    onSelect(item AS String)
+        An item was chosen; item is its text without & or shortcut
+
+GUI_StatusBar
+----------------------------------------------------------------------
+A status bar docked at the bottom of the window (Window.Status is a
+shortcut).
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+        Caption or content
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+
+GUI_ProgressBar
+----------------------------------------------------------------------
+A progress bar.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Value (read/write) AS Integer
+    Max (read/write) AS Integer
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+
+GUI_Canvas
+----------------------------------------------------------------------
+A 16-colour drawing surface.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Color (read/write) AS Integer
+        Current palette index 0-15
+    Background (read/write) AS Integer
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    Clear()
+        Fill with Background
+    SetColor(index AS Integer)
+        Palette index 0-15
+    Pixel(x AS Integer, y AS Integer)
+    Line(x1 AS Integer, y1 AS Integer, x2 AS Integer, y2 AS Integer)
+    Rect(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+    FillRect(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+    Circle(cx AS Integer, cy AS Integer, r AS Integer)
+    FillCircle(cx AS Integer, cy AS Integer, r AS Integer)
+    Text(x AS Integer, y AS Integer, text AS String)
+        Draw text with its top-left at x,y
+    Picture(x AS Integer, y AS Integer, data AS String)
+        Draw a SIM95PIC text picture at x,y
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onDraw(canvas AS Any)
+        Fired when the canvas is first shown or resized
+    onMouseDown(x AS Integer, y AS Integer, button AS Integer)
+    onMouseMove(x AS Integer, y AS Integer)
+    onMouseUp(x AS Integer, y AS Integer, button AS Integer)
+
+GUI_Timer
+----------------------------------------------------------------------
+Fires onTick every Interval milliseconds while Enabled. Keeps the
+program alive.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Interval (read/write) AS Integer
+    Enabled (read/write) AS Bool
+    Tag (read/write) AS String
+  Methods:
+    Start()
+    Stop()
+    Destroy()
+  Events:
+    onTick()
+
+GUI_MessageBox
+----------------------------------------------------------------------
+A modal message box. Show() waits and returns True for OK/Yes.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Text (read/write) AS String
+    Title (read/write) AS String
+    Kind (read/write) AS String
+        "info", "warn", "error" or "confirm"
+    Buttons (read/write) AS String
+        "ok", "okcancel" or "yesno"
+    Tag (read/write) AS String
+  Methods:
+    Show() AS Bool   [waits]
+        Show and wait; True if OK or Yes was chosen
+    Destroy()
+
+GUI_FileDialog
+----------------------------------------------------------------------
+Open/Save file dialogs. ShowOpen()/ShowSave() wait and return the
+chosen path or "".
+    New(parent AS GUI_Window or control)
+  Properties:
+    Title (read/write) AS String
+    Filter (read/write) AS String
+        Wildcard such as "*.SPK"
+    Path (read/write) AS String
+        Starting directory
+    FileName (read/write) AS String
+    Tag (read/write) AS String
+  Methods:
+    ShowOpen() AS String   [waits]
+    ShowSave() AS String   [waits]
+    Destroy()
+
+GUI_Console
+----------------------------------------------------------------------
+A text console: fixed-pitch output with line input.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Rows AS Integer
+    Echo (read/write) AS Bool
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    Write(text AS String)
+        Write text without a newline
+    WriteLine(text AS String)
+    Clear()
+    ReadLine() AS String   [waits]
+        Wait for the user to type a line and press Enter
+    ReadPassword() AS String   [waits]
+        Like ReadLine, but shows * for each character
+    ReadKey() AS String   [waits]
+        Wait for one key press
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onBreak()
+        Ctrl+C or Ctrl+Break was pressed
+
+GUI_HtmlView
+----------------------------------------------------------------------
+Renders a page of 1996 HTML from a string. Never fetches on its own.
+    New(parent AS GUI_Window or control)
+  Properties:
+    Visible (read/write) AS Bool
+    Enabled (read/write) AS Bool
+    X (read/write) AS Integer
+    Y (read/write) AS Integer
+    Width (read/write) AS Integer
+    Height (read/write) AS Integer
+    Tag (read/write) AS String
+        Free text for the program's own use
+    TabStop (read/write) AS Bool
+    Focused AS Bool
+        True while this control has the keyboard focus (which button was clicked?)
+    Html (read/write) AS String
+    Base (read/write) AS String
+        URL the page was loaded from, for relative links
+  Methods:
+    SetBounds(x AS Integer, y AS Integer, w AS Integer, h AS Integer)
+        Position and size inside the parent, in pixels
+    Focus()
+        Give this control the keyboard focus
+    Destroy()
+        Remove the control
+    SetImage(src AS String, data AS String)
+        Supply picture data for an <img src>
+    ScrollTo(y AS Integer)
+    HasElement(id AS String) AS Bool
+        True when the page has an element with this id
+    GetElement(id AS String, prop AS String) AS Any
+        Read Text, Value, Checked, Visible, Enabled, Id or TagName of the element with this id
+    SetElement(id AS String, prop AS String, value AS Any)
+        Change Text, Value, Checked, Visible or Enabled of the element with this id
+  Events:
+    onKey(key AS String)
+        A key was pressed while focused; key is like "A", "Enter", "F5", "Ctrl+S"
+    onNavigate(url AS String)
+        A link was clicked, or a GET form was sent; url carries its fields
+    onSubmit(url AS String, body AS String, files AS String)
+        A form with method="post" was sent: body is name=value&..., files is one name=path per line for its file fields
+    onStatus(text AS String)
+        Hover text for the status bar
+    onImage(src AS String)
+        The page needs a picture; call SetImage when you have it
+    onScript(event AS String, sub AS String)
+        An element with an onclick, onchange or onenter attribute was used; sub is the attribute value
+
+
+11. PAGE SCRIPTS (SPARK inside a web page, run by Voyager)
+----------------------------------------------------------------------
+A web page can carry SPARK in a <script> tag. Voyager compiles it
+when the page loads and runs it when the page says so. There is no
+Main: HTML event attributes name the SUB to run, one rule everywhere.
+
+    <body onload="Page_Load">            runs once, after the page is drawn
+    <input type="button" value="Add" onclick="Add_Click">
+    <input id="name" onenter="Add_Click">   Enter was pressed in the box
+    <select id="size" onchange="Size_Change">
+    <input type="checkbox" id="loud" onchange="Loud_Change">
+
+    <script type="spark">
+    SUB Page_Load ()
+        PAGE.Status = "Ready"
+    END SUB
+    SUB Add_Click ()
+        PAGE.Get("out").Text = "Hello, " + PAGE.Get("name").Value
+    END SUB
+    </script>
+
+Every SUB an attribute names must exist and take no parameters;
+Voyager reports a missing one in its status bar instead of running
+the page. Elements are found by their id attribute with PAGE.Get(id).
+Forms: <input> (text, password, checkbox, radio, button, submit, file),
+<select>, <textarea> and <button> draw as the system's own controls.
+A file box has a Browse... button that opens the Open dialog on this
+disk; its Value is the chosen path.
+
+A page script sees the page and nothing else. It has PAGE, TIME, MATH
+and a SYS with only Ticks, Sleep and Beep: no FS, no NET, no windows,
+no SYS.Run, no Input. Print writes to the status bar. A handler that
+runs for too long is stopped. The sample C:\WEB\HELLO.HTM does all of
+this; open it with File > Open Location and type file:C:\WEB\HELLO.HTM.
+
+PAGE_Element
+----------------------------------------------------------------------
+One element of the page, found by its id attribute with PAGE.Get(id).
+Form controls (input, select, textarea, button) and anything else with
+an id.
+  Properties:
+    Id AS String
+        The id attribute
+    TagName AS String
+        The tag, in capitals: "INPUT", "SPAN"
+    Text (read/write) AS String
+        The text inside the element; on a form control, the same as Value
+    Value (read/write) AS String
+        What a text box, text area or select holds
+    Checked (read/write) AS Bool
+        A checkbox or radio button's state
+    Visible (read/write) AS Bool
+        FALSE removes the element from the page until set back
+    Enabled (read/write) AS Bool
+        FALSE greys out a form control
+
+PAGE
+----------------------------------------------------------------------
+The page this script is part of, as shown in Voyager.
+  Properties:
+    Title (read/write) AS String
+        The window title
+    Status (read/write) AS String
+        Text in Voyager's status bar
+    Location AS String
+        The address of this page
+  Methods:
+    Get(id AS String) AS PAGE_Element
+        The element whose id attribute is id; an error when there is none
+    Exists(id AS String) AS Bool
+        True when an element has this id
+    Navigate(url AS String)
+        Open another page, as if a link were clicked
+    Alert(text AS String)   [waits]
+        Show a message box and wait for OK
+
+SYS
+----------------------------------------------------------------------
+In a page script: only the clock, Sleep and Beep.
+  Properties:
+    Ticks AS Integer
+        Milliseconds since the page loaded
+  Methods:
+    Sleep(ms AS Integer)   [waits]
+        Pause this handler
+    Beep(freq AS Integer, ms AS Integer)
+        Square-wave beep
+
+TIME
+----------------------------------------------------------------------
+Clock and calendar.
+  Properties:
+    Clock AS String
+        "14:05:09"
+    Date AS String
+        "1996-07-04"
+    Ticks AS Integer
+        Milliseconds since midnight
+    Now AS Integer
+        Seconds since 1970
+
+MATH
+----------------------------------------------------------------------
+Maths.
+  Properties:
+    Pi AS Real
+  Methods:
+    Sqrt(Real) AS Real
+    Sin(Real) AS Real
+    Cos(Real) AS Real
+    Tan(Real) AS Real
+    Atan(Real) AS Real
+    Exp(Real) AS Real
+    Log(Real) AS Real
+    Floor(Real) AS Integer
+    Ceil(Real) AS Integer
+    Round(Real) AS Integer
+    Min(Real, Real) AS Real
+    Max(Real, Real) AS Real
+    Abs(Real) AS Real
+
+
+12. ACTIVE SPARK PAGES (SPARK on the server, run by HTTPD)
+----------------------------------------------------------------------
+A file in C:\WEB whose name ends in .ASP is run by the web server
+instead of being sent. It is HTML with SPARK in it:
+
+    <%@ import file="SITE.SPK" %>       SUBs and globals from a SPARK file
+    <!--#include file="MENU.INC"-->     another file pasted in, as text
+    <% VAR n AS Integer                 statements, run top to bottom
+       n = Val(REQUEST.Query("n")) %>   with the text around them
+    <p>n squared is <%= n * n %></p>    <%= expr %> writes a value
+    <% IF n > 10 THEN %>                blocks may span text...
+    <p>That is a lot.</p>
+    <% END IF %>                        ...which is written only when reached
+    <script runat="server">             SUBs declared by the page itself
+    FUNCTION Twice (x AS Integer) AS Integer
+        RETURN x * 2
+    END FUNCTION
+    </script>
+
+There is no Main: the page's own text and code are the program. An
+imported file is ordinary SPARK; a Main in it is ignored. Errors are
+reported with the file and line they came from, as a page. A page sees
+REQUEST, RESPONSE and SERVER (below), and FS, NET, TIME and MATH like a
+program, and a SYS with only Ticks, Sleep and Beep. No windows, no
+sockets. It runs on the server's machine, with the server's disk.
+
+Forms. A <form> with a Submit button sends its fields on the URL and
+the page reads them with REQUEST.Query("name"). Give the form
+method="post" and they travel in the body instead: REQUEST.Method is
+"POST" and REQUEST.Form("name") reads them. An <input type="file"
+name="f"> in a POST form sends the chosen file from the visitor's
+disk: REQUEST.Form("f") is its text and REQUEST.Form("f.filename")
+its name. A whole request must fit in one network message, so keep
+uploads under about 60K.
+
+Cookies. RESPONSE.SetCookie("user", name) asks Voyager to send
+user=name back with every later request to this server, and
+REQUEST.Cookie("user") reads it: that is how a page knows who is
+signed in. Setting a cookie to "" forgets it. Voyager keeps them in
+C:\SYSTEM\COOKIES.TXT, one per line. RESPONSE.Redirect after a POST
+is the polite way to land the visitor on a page they can Reload.
+
+HTTPD.SPK does this with one line: conn.Send(ASP.Render(file, message,
+conn.FromAddress)). ASP.Render returns the whole response, headers and
+all. The sample is C:\WEB\HELLO.ASP, with C:\WEB\SITE.SPK imported.
+
+REQUEST
+----------------------------------------------------------------------
+The HTTP request this page is answering.
+  Properties:
+    Method AS String
+        "GET", or "POST" for a form with method="post"
+    Path AS String
+        The path without the query: "/hello.asp"
+    QueryString AS String
+        Everything after the ?, undecoded
+    From AS String
+        Address of the machine that asked
+    Host AS String
+        The Host header
+    Body AS String
+        What a POST sent, undecoded; "" for a GET
+  Methods:
+    Query(name AS String) AS String
+        Value of one query field, decoded; "" when absent
+    Form(name AS String) AS String
+        Value of one POSTed field, decoded; "" when absent. A file field is its text; name.filename is the file name
+    Header(name AS String) AS String
+        Value of one request header; "" when absent
+    Cookie(name AS String) AS String
+        Value of a cookie Voyager sent back; "" when absent
+
+RESPONSE
+----------------------------------------------------------------------
+The reply being built. Text outside <% %> is written here too.
+  Properties:
+    Status (read/write) AS String
+        "200 OK" unless you change it
+    ContentType (read/write) AS String
+        "text/html" unless you change it
+  Methods:
+    Write(text AS Any)
+        Append text to the page
+    AddHeader(name AS String, value AS String)
+    SetCookie(name AS String, value AS String)
+        Ask Voyager to send name=value back with every later request to this server; "" forgets it
+    Redirect(url AS String)
+        Answer 302 with a Location and stop
+    Clear()
+        Throw away what has been written so far
+    End()
+        Stop the page here; what was written is sent
+
+SERVER
+----------------------------------------------------------------------
+The web server and helpers.
+  Properties:
+    Name AS String
+        This machine's host name
+    ScriptName AS String
+        The .ASP file being run
+  Methods:
+    MapPath(path AS String) AS String
+        Disk path for a URL path: "/a.txt" is C:\WEB\A.TXT
+    HtmlEncode(text AS String) AS String
+        & < > " made safe for a page
+    UrlEncode(text AS String) AS String
+    UrlDecode(text AS String) AS String
+
+SYS
+----------------------------------------------------------------------
+In a server page: only the clock, Sleep and Beep.
+  Properties:
+    Ticks AS Integer
+        Milliseconds since the page started
+  Methods:
+    Sleep(ms AS Integer)   [waits]
+        Pause the page
+    Beep(freq AS Integer, ms AS Integer)
+        Square-wave beep on the server machine
+
+
+======================================================================
+End of SPARK.TXT. See also SHELL.TXT and NETWORK.TXT in C:\DOCS.
