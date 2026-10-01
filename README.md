@@ -28,6 +28,9 @@ A series of programs for the sim95 playground
   player for SimMovies (canvas drawing, one line a frame).
 * [`simhost/`](simhost/) – SimHost: every web app on one machine, each in a
   folder of its own, and Move In to bring the other machines' data over.
+* [`simstats/`](simstats/) – SimStats, Hitbox-style web statistics for any
+  site on the network: a tracking tag, unique visitors, top pages, referrers,
+  browsers, live hits and LED hit counters.
 * [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
   scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
@@ -40,10 +43,10 @@ A series of programs for the sim95 playground
 Paste an app's `INSTALL.SPK` into SPARK and press F5. On its own, a web app
 becomes its machine's home page: one machine per app. Install
 [SimHost](simhost/) first and they all share one machine instead, at
-`/book/`, `/mail/`, `/ask/`, `/geo/`, `/eliza/`, `/pal/` and `/tube/`; that is one browser tab for the
+`/book/`, `/mail/`, `/ask/`, `/geo/`, `/eliza/`, `/pal/`, `/tube/` and `/stats/`; that is one browser tab for the
 lot. Simxplorer installs as a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any
 machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simsh). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh). Rebuild the installers with `node tools/build-installer.mjs`.

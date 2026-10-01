@@ -119,6 +119,7 @@ const portal = {
   ELIZA: ["A chatbot with Language-Model-of-Certain-Size manners.", "#2F6F4F"],
   PAL: ["Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.", "#003087"],
   TUBE: ["Movies: watch them, put yours up, give them stars. They play in SimPlayer.", "#CC0000"],
+  STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
 };
 const appInf = (app) => {
   const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
@@ -329,6 +330,58 @@ SUB TubeDirs ()
 END SUB
 `,
   },
+  simstats: {
+    folder: "STATS",
+    vapor: { folder: "STATS", id: "SIMSTATS", name: "SimStats", kind: "web", category: "Internet", run: "/", tasks: "", startup: "", about: "Free web statistics for any site on the network: hits, unique visitors, top pages, referrers, browsers, live traffic and LED hit counters. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "SimStats",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimStats becomes
+' this machine's home page: its pages go into C:\\WEB (the stock INDEX.HTM moves
+' to WELCOME.HTM). On a SimHost machine it goes in C:\\WEB\\STATS instead, and
+' the front page counts its own visitors with it. Accounts and statistics are
+' kept in C:\\STATDATA, which is left alone, so running it again upgrades
+' SimStats without losing a hit. It also adds a line to C:\\WEB\\ROBOTS.TXT so
+' AskSim's crawler leaves the tracking tag alone. Then open http://YOURNAME/
+' in Voyager.`,
+    copy: [["simstats/WEB", "C:\\WEB"]],
+    dirs: [],
+    first: ["MoveHomePage()", "StatsSetup()"],
+    last: [],
+    url: "/",
+    code: () => moveHomePage + `
+' Where SimStats keeps its numbers, outside C:\\WEB. Also "this machine": a site
+' that belongs to nobody (the machine's owner sees it on admin.asp), which the
+' SimHost front page counts its visitors with. Its id is in C:\\STATDATA\\HOME.TXT.
+SUB StatsSetup ()
+    VAR dirs AS Array OF String
+    VAR dir AS String
+    VAR id AS String
+    VAR robots AS String
+    VAR rule AS String
+    dirs = ["C:\\STATDATA", "C:\\STATDATA\\USERS", "C:\\STATDATA\\SESSIONS", "C:\\STATDATA\\S"]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    NEXT
+    IF NOT FS.Exists("C:\\STATDATA\\HOME.TXT") THEN
+        id = Hex(268435456 + Rnd(1879048191))
+        IF NOT FS.Exists("C:\\STATDATA\\S\\" + id) THEN FS.MakeDir("C:\\STATDATA\\S\\" + id)
+        FS.Append("C:\\STATDATA\\SITES.TXT", id + "||This machine (" + NET.HostName.Upper() + ")|http://" + NET.HostName.Lower() + "/|0|" + TIME.Date + "|1" + NL)
+        FS.Write("C:\\STATDATA\\HOME.TXT", id)
+        Print("  made the site " + id + " for this machine itself")
+    END IF
+    ' AskSim's crawler reads /robots.txt: it has no business with the tag
+    rule = "Disallow: /hit.asp"
+    IF intoDir <> "" THEN rule = "Disallow: /" + intoDir.Lower() + "/hit.asp"
+    robots = ""
+    IF FS.Exists("C:\\WEB\\ROBOTS.TXT") THEN robots = FS.Read("C:\\WEB\\ROBOTS.TXT")
+    IF NOT robots.Contains(rule) THEN
+        IF robots = "" THEN robots = "User-agent: *" + NL
+        IF NOT robots.EndsWith(NL) THEN robots = robots + NL
+        FS.Write("C:\\WEB\\ROBOTS.TXT", robots + rule + NL)
+        Print("  told crawlers to keep off the tag in C:\\WEB\\ROBOTS.TXT")
+    END IF
+END SUB
+`,
+  },
   simsh: {
     vapor: { id: "SIMSH", name: "Sim Shell", kind: "program", category: "System", run: "C:\\PROGRAMS\\SIMSH.SPK", tasks: "SIMSH;SSHD", startup: "SSHD.RUN", about: "A bash-like shell for SIM95: ls, cd, cat, grep, pipes, redirects, variables, aliases and .SH scripts, plus ssh/scp over the network (rsh with a password; not secure) and sim-get, an apt-like front end to the Vapor store. Installs the sshd server too." },
     title: "Sim Shell",
@@ -375,7 +428,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);
