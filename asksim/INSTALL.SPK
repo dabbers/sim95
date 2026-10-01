@@ -22,7 +22,8 @@ SUB Main ()
     File3()
     File4()
     File5()
-    Print("AskSim is installed (6 files).")
+    File6()
+    Print("AskSim is installed (7 files).")
     StartService("CRAWLER", "C:\PROGRAMS\CRAWLER.SPK", "ASKSIM.RUN")
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
@@ -57,7 +58,7 @@ SUB File0 ()
     t = t + "    END IF" + NL
     t = t + "END IF" + NL
     t = t + "%>" + NL
-    t = t + "<%= Top(""Add your site - AskSim"") %>" + NL
+    t = t + "<%= TopFor(""Add your site - AskSim"", ""noindex,nofollow"") %>" + NL
     t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#E8DDF0""><tr>" + NL
     t = t + "<td width=""50""><a href=""index.asp""><img src=""simms.pic"" alt=""Simms""></a></td>" + NL
     t = t + "<td><a href=""index.asp""><font size=""5"" color=""#660099""><b>AskSim</b></font></a></td>" + NL
@@ -288,7 +289,15 @@ SUB File1 ()
     t = t + "' ---------------------------------------------------------------- page furniture" + NL
     t = t + "" + NL
     t = t + "FUNCTION Top (title AS String) AS String" + NL
-    t = t + "    RETURN ""<html><head><title>"" + H(title) + ""</title></head>"" _" + NL
+    t = t + "    RETURN TopFor(title, """")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' robots: """" for a page worth finding, or what search engines should do with" + NL
+    t = t + "' it (""noindex,nofollow"": results and cached copies are not pages in their own right)." + NL
+    t = t + "FUNCTION TopFor (title AS String, robots AS String) AS String" + NL
+    t = t + "    VAR meta AS String" + NL
+    t = t + "    IF robots <> """" THEN meta = ""<meta name=""""robots"""" content="""""" + robots + """""">""" + NL
+    t = t + "    RETURN ""<html><head><title>"" + H(title) + ""</title>"" + meta + ""</head>"" _" + NL
     t = t + "         + ""<body bgcolor=""""#FFFFFF"""" text=""""#000000"""" link=""""#660099"""" vlink=""""#660099"""">""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
@@ -306,12 +315,35 @@ SUB File1 ()
     t = t + "" + NL
     t = t + "FUNCTION Bottom () AS String" + NL
     t = t + "    RETURN ""<hr><center><font size=""""1"""" color=""""#808080"""">AskSim on "" + H(NET.HostName.Lower()) + "" &middot; "" + H(Stats()) _" + NL
-    t = t + "         + "" &middot; <a href=""""addurl.asp"""">Add your site</a></font></center></body></html>""" + NL
+    t = t + "         + "" &middot; <a href=""""addurl.asp"""">Add your site</a> &middot; <a href=""""asksim.htm"""">About AskSim</a></font></center></body></html>""" + NL
     t = t + "END FUNCTION" + NL
     Put("C:\WEB\ASK.SPK")
 END SUB
 
 SUB File2 ()
+    t = ""
+    t = t + "<html><head><title>About AskSim - the search engine for the SIM95 network</title>" + NL
+    t = t + "<meta name=""description"" content=""AskSim is a search engine and web directory for the SIM95 network: ask a question in plain English and Simms the butler finds the pages that answer it, with cached copies of sites that have gone away."">" + NL
+    t = t + "<meta name=""keywords"" content=""search, search engine, web search, find, look up, ask, ask jeeves, yahoo, altavista, google, lycos, excite, web directory, crawler, spider, index, cached pages, questions, answers, websites, sites, pages, internet"">" + NL
+    t = t + "</head>" + NL
+    t = t + "<body bgcolor=""#FFFFFF"">" + NL
+    t = t + "<h2><font color=""#800000"">About AskSim</font></h2>" + NL
+    t = t + "<p><b>AskSim is the search engine for the SIM95 network.</b> Ask Simms a question in plain English," + NL
+    t = t + "like ""Where can I buy a modem?"", and he brings you the pages that answer it.</p>" + NL
+    t = t + "<ul>" + NL
+    t = t + "<li><b>A real web crawler</b> (a spider) visits every machine on the network once an hour and reads its pages.</li>" + NL
+    t = t + "<li><b>Relevance ranking</b>: pages that use your words most, and in their titles, come first.</li>" + NL
+    t = t + "<li><b>Cached copies</b>: when a site goes away, AskSim still has the page it last saw.</li>" + NL
+    t = t + "<li><b>site:machine</b> searches one machine. <b>Just take me there</b> goes straight to the best answer.</li>" + NL
+    t = t + "<li><b>Webmasters</b>: <a href=""addurl.asp"">add your site</a>, and use &lt;meta name=""keywords""&gt; and" + NL
+    t = t + "&lt;meta name=""description""&gt; to tell Simms what your pages are about. A robots.txt keeps him out.</li>" + NL
+    t = t + "</ul>" + NL
+    t = t + "<p><a href=""index.asp""><b>Ask Simms a question</b></a></p>" + NL
+    t = t + "</body></html>" + NL
+    Put("C:\WEB\ASKSIM.HTM")
+END SUB
+
+SUB File3 ()
     t = ""
     t = t + "<%@ import file=""ASK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -322,7 +354,7 @@ SUB File2 ()
     t = t + "id = REQUEST.Query(""id"")" + NL
     t = t + "IF DocLine(id) = """" OR id.Contains(""\"") OR id.Contains(""."") THEN RESPONSE.Redirect(""index.asp"")" + NL
     t = t + "doc = DocLine(id).Split(""|"")" + NL
-    t = t + "%>" + NL
+    t = t + "%><meta name=""robots"" content=""noindex,nofollow"">" + NL
     t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" border=""1""><tr><td bgcolor=""#F3EEF7""><font size=""2"">" + NL
     t = t + "This is <a href=""index.asp""><b>AskSim</b></a>'s copy of <a href=""<%= H(doc[1]) %>""><%= H(doc[1]) %></a>" + NL
     t = t + "as it looked on <b><%= H(doc[3]) %></b>." + NL
@@ -336,7 +368,7 @@ SUB File2 ()
     Put("C:\WEB\CACHE.ASP")
 END SUB
 
-SUB File3 ()
+SUB File4 ()
     t = ""
     t = t + "<%@ import file=""ASK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -379,7 +411,7 @@ SUB File3 ()
     t = t + "<a href=""index.asp?q=How+do+I+write+a+SPARK+program%3F"">How do I write a SPARK program?</a></font></p>" + NL
     t = t + "</center>" + NL
     t = t + "<% ELSE %>" + NL
-    t = t + "<%= Top(q + "" - AskSim"") %>" + NL
+    t = t + "<%= TopFor(q + "" - AskSim"", ""noindex,nofollow"") %>" + NL
     t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#E8DDF0""><tr>" + NL
     t = t + "<td width=""50""><a href=""index.asp""><img src=""simms.pic"" alt=""Simms""></a></td>" + NL
     t = t + "<td><a href=""index.asp""><font size=""5"" color=""#660099""><b>AskSim</b></font></a><br><%= AskBox(q) %></td>" + NL
@@ -439,7 +471,7 @@ SUB File3 ()
     Put("C:\WEB\INDEX.ASP")
 END SUB
 
-SUB File4 ()
+SUB File5 ()
     t = ""
     t = t + "SIM95PIC 40 56" + NL
     t = t + "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" + NL
@@ -501,7 +533,7 @@ SUB File4 ()
     Put("C:\WEB\SIMMS.PIC")
 END SUB
 
-SUB File5 ()
+SUB File6 ()
     t = ""
     t = t + "' CRAWLER.SPK - AskSim's web crawler. Walks every web server on the network," + NL
     t = t + "' keeps a copy of each page, and builds the index the search pages read." + NL
@@ -545,6 +577,7 @@ SUB File5 ()
     t = t + "CONST EVERY = 60              ' minutes between crawls" + NL
     t = t + "CONST PATIENCE = 6000         ' milliseconds to wait for a page" + NL
     t = t + "CONST TITLEWEIGHT = 5         ' a word in the title counts this many times" + NL
+    t = t + "CONST KEYWEIGHT = 3           ' and one in <meta name=""keywords""> this many" + NL
     t = t + "CONST STOPWORDS = ""|a|an|the|and|or|of|to|in|on|at|by|for|is|it|its|be|as|are|was|with|this|that|from|you|your|i|me|my|we|our|he|she|they|them|but|not|no|so|if|do|does|did|have|has|had|can|will|just|all|any|there|here|what|where|who|how|which|when|why|about|into|out|up|than|then|also|more|some|very|would|could|should|been|were|these|those|their|his|her|him|am|get|got|one|nbsp|""" + NL
     t = t + "" + NL
     t = t + "VAR win AS GUI_Window" + NL
@@ -910,6 +943,31 @@ SUB File5 ()
     t = t + "    RETURN html.Substring(a, b)" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
+    t = t + "' <meta name=""..."" content=""..."">, or """"." + NL
+    t = t + "FUNCTION MetaOf (html AS String, name AS String) AS String" + NL
+    t = t + "    VAR low AS String" + NL
+    t = t + "    VAR at AS Integer" + NL
+    t = t + "    VAR tag AS String" + NL
+    t = t + "    VAR q AS String" + NL
+    t = t + "    low = html.Lower()" + NL
+    t = t + "    at = low.IndexOf(""<meta"")" + NL
+    t = t + "    WHILE at >= 0" + NL
+    t = t + "        tag = html.Substring(at, low.Substring(at, low.Length - at).IndexOf("">"") + 1)" + NL
+    t = t + "        IF tag.Lower().Replace(""'"", """""""").Contains(""name="""""" + name + """""""") AND tag.Lower().Contains(""content="") THEN" + NL
+    t = t + "            tag = tag.Substring(tag.Lower().IndexOf(""content="") + 8, tag.Length - tag.Lower().IndexOf(""content="") - 8)" + NL
+    t = t + "            q = tag.CharAt(0)" + NL
+    t = t + "            IF q = """""""" OR q = ""'"" THEN" + NL
+    t = t + "                tag = tag.Substring(1, tag.Length - 1)" + NL
+    t = t + "                IF tag.Contains(q) THEN tag = tag.Substring(0, tag.IndexOf(q))" + NL
+    t = t + "            END IF" + NL
+    t = t + "            RETURN Clean(Decode(tag))" + NL
+    t = t + "        END IF" + NL
+    t = t + "        IF low.Substring(at + 5, low.Length - at - 5).IndexOf(""<meta"") < 0 THEN RETURN """"" + NL
+    t = t + "        at = at + 5 + low.Substring(at + 5, low.Length - at - 5).IndexOf(""<meta"")" + NL
+    t = t + "    END WHILE" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
     t = t + "FUNCTION WithoutBlocks (html AS String, tag AS String) AS String" + NL
     t = t + "    VAR low AS String" + NL
     t = t + "    VAR a AS Integer" + NL
@@ -1015,7 +1073,7 @@ SUB File5 ()
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "FUNCTION Clean (s AS String) AS String" + NL
-    t = t + "    RETURN s.Replace(""|"", ""/"").Replace(Chr(10), "" "").Replace(Chr(13), "" "").Trim()" + NL
+    t = t + "    RETURN s.Replace(""|"", ""/"").Replace(Chr(10), "" "").Replace(Chr(13), "" "").Replace(Chr(9), "" "").Trim()" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "SUB Begin ()" + NL
@@ -1099,6 +1157,8 @@ SUB File5 ()
     t = t + "    VAR title AS String" + NL
     t = t + "    VAR text AS String" + NL
     t = t + "    VAR link AS String" + NL
+    t = t + "    VAR keywords AS String" + NL
+    t = t + "    VAR robots AS String" + NL
     t = t + "    url = fUrl" + NL
     t = t + "    ReadResponse()" + NL
     t = t + "    phase = ""next""" + NL
@@ -1106,15 +1166,35 @@ SUB File5 ()
     t = t + "        LearnRobots(HostOf(url))" + NL
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL
+    t = t + "    ' <meta name=""robots"" content=""noindex,nofollow"">: search results, cached" + NL
+    t = t + "    ' copies (AskSim's own included) and the like ask not to be kept or followed" + NL
+    t = t + "    robots = """"" + NL
+    t = t + "    IF fStatus = 200 AND fType.StartsWith(""text/html"") THEN robots = MetaOf(fBody, ""robots"").Lower()" + NL
+    t = t + "    IF robots.Contains(""noindex"") OR robots.Contains(""none"") THEN" + NL
+    t = t + "        IF NOT robots.Contains(""nofollow"") AND NOT robots.Contains(""none"") THEN" + NL
+    t = t + "            ReadLinks(fBody, url)" + NL
+    t = t + "            FOR EACH link IN pageLinks" + NL
+    t = t + "                Enqueue(link)" + NL
+    t = t + "            NEXT" + NL
+    t = t + "        END IF" + NL
+    t = t + "        ' forget it if an earlier crawl kept it" + NL
+    t = t + "        IF docUrls.IndexOf(url) >= 0 THEN SetDoc(url, DocId(url) + ""|"" + url + ""|||new|"")" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
     t = t + "    IF fStatus = 200 AND (fType.StartsWith(""text/html"") OR fType.StartsWith(""text/plain"")) THEN" + NL
     t = t + "        id = DocId(url)" + NL
     t = t + "        IF fType.StartsWith(""text/html"") THEN" + NL
     t = t + "            title = Clean(PlainText(Between(fBody, fBody.Lower(), ""title"")))" + NL
     t = t + "            text = PlainText(fBody)" + NL
+    t = t + "            ' the page's own summary comes first, so it is what results show" + NL
+    t = t + "            IF MetaOf(fBody, ""description"") <> """" THEN text = MetaOf(fBody, ""description"") + "" - "" + text" + NL
+    t = t + "            keywords = MetaOf(fBody, ""keywords"").Replace("","", "" "")" + NL
     t = t + "            ReadLinks(fBody, url)" + NL
-    t = t + "            FOR EACH link IN pageLinks" + NL
-    t = t + "                Enqueue(link)" + NL
-    t = t + "            NEXT" + NL
+    t = t + "            IF NOT robots.Contains(""nofollow"") THEN" + NL
+    t = t + "                FOR EACH link IN pageLinks" + NL
+    t = t + "                    Enqueue(link)" + NL
+    t = t + "                NEXT" + NL
+    t = t + "            END IF" + NL
     t = t + "        ELSE" + NL
     t = t + "            title = """"" + NL
     t = t + "            text = fBody.Replace(Chr(10), "" "")" + NL
@@ -1123,7 +1203,10 @@ SUB File5 ()
     t = t + "        IF title = """" THEN title = url" + NL
     t = t + "        IF text.Length > TEXTMAX THEN text = text.Substring(0, TEXTMAX)" + NL
     t = t + "        IF pageCopy.Length > CACHEMAX THEN pageCopy = pageCopy.Substring(0, CACHEMAX)" + NL
+    t = t + "        ' the first line is the title, then a tab and the keywords" + NL
+    t = t + "        IF keywords <> """" THEN title = title + Chr(9) + keywords" + NL
     t = t + "        FS.Write(DATA + ""\TEXT\"" + id + "".TXT"", title + NL + text)" + NL
+    t = t + "        title = title.Split(Chr(9))[0]" + NL
     t = t + "        FS.Write(DATA + ""\CACHE\"" + id + "".HTM"", pageCopy)" + NL
     t = t + "        SetDoc(url, id + ""|"" + url + ""|"" + title + ""|"" + TIME.Date + "" "" + TIME.Clock.Substring(0, 5) + ""|ok|"")" + NL
     t = t + "        fetchedOk = fetchedOk + url + ""|""" + NL
@@ -1232,11 +1315,18 @@ SUB File5 ()
     t = t + "        text = ReadOr(DATA + ""\TEXT\"" + id + "".TXT"", """")" + NL
     t = t + "        IF text = """" THEN CONTINUE" + NL
     t = t + "        words = WordsOf(text)" + NL
-    t = t + "        FOR EACH w IN WordsOf(text.Lines()[0])" + NL
+    t = t + "        FOR EACH w IN WordsOf(text.Lines()[0].Split(Chr(9))[0])" + NL
     t = t + "            FOR k = 2 TO TITLEWEIGHT" + NL
     t = t + "                words.Add(w)" + NL
     t = t + "            NEXT" + NL
     t = t + "        NEXT" + NL
+    t = t + "        IF text.Lines()[0].Contains(Chr(9)) THEN" + NL
+    t = t + "            FOR EACH w IN WordsOf(text.Lines()[0].Split(Chr(9))[1])" + NL
+    t = t + "                FOR k = 2 TO KEYWEIGHT" + NL
+    t = t + "                    words.Add(w)" + NL
+    t = t + "                NEXT" + NL
+    t = t + "            NEXT" + NL
+    t = t + "        END IF" + NL
     t = t + "        words.Sort()" + NL
     t = t + "        run = 0" + NL
     t = t + "        FOR i = 0 TO words.Count - 1" + NL

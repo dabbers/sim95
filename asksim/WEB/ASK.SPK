@@ -209,7 +209,15 @@ END FUNCTION
 ' ---------------------------------------------------------------- page furniture
 
 FUNCTION Top (title AS String) AS String
-    RETURN "<html><head><title>" + H(title) + "</title></head>" _
+    RETURN TopFor(title, "")
+END FUNCTION
+
+' robots: "" for a page worth finding, or what search engines should do with
+' it ("noindex,nofollow": results and cached copies are not pages in their own right).
+FUNCTION TopFor (title AS String, robots AS String) AS String
+    VAR meta AS String
+    IF robots <> "" THEN meta = "<meta name=""robots"" content=""" + robots + """>"
+    RETURN "<html><head><title>" + H(title) + "</title>" + meta + "</head>" _
          + "<body bgcolor=""#FFFFFF"" text=""#000000"" link=""#660099"" vlink=""#660099"">"
 END FUNCTION
 
@@ -227,5 +235,5 @@ END FUNCTION
 
 FUNCTION Bottom () AS String
     RETURN "<hr><center><font size=""1"" color=""#808080"">AskSim on " + H(NET.HostName.Lower()) + " &middot; " + H(Stats()) _
-         + " &middot; <a href=""addurl.asp"">Add your site</a></font></center></body></html>"
+         + " &middot; <a href=""addurl.asp"">Add your site</a> &middot; <a href=""asksim.htm"">About AskSim</a></font></center></body></html>"
 END FUNCTION

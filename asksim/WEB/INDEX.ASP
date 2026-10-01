@@ -39,7 +39,7 @@ first = (p - 1) * PERPAGE
 <a href="index.asp?q=How+do+I+write+a+SPARK+program%3F">How do I write a SPARK program?</a></font></p>
 </center>
 <% ELSE %>
-<%= Top(q + " - AskSim") %>
+<%= TopFor(q + " - AskSim", "noindex,nofollow") %>
 <table width="100%" cellpadding="6" cellspacing="0" bgcolor="#E8DDF0"><tr>
 <td width="50"><a href="index.asp"><img src="simms.pic" alt="Simms"></a></td>
 <td><a href="index.asp"><font size="5" color="#660099"><b>AskSim</b></font></a><br><%= AskBox(q) %></td>

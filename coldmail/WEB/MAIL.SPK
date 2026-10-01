@@ -410,7 +410,7 @@ FUNCTION Top (title AS String) AS String
 END FUNCTION
 
 FUNCTION Bottom () AS String
-    RETURN "<hr><center><font size=""1"" color=""#808080"">ColdMail on " + H(NET.HostName.Lower()) + " &middot; mail is delivered by C:\PROGRAMS\MAILD.SPK on port 25</font></center></body></html>"
+    RETURN "<hr><center><font size=""1"" color=""#808080"">ColdMail on " + H(NET.HostName.Lower()) + " &middot; mail is delivered by C:\PROGRAMS\MAILD.SPK on port 25 &middot; <a href=""coldmail.htm"">About ColdMail</a></font></center></body></html>"
 END FUNCTION
 
 FUNCTION BoxTop (title AS String) AS String

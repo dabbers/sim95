@@ -17,7 +17,8 @@ SUB Main ()
     MoveHomePage()
     File0()
     File1()
-    Print("ELIZA-95 is installed (2 files).")
+    File2()
+    Print("ELIZA-95 is installed (3 files).")
 
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
@@ -780,6 +781,37 @@ END SUB
 
 SUB File1 ()
     t = ""
+    t = t + "<html><head><title>About ELIZA-95 - the AI chatbot and virtual assistant</title>" + NL
+    t = t + "<meta name=""description"" content=""ELIZA-95 is an artificial intelligence chat bot and virtual assistant: ask it questions, have a conversation, get it to write programs, and watch it apologise. Powered by a large language model (allegedly)."">" + NL
+    t = t + "<meta name=""keywords"" content=""chatbot, chat bot, chat, ai, artificial intelligence, assistant, virtual assistant, ai assistant, llm, large language model, gpt, chatgpt, claude, eliza, therapist, conversation, talk, ask questions, answers, help, write code, programming, homework, natural language, machine learning, neural network"">" + NL
+    t = t + "</head>" + NL
+    t = t + "<body bgcolor=""#FFFFFF"">" + NL
+    t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr><td bgcolor=""#202040""><font color=""#FFFFFF"" size=""5""><b>ELIZA-95</b></font>" + NL
+    t = t + "<font color=""#AAAAFF"" size=""2"">&nbsp;artificial intelligence, mostly</font></td></tr></table>" + NL
+    t = t + "<h2>About ELIZA-95</h2>" + NL
+    t = t + "<p><b>ELIZA-95 is an AI chatbot and virtual assistant.</b> Type anything and it answers, in" + NL
+    t = t + "plain English. It is built on a large language model of roughly forty rules, a Markov chain and a" + NL
+    t = t + "great deal of confidence.</p>" + NL
+    t = t + "<h3>What can it do?</h3>" + NL
+    t = t + "<ul>" + NL
+    t = t + "<li><b>Answer questions.</b> ""What is chess?"" It looks things up with AskSim when it can, and makes them up when it can't.</li>" + NL
+    t = t + "<li><b>Write code.</b> Ask for a program and it writes real SPARK that actually runs. Usually.</li>" + NL
+    t = t + "<li><b>Build websites.</b> <tt>import website</tt>. Done.</li>" + NL
+    t = t + "<li><b>Do maths</b>, step by step, and count the r's in strawberry (eventually).</li>" + NL
+    t = t + "<li><b>Listen.</b> Underneath it is ELIZA, the 1966 computer therapist: tell it how you feel.</li>" + NL
+    t = t + "<li><b>Remember you</b> for the length of a conversation, and forget everything when you click New chat.</li>" + NL
+    t = t + "</ul>" + NL
+    t = t + "<h3>Is it intelligent?</h3>" + NL
+    t = t + "<p>As a large language model, I am not able to answer that. ELIZA-95 is a chat bot, an AI assistant and a" + NL
+    t = t + "conversation partner for the SIM95 network. It can make mistakes. Consider checking important information.</p>" + NL
+    t = t + "<p><a href=""index.asp""><b>Start chatting with ELIZA-95</b></a></p>" + NL
+    t = t + "<hr><center><font size=""1"" color=""#808080"">ELIZA-95: AI chatbot, virtual assistant and artificial intelligence for SIM95.</font></center>" + NL
+    t = t + "</body></html>" + NL
+    Put("C:\WEB\ELIZA.HTM")
+END SUB
+
+SUB File2 ()
+    t = ""
     t = t + "<%@ import file=""BOT.SPK"" %>" + NL
     t = t + "<%" + NL
     t = t + "' INDEX.ASP - talk to ELIZA-95. Saying something POSTs here and comes back with" + NL
@@ -875,7 +907,8 @@ SUB File1 ()
     t = t + "<td><form action=""index.asp"" method=""post""><input type=""hidden"" name=""do"" value=""new""><input type=""submit"" value=""New chat""></form></td>" + NL
     t = t + "</tr></table>" + NL
     t = t + "<hr><center><font size=""1"" color=""#808080"">ELIZA-95 can make mistakes. Consider checking important information." + NL
-    t = t + "Temperature 0 is predictable; 1.5 is creative, in the sense that it makes things up.</font></center>" + NL
+    t = t + "Temperature 0 is predictable; 1.5 is creative, in the sense that it makes things up." + NL
+    t = t + "&middot; <a href=""eliza.htm"">About ELIZA-95</a></font></center>" + NL
     t = t + "<% IF last <> """" THEN %><%= TypeScript(last) %><% END IF %>" + NL
     t = t + "</body></html>" + NL
     Put("C:\WEB\INDEX.ASP")

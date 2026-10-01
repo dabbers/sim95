@@ -872,7 +872,7 @@ FUNCTION NotesLink () AS String
 END FUNCTION
 
 FUNCTION Bottom () AS String
-    RETURN "<hr><center><font size=""1"" color=""#808080"">SimBook on " + H(SERVER.Name) + " &middot; " + TIME.Date + "</font></center></body></html>"
+    RETURN "<hr><center><font size=""1"" color=""#808080"">SimBook on " + H(SERVER.Name) + " &middot; " + TIME.Date + " &middot; <a href=""simbook.htm"">About SimBook</a></font></center></body></html>"
 END FUNCTION
 
 ' A titled box, the way every section of a profile is drawn.

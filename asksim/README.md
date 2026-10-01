@@ -31,6 +31,10 @@ window has a **Crawl Now** button and a log of what it found.
    and 500 in all.
    * **robots.txt**: it reads each machine's `/robots.txt` first and stays out
      of every path listed after `Disallow:`.
+   * **Meta tags**: `<meta name="keywords">` words count three times (title
+     words five), and `<meta name="description">` leads the result snippet.
+     `<meta name="robots" content="noindex,nofollow">` is obeyed; AskSim's own
+     results and cached copies say so, so it never indexes itself.
    * **/docs/ is skipped**: every SIM95 machine serves the same manuals there,
      so indexing them on each machine only buries real pages. (`SKIPDIRS` at
      the top of `CRAWLER.SPK` lists the folders it never visits.)

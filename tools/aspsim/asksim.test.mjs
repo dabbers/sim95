@@ -39,7 +39,9 @@ END SUB</script>
 bravo.write("C:\\WEB\\CHESS.HTM", `<html><head><title>All About Chess</title></head><body>
 <p>Chess is a game for two players. The knight moves in an L shape; the bishop moves diagonally.
 Chess openings: the Sicilian, the French and the Ruy Lopez. <a href="index.htm">Home</a></p></body></html>`);
-bravo.write("C:\\WEB\\RECIPES.HTM", `<html><head><title>Recipes</title></head><body><p>Pancakes: flour, eggs, milk &amp; butter. Mix, fry, flip.</p></body></html>`);
+bravo.write("C:\\WEB\\RECIPES.HTM", `<html><head><title>Recipes</title>
+<meta name="description" content="Bravo's favourite breakfast recipes.">
+<meta name="keywords" content="cookbook, zeppelin, breakfast"></head><body><p>Pancakes: flour, eggs, milk &amp; butter. Mix, fry, flip.</p></body></html>`);
 bravo.mkdir("C:\\WEB\\SECRET");
 bravo.write("C:\\WEB\\SECRET\\PLANS.HTM", `<html><head><title>Secret</title></head><body>Take over the world with platypus.</body></html>`);
 bravo.write("C:\\WEB\\ORPHAN.HTM", `<html><head><title>Nobody links here</title></head><body>An unlinked page about walrus.</body></html>`);
@@ -63,7 +65,7 @@ await test("the installer puts AskSim in place and the crawler goes round the ne
   alpha.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "asksim/INSTALL.SPK"), "utf8"));
   const pid = alpha.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !alpha.running(pid), 20000, "the installer");
-  assert.match(alpha.output(pid), /AskSim is installed \(6 files\)/);
+  assert.match(alpha.output(pid), /AskSim is installed \(7 files\)/);
   assert.equal(alpha.read("C:\\SYSTEM\\STARTUP\\ASKSIM.RUN"), "C:\\PROGRAMS\\CRAWLER.SPK");
   await net.until(() => stats() !== "", 60000, "the first crawl");
   assert.deepEqual(alpha.ui.dialogs, []);
@@ -109,6 +111,12 @@ await test("all the words beat some of them; site: keeps to one machine", async 
   assert.match(r.body, /found nothing about\s*<b>platypus<\/b>/);
 });
 
+await test("meta keywords count, and a meta description is what the results show", async () => {
+  const r = await ask("zeppelin");
+  assert.match(r.body, /Simms suggests:<\/b> <a href="http:\/\/bravo\/recipes.htm">/);
+  assert.match(r.body, /Bravo's favourite breakfast recipes\. - Pancakes/);
+});
+
 await test("Just take me there goes to the best answer", async () => {
   const r = await alpha.request("GET", "/index.asp?q=chess&go=1");
   assert.equal(r.status, "302 Found");
@@ -141,6 +149,11 @@ await test("a machine that goes away stays findable, marked, with its cached cop
 });
 
 await test("a submitted site is visited on the next crawl", async () => {
+  ok(await visitor.post("/addurl.asp", { url: "http://alpha/index.asp?q=chess" }));
+  for (const [app, file] of [["simbook", "SIMBOOK.HTM"], ["coldmail", "COLDMAIL.HTM"], ["eliza", "ELIZA.HTM"]]) {
+    bravo.write("C:\\WEB\\" + file, fs.readFileSync(path.join(root, app, "WEB", file), "utf8"));
+    ok(await visitor.post("/addurl.asp", { url: "http://bravo/" + file.toLowerCase() }));
+  }
   let r = ok(await visitor.post("/addurl.asp", { url: "bravo/orphan.htm" }));
   assert.match(r.body, /Simms will call on http:\/\/bravo\/orphan.htm/);
   r = ok(await visitor.post("/addurl.asp", { url: "http://bravo/orphan.htm" }));
@@ -151,6 +164,16 @@ await test("a submitted site is visited on the next crawl", async () => {
   alpha.button(crawlerPid(), "Crawl Now").call("Click");
   await net.until(() => stats() !== before, 60000, "the third crawl");
   assert.match((await ask("walrus")).body, /Nobody links here/);
+  assert.deepEqual(docs().filter((l) => /\?q=|cache\.asp|addurl/.test(l)), [], "AskSim's own results and cached copies are never indexed");
+  assert.ok(doc("http://alpha/asksim.htm"), "but its about page is");
+  const best = async (q) => (await ask(q)).body.match(/Simms suggests:<\/b> <a href="([^"]+)"/)?.[1];
+  assert.equal(await best("Where can I find a social network?"), "http://bravo/simbook.htm");
+  assert.equal(await best("like twitter or facebook"), "http://bravo/simbook.htm");
+  assert.equal(await best("free email"), "http://bravo/coldmail.htm");
+  assert.equal(await best("webmail"), "http://bravo/coldmail.htm");
+  assert.equal(await best("I want to talk to an AI chat bot"), "http://bravo/eliza.htm");
+  assert.equal(await best("virtual assistant"), "http://bravo/eliza.htm");
+  assert.equal(await best("search engine"), "http://alpha/asksim.htm");
 });
 
 await test("the front page, and a results page full of answers, fit in a message", async () => {

@@ -21,7 +21,7 @@ IF REQUEST.Method = "POST" THEN
     END IF
 END IF
 %>
-<%= Top("Add your site - AskSim") %>
+<%= TopFor("Add your site - AskSim", "noindex,nofollow") %>
 <table width="100%" cellpadding="6" cellspacing="0" bgcolor="#E8DDF0"><tr>
 <td width="50"><a href="index.asp"><img src="simms.pic" alt="Simms"></a></td>
 <td><a href="index.asp"><font size="5" color="#660099"><b>AskSim</b></font></a></td>

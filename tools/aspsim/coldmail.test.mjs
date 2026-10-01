@@ -62,7 +62,7 @@ const bravo = await net.boot("BRAVO");
 await test("the installer writes the pages and the server, starts it, and adds it to startup", async () => {
   const said = await install(alpha);
   await install(bravo);
-  assert.match(said, /ColdMail is installed \(12 files\)/);
+  assert.match(said, /ColdMail is installed \(13 files\)/);
   assert.match(said, /started C:\\PROGRAMS\\MAILD.SPK/);
   for (const f of fs.readdirSync(path.join(root, "coldmail/WEB"))) assert.equal(alpha.read("C:\\WEB\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB", f), "utf8"), f);
   assert.equal(alpha.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
@@ -253,7 +253,7 @@ await test("GETMAIL.SPK copies ColdMail onto another machine, which can then mai
   const pid = charlie.run("C:\\MYFILES\\GETMAIL.SPK");
   await net.until(() => !charlie.running(pid), 30000, "GETMAIL");
   const said = charlie.output(pid);
-  assert.match(said, /ColdMail is installed \(12 files\) and your mail server is running/, said + JSON.stringify(charlie.ui.dialogs));
+  assert.match(said, /ColdMail is installed \(13 files\) and your mail server is running/, said + JSON.stringify(charlie.ui.dialogs));
   for (const f of fs.readdirSync(path.join(root, "coldmail/WEB"))) assert.equal(charlie.read("C:\\WEB\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB", f), "utf8"), f);
   assert.equal(charlie.read("C:\\PROGRAMS\\MAILD.SPK"), fs.readFileSync(path.join(root, "coldmail/PROGRAMS/MAILD.SPK"), "utf8"));
   assert.equal(charlie.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
@@ -268,7 +268,7 @@ await test("GETMAIL.SPK copies ColdMail onto another machine, which can then mai
   assert.match(delta.read("C:\\MYFILES\\GETMAIL.SPK"), /CONST FROM = "charlie"/);
   const p2 = delta.run("C:\\MYFILES\\GETMAIL.SPK");
   await net.until(() => !delta.running(p2), 30000, "GETMAIL from charlie");
-  assert.match(delta.output(p2), /ColdMail is installed \(12 files\)/);
+  assert.match(delta.output(p2), /ColdMail is installed \(13 files\)/);
   assert.deepEqual([...charlie.ui.dialogs, ...delta.ui.dialogs], []);
 });
 

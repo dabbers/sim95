@@ -37,7 +37,8 @@ SUB Main ()
     File18()
     File19()
     File20()
-    Print("SimBook is installed (21 files).")
+    File21()
+    Print("SimBook is installed (22 files).")
 
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
@@ -923,7 +924,7 @@ SUB File0 ()
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "FUNCTION Bottom () AS String" + NL
-    t = t + "    RETURN ""<hr><center><font size=""""1"""" color=""""#808080"""">SimBook on "" + H(SERVER.Name) + "" &middot; "" + TIME.Date + ""</font></center></body></html>""" + NL
+    t = t + "    RETURN ""<hr><center><font size=""""1"""" color=""""#808080"""">SimBook on "" + H(SERVER.Name) + "" &middot; "" + TIME.Date + "" &middot; <a href=""""simbook.htm"""">About SimBook</a></font></center></body></html>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' A titled box, the way every section of a profile is drawn." + NL
@@ -1832,6 +1833,39 @@ END SUB
 
 SUB File19 ()
     t = ""
+    t = t + "<html><head><title>About SimBook - the social network for the SIM95 network</title>" + NL
+    t = t + "<meta name=""description"" content=""SimBook is a free social network and online community for everyone on the SIM95 network: make a profile, add friends, post status updates, share photos and write on your friends' Walls."">" + NL
+    t = t + "<meta name=""keywords"" content=""social network, social networking, social media, online community, friends, facebook, myspace, twitter, friendster, profile, status updates, feed, news feed, timeline, wall, photos, photo albums, pokes, likes, thumbs up, comments, replies, people search, classmates, networking"">" + NL
+    t = t + "</head>" + NL
+    t = t + "<body bgcolor=""#FFFFFF"">" + NL
+    t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr><td bgcolor=""#3B5998""><font color=""#FFFFFF"" size=""5""><b>[simbook]</b></font></td></tr></table>" + NL
+    t = t + "<h2><font color=""#3B5998"">About SimBook</font></h2>" + NL
+    t = t + "<p><b>SimBook is the social network for the SIM95 network.</b> It is an online directory" + NL
+    t = t + "of people, a place to keep up with your friends, and a feed of what everybody is up to." + NL
+    t = t + "Think of it as your own little corner of the information superhighway, with your name on it.</p>" + NL
+    t = t + "<h3>What you can do on SimBook</h3>" + NL
+    t = t + "<ul>" + NL
+    t = t + "<li><b>Make a profile</b> with your picture, where you live, what you like and an About Me.</li>" + NL
+    t = t + "<li><b>Add friends</b> and see who their friends are. Find classmates and co-workers with People search.</li>" + NL
+    t = t + "<li><b>Post status updates</b> to your news feed, and read your friends' posts as they happen.</li>" + NL
+    t = t + "<li><b>Write on Walls</b>, reply to posts, and give them a thumbs up or a thumbs down.</li>" + NL
+    t = t + "<li><b>Share photos</b> in photo albums.</li>" + NL
+    t = t + "<li><b>Poke</b> people. Nobody knows what a poke means. That is the point.</li>" + NL
+    t = t + "<li><b>Notifications</b> tell you when somebody writes on your Wall, replies or pokes you.</li>" + NL
+    t = t + "</ul>" + NL
+    t = t + "<h3>Is it like Facebook, MySpace or Twitter?</h3>" + NL
+    t = t + "<p>A bit like all of them, years early. SimBook is a social networking site, a microblog for" + NL
+    t = t + "short status updates, and a photo sharing site, written in SPARK and running on one SIM95 machine." + NL
+    t = t + "Everything is kept in plain text files in C:\BOOKDATA. There is no algorithm: your feed is just" + NL
+    t = t + "your friends, newest first.</p>" + NL
+    t = t + "<p><a href=""index.asp""><b>Join SimBook</b></a> or <a href=""index.asp"">log in</a>. It's free and anyone can join.</p>" + NL
+    t = t + "<hr><center><font size=""1"" color=""#808080"">SimBook: social network, online community, friends and photos for SIM95.</font></center>" + NL
+    t = t + "</body></html>" + NL
+    Put("C:\WEB\SIMBOOK.HTM")
+END SUB
+
+SUB File20 ()
+    t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
     t = t + "' VIEW.ASP?id=N - one post with all its replies (as many as fit), and a reply box." + NL
@@ -1865,7 +1899,7 @@ SUB File19 ()
     Put("C:\WEB\VIEW.ASP")
 END SUB
 
-SUB File20 ()
+SUB File21 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL

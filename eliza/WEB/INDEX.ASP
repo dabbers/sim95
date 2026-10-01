@@ -93,6 +93,7 @@ Try: <i>build me a website about cats</i> &middot; <i>write a fizzbuzz program</
 <td><form action="index.asp" method="post"><input type="hidden" name="do" value="new"><input type="submit" value="New chat"></form></td>
 </tr></table>
 <hr><center><font size="1" color="#808080">ELIZA-95 can make mistakes. Consider checking important information.
-Temperature 0 is predictable; 1.5 is creative, in the sense that it makes things up.</font></center>
+Temperature 0 is predictable; 1.5 is creative, in the sense that it makes things up.
+&middot; <a href="eliza.htm">About ELIZA-95</a></font></center>
 <% IF last <> "" THEN %><%= TypeScript(last) %><% END IF %>
 </body></html>

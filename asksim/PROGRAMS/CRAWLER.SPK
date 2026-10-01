@@ -40,6 +40,7 @@ CONST CACHEMAX = 40000
 CONST EVERY = 60              ' minutes between crawls
 CONST PATIENCE = 6000         ' milliseconds to wait for a page
 CONST TITLEWEIGHT = 5         ' a word in the title counts this many times
+CONST KEYWEIGHT = 3           ' and one in <meta name="keywords"> this many
 CONST STOPWORDS = "|a|an|the|and|or|of|to|in|on|at|by|for|is|it|its|be|as|are|was|with|this|that|from|you|your|i|me|my|we|our|he|she|they|them|but|not|no|so|if|do|does|did|have|has|had|can|will|just|all|any|there|here|what|where|who|how|which|when|why|about|into|out|up|than|then|also|more|some|very|would|could|should|been|were|these|those|their|his|her|him|am|get|got|one|nbsp|"
 
 VAR win AS GUI_Window
@@ -405,6 +406,31 @@ FUNCTION Between (html AS String, low AS String, tag AS String) AS String
     RETURN html.Substring(a, b)
 END FUNCTION
 
+' <meta name="..." content="...">, or "".
+FUNCTION MetaOf (html AS String, name AS String) AS String
+    VAR low AS String
+    VAR at AS Integer
+    VAR tag AS String
+    VAR q AS String
+    low = html.Lower()
+    at = low.IndexOf("<meta")
+    WHILE at >= 0
+        tag = html.Substring(at, low.Substring(at, low.Length - at).IndexOf(">") + 1)
+        IF tag.Lower().Replace("'", """").Contains("name=""" + name + """") AND tag.Lower().Contains("content=") THEN
+            tag = tag.Substring(tag.Lower().IndexOf("content=") + 8, tag.Length - tag.Lower().IndexOf("content=") - 8)
+            q = tag.CharAt(0)
+            IF q = """" OR q = "'" THEN
+                tag = tag.Substring(1, tag.Length - 1)
+                IF tag.Contains(q) THEN tag = tag.Substring(0, tag.IndexOf(q))
+            END IF
+            RETURN Clean(Decode(tag))
+        END IF
+        IF low.Substring(at + 5, low.Length - at - 5).IndexOf("<meta") < 0 THEN RETURN ""
+        at = at + 5 + low.Substring(at + 5, low.Length - at - 5).IndexOf("<meta")
+    END WHILE
+    RETURN ""
+END FUNCTION
+
 FUNCTION WithoutBlocks (html AS String, tag AS String) AS String
     VAR low AS String
     VAR a AS Integer
@@ -510,7 +536,7 @@ SUB SetDoc (url AS String, line AS String)
 END SUB
 
 FUNCTION Clean (s AS String) AS String
-    RETURN s.Replace("|", "/").Replace(Chr(10), " ").Replace(Chr(13), " ").Trim()
+    RETURN s.Replace("|", "/").Replace(Chr(10), " ").Replace(Chr(13), " ").Replace(Chr(9), " ").Trim()
 END FUNCTION
 
 SUB Begin ()
@@ -594,6 +620,8 @@ SUB Arrived ()
     VAR title AS String
     VAR text AS String
     VAR link AS String
+    VAR keywords AS String
+    VAR robots AS String
     url = fUrl
     ReadResponse()
     phase = "next"
@@ -601,15 +629,35 @@ SUB Arrived ()
         LearnRobots(HostOf(url))
         RETURN
     END IF
+    ' <meta name="robots" content="noindex,nofollow">: search results, cached
+    ' copies (AskSim's own included) and the like ask not to be kept or followed
+    robots = ""
+    IF fStatus = 200 AND fType.StartsWith("text/html") THEN robots = MetaOf(fBody, "robots").Lower()
+    IF robots.Contains("noindex") OR robots.Contains("none") THEN
+        IF NOT robots.Contains("nofollow") AND NOT robots.Contains("none") THEN
+            ReadLinks(fBody, url)
+            FOR EACH link IN pageLinks
+                Enqueue(link)
+            NEXT
+        END IF
+        ' forget it if an earlier crawl kept it
+        IF docUrls.IndexOf(url) >= 0 THEN SetDoc(url, DocId(url) + "|" + url + "|||new|")
+        RETURN
+    END IF
     IF fStatus = 200 AND (fType.StartsWith("text/html") OR fType.StartsWith("text/plain")) THEN
         id = DocId(url)
         IF fType.StartsWith("text/html") THEN
             title = Clean(PlainText(Between(fBody, fBody.Lower(), "title")))
             text = PlainText(fBody)
+            ' the page's own summary comes first, so it is what results show
+            IF MetaOf(fBody, "description") <> "" THEN text = MetaOf(fBody, "description") + " - " + text
+            keywords = MetaOf(fBody, "keywords").Replace(",", " ")
             ReadLinks(fBody, url)
-            FOR EACH link IN pageLinks
-                Enqueue(link)
-            NEXT
+            IF NOT robots.Contains("nofollow") THEN
+                FOR EACH link IN pageLinks
+                    Enqueue(link)
+                NEXT
+            END IF
         ELSE
             title = ""
             text = fBody.Replace(Chr(10), " ")
@@ -618,7 +666,10 @@ SUB Arrived ()
         IF title = "" THEN title = url
         IF text.Length > TEXTMAX THEN text = text.Substring(0, TEXTMAX)
         IF pageCopy.Length > CACHEMAX THEN pageCopy = pageCopy.Substring(0, CACHEMAX)
+        ' the first line is the title, then a tab and the keywords
+        IF keywords <> "" THEN title = title + Chr(9) + keywords
         FS.Write(DATA + "\TEXT\" + id + ".TXT", title + NL + text)
+        title = title.Split(Chr(9))[0]
         FS.Write(DATA + "\CACHE\" + id + ".HTM", pageCopy)
         SetDoc(url, id + "|" + url + "|" + title + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|ok|")
         fetchedOk = fetchedOk + url + "|"
@@ -727,11 +778,18 @@ SUB BuildIndex ()
         text = ReadOr(DATA + "\TEXT\" + id + ".TXT", "")
         IF text = "" THEN CONTINUE
         words = WordsOf(text)
-        FOR EACH w IN WordsOf(text.Lines()[0])
+        FOR EACH w IN WordsOf(text.Lines()[0].Split(Chr(9))[0])
             FOR k = 2 TO TITLEWEIGHT
                 words.Add(w)
             NEXT
         NEXT
+        IF text.Lines()[0].Contains(Chr(9)) THEN
+            FOR EACH w IN WordsOf(text.Lines()[0].Split(Chr(9))[1])
+                FOR k = 2 TO KEYWEIGHT
+                    words.Add(w)
+                NEXT
+            NEXT
+        END IF
         words.Sort()
         run = 0
         FOR i = 0 TO words.Count - 1

@@ -29,7 +29,8 @@ SUB Main ()
     File9()
     File10()
     File11()
-    Print("ColdMail is installed (12 files).")
+    File12()
+    Print("ColdMail is installed (13 files).")
     StartService("MAILD", "C:\PROGRAMS\MAILD.SPK", "MAIL.RUN")
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
@@ -40,6 +41,40 @@ SUB Put (path AS String)
 END SUB
 
 SUB File0 ()
+    t = ""
+    t = t + "<html><head><title>About ColdMail - free web-based e-mail</title>" + NL
+    t = t + "<meta name=""description"" content=""ColdMail is free web-based e-mail for the SIM95 network: get your own email address, send and receive mail from any web browser, and host your own mail server."">" + NL
+    t = t + "<meta name=""keywords"" content=""email, e-mail, webmail, web mail, free email, mail, inbox, email address, email account, hotmail, yahoo mail, gmail, outlook, mail server, smtp, post office, send mail, letters, messages, compose, correspondence"">" + NL
+    t = t + "</head>" + NL
+    t = t + "<body bgcolor=""#FFFFFF"">" + NL
+    t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr><td bgcolor=""#003399""><font color=""#FFFFFF"" size=""5""><b>ColdMail</b></font>" + NL
+    t = t + "<font color=""#CCDDFF"" size=""2"">&nbsp;free e-mail</font></td></tr></table>" + NL
+    t = t + "<h2><font color=""#003399"">About ColdMail</font></h2>" + NL
+    t = t + "<p><b>ColdMail is free web-based e-mail.</b> Sign up for your own email address and read your" + NL
+    t = t + "mail from any web browser on any machine. No software to install, no modem settings, no" + NL
+    t = t + "post office protocol to configure.</p>" + NL
+    t = t + "<h3>Features</h3>" + NL
+    t = t + "<ul>" + NL
+    t = t + "<li><b>A free email account</b>: <tt>you@yourmachine</tt>, ready in seconds.</li>" + NL
+    t = t + "<li><b>Send mail anywhere</b> on the network: ColdMail's mail server delivers your letters to every" + NL
+    t = t + "machine that runs one, and keeps trying for a while if the other end is down.</li>" + NL
+    t = t + "<li><b>An Inbox, Sent mail and Compose</b>, like Hotmail and Yahoo! Mail, minus the banner ads.</li>" + NL
+    t = t + "<li><b>Bounce messages</b> tell you when a letter could not be delivered, and why.</li>" + NL
+    t = t + "<li><b>Host your own mail server.</b> Any SIM95 machine can run ColdMail: one small program copies it over," + NL
+    t = t + "starts the SMTP server on port 25, and your machine has webmail too.</li>" + NL
+    t = t + "</ul>" + NL
+    t = t + "<h3>Webmail? E-mail? Electronic mail?</h3>" + NL
+    t = t + "<p>All the same thing: letters sent over the network instead of by the post office. ColdMail is an" + NL
+    t = t + "email service, a webmail client and a mail server in one, written in SPARK.</p>" + NL
+    t = t + "<p><a href=""index.asp""><b>Get your free ColdMail address</b></a> &middot; <a href=""host.asp"">Host ColdMail on your machine</a></p>" + NL
+    t = t + "<hr><center><font size=""1"" color=""#808080"">ColdMail: free email, webmail and mail servers for SIM95.</font></center>" + NL
+    t = t + "</body></html>" + NL
+    Put("C:\WEB\COLDMAIL.HTM")
+    FS.Write("C:\WEB\DIST\0.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "0|C:\WEB\COLDMAIL.HTM" + NL)
+END SUB
+
+SUB File1 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -102,11 +137,11 @@ SUB File0 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\COMPOSE.ASP")
-    FS.Write("C:\WEB\DIST\0.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "0|C:\WEB\COMPOSE.ASP" + NL)
+    FS.Write("C:\WEB\DIST\1.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "1|C:\WEB\COMPOSE.ASP" + NL)
 END SUB
 
-SUB File1 ()
+SUB File2 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -128,11 +163,11 @@ SUB File1 ()
     t = t + "RESPONSE.Redirect(""inbox.asp?f="" + f + ""&why="" + UrlEnc(Str(gone) + "" letters deleted.""))" + NL
     t = t + "%>" + NL
     Put("C:\WEB\DELETE.ASP")
-    FS.Write("C:\WEB\DIST\1.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "1|C:\WEB\DELETE.ASP" + NL)
+    FS.Write("C:\WEB\DIST\2.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "2|C:\WEB\DELETE.ASP" + NL)
 END SUB
 
-SUB File2 ()
+SUB File3 ()
     t = ""
     t = t + "' GETMAIL.SPK - copies ColdMail from %HOST% onto this machine and starts your" + NL
     t = t + "' own mail server. Save it as C:\MYFILES\GETMAIL.SPK in SPARK and press F5." + NL
@@ -243,11 +278,11 @@ SUB File2 ()
     t = t + "    done = TRUE" + NL
     t = t + "END SUB" + NL
     Put("C:\WEB\GETMAIL.TXT")
-    FS.Write("C:\WEB\DIST\2.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "2|C:\WEB\GETMAIL.TXT" + NL)
+    FS.Write("C:\WEB\DIST\3.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "3|C:\WEB\GETMAIL.TXT" + NL)
 END SUB
 
-SUB File3 ()
+SUB File4 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -292,11 +327,11 @@ SUB File3 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\HOST.ASP")
-    FS.Write("C:\WEB\DIST\3.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "3|C:\WEB\HOST.ASP" + NL)
+    FS.Write("C:\WEB\DIST\4.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "4|C:\WEB\HOST.ASP" + NL)
 END SUB
 
-SUB File4 ()
+SUB File5 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -355,11 +390,11 @@ SUB File4 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\INBOX.ASP")
-    FS.Write("C:\WEB\DIST\4.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "4|C:\WEB\INBOX.ASP" + NL)
+    FS.Write("C:\WEB\DIST\5.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "5|C:\WEB\INBOX.ASP" + NL)
 END SUB
 
-SUB File5 ()
+SUB File6 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -419,11 +454,11 @@ SUB File5 ()
     t = t + "</tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\INDEX.ASP")
-    FS.Write("C:\WEB\DIST\5.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "5|C:\WEB\INDEX.ASP" + NL)
+    FS.Write("C:\WEB\DIST\6.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "6|C:\WEB\INDEX.ASP" + NL)
 END SUB
 
-SUB File6 ()
+SUB File7 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -450,11 +485,11 @@ SUB File6 ()
     t = t + "RESPONSE.Redirect(""inbox.asp"")" + NL
     t = t + "%>" + NL
     Put("C:\WEB\JOIN.ASP")
-    FS.Write("C:\WEB\DIST\6.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "6|C:\WEB\JOIN.ASP" + NL)
+    FS.Write("C:\WEB\DIST\7.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "7|C:\WEB\JOIN.ASP" + NL)
 END SUB
 
-SUB File7 ()
+SUB File8 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -467,11 +502,11 @@ SUB File7 ()
     t = t + "RESPONSE.Redirect(""inbox.asp"")" + NL
     t = t + "%>" + NL
     Put("C:\WEB\LOGIN.ASP")
-    FS.Write("C:\WEB\DIST\7.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "7|C:\WEB\LOGIN.ASP" + NL)
+    FS.Write("C:\WEB\DIST\8.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "8|C:\WEB\LOGIN.ASP" + NL)
 END SUB
 
-SUB File8 ()
+SUB File9 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -482,11 +517,11 @@ SUB File8 ()
     t = t + "RESPONSE.Redirect(""index.asp?e=bye"")" + NL
     t = t + "%>" + NL
     Put("C:\WEB\LOGOUT.ASP")
-    FS.Write("C:\WEB\DIST\8.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "8|C:\WEB\LOGOUT.ASP" + NL)
+    FS.Write("C:\WEB\DIST\9.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "9|C:\WEB\LOGOUT.ASP" + NL)
 END SUB
 
-SUB File9 ()
+SUB File10 ()
     t = ""
     t = t + "' MAIL.SPK - ColdMail webmail, shared by its pages, which are this machine's home page (C:\WEB)." + NL
     t = t + "'" + NL
@@ -900,7 +935,7 @@ SUB File9 ()
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "FUNCTION Bottom () AS String" + NL
-    t = t + "    RETURN ""<hr><center><font size=""""1"""" color=""""#808080"""">ColdMail on "" + H(NET.HostName.Lower()) + "" &middot; mail is delivered by C:\PROGRAMS\MAILD.SPK on port 25</font></center></body></html>""" + NL
+    t = t + "    RETURN ""<hr><center><font size=""""1"""" color=""""#808080"""">ColdMail on "" + H(NET.HostName.Lower()) + "" &middot; mail is delivered by C:\PROGRAMS\MAILD.SPK on port 25 &middot; <a href=""""coldmail.htm"""">About ColdMail</a></font></center></body></html>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "FUNCTION BoxTop (title AS String) AS String" + NL
@@ -941,11 +976,11 @@ SUB File9 ()
     t = t + "         + ""</script>""" + NL
     t = t + "END FUNCTION" + NL
     Put("C:\WEB\MAIL.SPK")
-    FS.Write("C:\WEB\DIST\9.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "9|C:\WEB\MAIL.SPK" + NL)
+    FS.Write("C:\WEB\DIST\10.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "10|C:\WEB\MAIL.SPK" + NL)
 END SUB
 
-SUB File10 ()
+SUB File11 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -984,11 +1019,11 @@ SUB File10 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\READ.ASP")
-    FS.Write("C:\WEB\DIST\10.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "10|C:\WEB\READ.ASP" + NL)
+    FS.Write("C:\WEB\DIST\11.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "11|C:\WEB\READ.ASP" + NL)
 END SUB
 
-SUB File11 ()
+SUB File12 ()
     t = ""
     t = t + "' MAILD.SPK - the ColdMail mail server. Listens on port 25 and delivers mail." + NL
     t = t + "'" + NL
@@ -1452,8 +1487,8 @@ SUB File11 ()
     t = t + "    RETURN answer" + NL
     t = t + "END FUNCTION" + NL
     Put("C:\PROGRAMS\MAILD.SPK")
-    FS.Write("C:\WEB\DIST\11.TXT", t)
-    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "11|C:\PROGRAMS\MAILD.SPK" + NL)
+    FS.Write("C:\WEB\DIST\12.TXT", t)
+    FS.Append("C:\WEB\DIST\MANIFEST.TXT", "12|C:\PROGRAMS\MAILD.SPK" + NL)
 END SUB
 
 SUB StartService (name AS String, program AS String, runFile AS String)
