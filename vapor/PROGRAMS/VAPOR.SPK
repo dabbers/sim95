@@ -29,7 +29,7 @@
 ' socket's events.
 '
 ' A store can be at a SimDNS name (http://store.coolsite.sim/vapor/): the
-' builder joins the resolver (simdns/src/RESOLVE.SPK, the Rs... names) on the
+' builder joins the resolver (simweb/src/RESOLVE.SPK, the Rs... names) on the
 ' end, and the name is asked about in a tick of its own before the fetch.
 ' The connection goes to the machine the name server names; the request
 ' still says Host: store.coolsite.sim, so a web server with sites finds it.

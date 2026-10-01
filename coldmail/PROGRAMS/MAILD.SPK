@@ -35,7 +35,7 @@
 '
 ' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>.
 '
-' Domain names (SimDNS). The builder joins the resolver (simdns/src/RESOLVE.SPK,
+' Domain names (SimDNS). The builder joins the resolver (simweb/src/RESOLVE.SPK,
 ' the Rs... names) on the end, and C:\SYSTEM\RESOLV.INI says which name server
 ' to ask. Mail for ann@coolsite.sim goes where the domain's MX record says
 ' (the lowest preference), or failing that to the domain's own machine, or

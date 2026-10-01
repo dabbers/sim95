@@ -14,7 +14,7 @@
 ' port 80, exactly as VAPOR.SPK does; host (dig, nslookup) to a SimDNS name
 ' server on port 53, printing what DIG.SPK prints.
 '
-' Domain names: the builder joins the SimDNS resolver (simdns/src/RESOLVE.SPK,
+' Domain names: the builder joins the SimDNS resolver (simweb/src/RESOLVE.SPK,
 ' the Rs... names) on the end of SIMSH.SPK. Before a job starts, the window
 ' asks the name server about its machine (JobLookup), in ticks of their own;
 ' the job then connects to the machine SimDNS named (RsTarget), and sim-get

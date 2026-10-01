@@ -126,9 +126,9 @@ SUB Main ()
     side = GUI_Canvas.New(win)
     side.SetBounds(0, 0, 100, 400)
     side.onDraw = Side_OnDraw
-    bMain = SideButton("&Main", 40)
-    bSites = SideButton("&Web Sites", 80)
-    bApps = SideButton("&Domain Apps", 120)
+    bMain = SideButton("&Main", 40, ShowMain_Click)
+    bSites = SideButton("&Web Sites", 80, ShowSites_Click)
+    bApps = SideButton("&Domain Apps", 120, ShowApps_Click)
 
     ' Main
     mHead = Heading("Publishing", 16)
@@ -209,12 +209,12 @@ END SUB
 
 ' ---------------------------------------------------------------- the look
 
-FUNCTION SideButton (text AS String, y AS Integer) AS GUI_Button
+FUNCTION SideButton (text AS String, y AS Integer, h AS Handler) AS GUI_Button
     VAR b AS GUI_Button
     b = GUI_Button.New(win)
     b.SetBounds(8, y, 84, 30)
     b.Text = text
-    b.onClick = Side_Click
+    b.onClick = h
     RETURN b
 END FUNCTION
 
@@ -245,12 +245,12 @@ FUNCTION Para (words AS String, y AS Integer, h AS Integer) AS GUI_Label
 END FUNCTION
 
 FUNCTION Cols (a AS String, b AS String, c AS String) AS String
-    IF a.Length > 25 THEN a = a.Substring(0, 24) + "~"
-    IF b.Length > 21 THEN b = b.Substring(0, 20) + "~"
-    RETURN a.PadRight(26) + b.PadRight(22) + c
+    IF a.Length > 23 THEN a = a.Substring(0, 22) + "~"
+    IF b.Length > 27 THEN b = b.Substring(0, 26) + "~"
+    RETURN a.PadRight(24) + b.PadRight(28) + c
 END FUNCTION
 
-SUB Side_OnDraw (canvas AS Any)
+SUB Side_OnDraw (canvas AS GUI_Canvas)
     side.SetColor(6)
     side.FillRect(0, 0, 100, 400)
     side.SetColor(15)
@@ -259,10 +259,16 @@ SUB Side_OnDraw (canvas AS Any)
     side.Line(8, 30, 92, 30)
 END SUB
 
-SUB Side_Click ()
-    IF bMain.Focused THEN ShowPage("main")
-    IF bSites.Focused THEN ShowPage("sites")
-    IF bApps.Focused THEN ShowPage("apps")
+SUB ShowMain_Click ()
+    ShowPage("main")
+END SUB
+
+SUB ShowSites_Click ()
+    ShowPage("sites")
+END SUB
+
+SUB ShowApps_Click ()
+    ShowPage("apps")
 END SUB
 
 SUB Menu_OnSelect (item AS String)

@@ -47,7 +47,7 @@ CONST RSNEG = 60000             ' ms to remember that SimDNS doesn't know a name
 CONST RSMOST = 100              ' names kept
 
 VAR rsServer AS String              ' "" when SimDNS is off
-VAR rsCentral AS Bool               ' TRUE when RESOLV.INI doesn't name one
+VAR rsByDefault AS Bool               ' TRUE when RESOLV.INI doesn't name one
 VAR rsSearch AS String
 VAR rsRead AS Bool
 VAR rsReadAt AS Integer
@@ -79,7 +79,7 @@ SUB RsConfig ()
     rsRead = TRUE
     rsReadAt = SYS.Ticks
     rsServer = RSCENTRAL
-    rsCentral = TRUE
+    rsByDefault = TRUE
     rsSearch = ""
     TRY
         IF FS.Exists(RSINI) THEN
@@ -87,7 +87,7 @@ SUB RsConfig ()
                 low = line.Trim().Lower()
                 IF low.StartsWith("nameserver=") THEN
                     rsServer = low.Substring(11, low.Length - 11).Trim()
-                    rsCentral = FALSE
+                    rsByDefault = FALSE
                 END IF
                 IF low.StartsWith("search=") THEN rsSearch = low.Substring(7, low.Length - 7).Trim()
             NEXT
@@ -108,7 +108,7 @@ END FUNCTION
 ' Is it the central one, because RESOLV.INI doesn't say?
 FUNCTION RsIsCentral () AS Bool
     RsConfig()
-    RETURN rsCentral
+    RETURN rsByDefault
 END FUNCTION
 
 ' Makes server this machine's name server, keeping the rest of RESOLV.INI,

@@ -18,7 +18,7 @@
 '
 ' A movie can be at a SimDNS name (http://movies.coolsite.sim/...): the name
 ' is asked about first, in a tick of its own, with the resolver's Rs...
-' names. On its own, SimPlayer has simdns/src/RESOLVE.SPK joined on the end;
+' names. On its own, SimPlayer has simweb/src/RESOLVE.SPK joined on the end;
 ' built into Simxplorer it shares the browser's (tools/simxplorer-source.mjs).
 ' The request still says Host: movies.coolsite.sim.
 '

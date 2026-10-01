@@ -18,7 +18,7 @@
 '
 ' The server is the part of the address after the @. A domain such as
 ' coolsite.sim is asked about first (the builder joins the SimDNS resolver,
-' simdns/src/RESOLVE.SPK, on the end): its MX record, the one with the lowest
+' simweb/src/RESOLVE.SPK, on the end): its MX record, the one with the lowest
 ' preference, then the CNAMEs of the machine that names; each question takes
 ' a tick of its own. With no name server, or no answer, it is a SIM95
 ' machine name, as always.
