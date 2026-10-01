@@ -12,6 +12,7 @@ apps.Add("BOOK|BOOK.SPK|SimBook|The social network: profiles, friends, a news fe
 apps.Add("MAIL|MAIL.SPK|ColdMail|Free webmail, with a real mail server behind it. Your address is you@" + here + ".|#2E5E8C")
 apps.Add("ASK|ASK.SPK|AskSim|A search engine with a real crawler that goes round every machine on the network.|#8B1A1A")
 apps.Add("ELIZA|BOT.SPK|ELIZA-95|A chatbot with large-language-model manners.|#2F6F4F")
+apps.Add("PAL|PAL.SPK|SimPal|Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.|#003087")
 apps.Add("VAPOR|CATALOG.TXT|Vapor|The store: get Vapor, then games and every SIM95 program.|#1B2838")
 FOR EACH a IN apps
     p = a.Split("|")
@@ -20,7 +21,7 @@ FOR EACH a IN apps
     rows = rows + "<tr><td bgcolor=""" + p[4] + """ width=""150""><a href=""/" + p[0].Lower() + "/""><font color=""#FFFFFF"" size=""4""><b>" + p[2] + "</b></font></a></td>" _
         + "<td>" + SERVER.HtmlEncode(p[3]) + "<br><font size=""2""><a href=""/" + p[0].Lower() + "/"">http://" + here + "/" + p[0].Lower() + "/</a></font></td></tr>"
 NEXT
-IF n = 0 THEN rows = "<tr><td>No web apps here yet. Install SimBook, ColdMail, AskSim or ELIZA-95 (from Vapor, or with their INSTALL.SPK): each goes in a folder of its own and shows up here.</td></tr>"
+IF n = 0 THEN rows = "<tr><td>No web apps here yet. Install SimBook, ColdMail, AskSim, ELIZA-95 or SimPal (from Vapor, or with their INSTALL.SPK): each goes in a folder of its own and shows up here.</td></tr>"
 %>
 <html>
 <head>

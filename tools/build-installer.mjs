@@ -245,6 +245,23 @@ const apps = {
     done: `Print("Open http://" + NET.HostName.Lower() + "/ in Voyager. Then install the web apps (in any order), and run C:\\PROGRAMS\\MOVEIN.SPK to bring your other machines' data here.")`,
     code: () => moveHomePage + "\n" + read("simhost/SETUP.SPK") + relocateCode(),
   },
+  simpal: {
+    folder: "PAL",
+    vapor: { folder: "PAL", id: "SIMPAL", name: "SimPal", kind: "web", category: "Internet", run: "/", tasks: "", startup: "", about: "Send money, request money, and Pay with SimPal on any web site, in SimBucks. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "SimPal",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts SimPal
+' in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
+' WELCOME.HTM), and C:\\PROGRAMS\\PALCHECK.SPK, which shops' pages on this
+' machine import to check receipts. Accounts and the ledger in C:\\PALDATA are
+' left alone, so running it again upgrades SimPal without losing a penny. Then
+' open http://YOURNAME/ in Voyager.`,
+    copy: [["simpal/WEB", "C:\\WEB"], ["simpal/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
+    first: ["MoveHomePage()"],
+    last: [],
+    url: "/",
+    code: () => moveHomePage,
+  },
   eliza: {
     folder: "ELIZA",
     vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
@@ -270,7 +287,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", simpal: "PAL.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);

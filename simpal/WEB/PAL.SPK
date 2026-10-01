@@ -1,0 +1,925 @@
+' PAL.SPK - SimPal, the way to send money on the SIM95 network (in SimBucks).
+' Every page pulls this in with <%@ import file="PAL.SPK" %>. SimPal is the
+' machine's home page (C:\WEB), or on a SimHost machine lives in C:\WEB\PAL.
+'
+' Money is kept in whole cents, as Integers, everywhere: §12.50 is 1250.
+'
+' Everything lives in plain text files under C:\PALDATA (outside C:\WEB, so the
+' web server never hands it out):
+'
+'   C:\PALDATA\LEDGER\<n>.TXT     every transaction, LOGSIZE to a file: the books
+'   C:\PALDATA\NEXTID.TXT         the last transaction number handed out
+'   C:\PALDATA\APPLIED.TXT        every transaction up to this one is in the balances
+'   C:\PALDATA\BAL\<user>.TXT     cents|last transaction applied to them
+'   C:\PALDATA\HIST\<user>.TXT    |3|7|12|  their transactions, for the history page
+'   C:\PALDATA\USERS\<user>.TXT   profile, key=value per line (password salted + hashed)
+'   C:\PALDATA\PEOPLE.TXT         user|name, one per member
+'   C:\PALDATA\REQUESTS.TXT       money requests, one per line (NEXTREQ.TXT counts them)
+'   C:\PALDATA\ORDERS\<user>.TXT  order|receipt: what each merchant has been paid for
+'   C:\PALDATA\USED\<n>.TXT       receipt n has been verified (see PALCHECK.SPK)
+'   C:\PALDATA\SESSIONS\<id>.TXT  sign-in cookie -> user, form token
+'   C:\PALDATA\LOCK\              exists while a page is moving money
+'
+' A transaction is one ledger line:
+'   id|date time|kind|from|to|cents|note|ref|order
+' kind is bonus or grant (from is "*", the bank), send, req (a request paid;
+' ref is Q<request>) or pay (a "Pay with SimPal" purchase; ref is its receipt).
+'
+' The ledger is the truth; balances are a cache of it. Moving money goes:
+'   1. take the lock (a folder: FS.MakeDir fails when it exists, so only one page
+'      can make it), and finish anything a page that died left half done;
+'   2. check the payer has the money;
+'   3. append the ledger line - one FS.Append, so it is there or it isn't;
+'   4. apply it: each side's balance file, their history, the merchant's orders,
+'      the request's status. Each step looks first and does nothing twice;
+'   5. write APPLIED.TXT, and let go of the lock.
+' A page that dies after 3 leaves APPLIED.TXT behind the ledger. The next page
+' to take the lock applies the rest (Recover), and until then every balance
+' read adds in the ledger lines it is missing (Balance). Money can't be made
+' or lost in between. Only lines 1 and 3 ever add to the money supply: bonus
+' and grant, so the sum of all balances is always the sum of those.
+
+CONST DATADIR = "C:\PALDATA"
+CONST LOCKDIR = "C:\PALDATA\LOCK"
+CONST COOKIE = "simpal"
+CONST BANK = "*"
+CONST BONUS = 10000           ' the welcome bonus, in cents: §100.00
+CONST MAXSEND = 1000000       ' at most §10,000.00 in one go
+CONST MAXGRANT = 10000000     ' the owner can print up to §100,000.00 at a time
+CONST LOGSIZE = 500           ' transactions to a ledger file
+CONST MAXNAME = 40
+CONST MAXNOTE = 100
+CONST MAXITEM = 60
+CONST MAXORDER = 40
+CONST MAXURL = 200
+CONST HISTSHOW = 40           ' transactions on the history page
+CONST HOMESHOW = 8            ' and on the account page
+CONST REQSHOW = 15            ' requests listed each way
+CONST LOCKSTALE = 10          ' seconds: a lock older than this was left by a page that died
+CONST ADMINSHOW = 150         ' accounts listed on the admin page,
+CONST ADMINROOM = 30000       ' and as many characters of them as fit (64K a page)
+
+VAR viewer AS String          ' who is signed in; "" for nobody
+VAR formToken AS String       ' their session's form token; see RequireToken
+VAR lastRef AS String         ' the receipt of the purchase just made (PayMerchant)
+
+' ---------------------------------------------------------------- the disk
+
+' C:\WEB, or C:\WEB\PAL when SimPal is in a folder of its own.
+FUNCTION AppDir () AS String
+    VAR page AS String
+    page = SERVER.ScriptName
+    RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
+END FUNCTION
+
+' Where SimPal is on the web: http://host/ or http://host/pal/
+FUNCTION SiteUrl () AS String
+    IF AppDir().Upper() = "C:\WEB" THEN RETURN "http://" + SERVER.Name.Lower() + "/"
+    RETURN "http://" + SERVER.Name.Lower() + "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
+SUB EnsureDisk ()
+    VAR dir AS String
+    VAR dirs AS Array OF String
+    dirs = ["", "\USERS", "\BAL", "\HIST", "\LEDGER", "\ORDERS", "\USED", "\SESSIONS"]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(DATADIR + dir) THEN
+            TRY
+                FS.MakeDir(DATADIR + dir)
+            CATCH err
+            END TRY
+        END IF
+    NEXT
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    VAR text AS String
+    text = fallback
+    ' another page may delete it between the two, so a failed read is "not there"
+    TRY
+        IF FS.Exists(path) THEN text = FS.Read(path)
+    CATCH err
+        text = fallback
+    END TRY
+    RETURN text
+END FUNCTION
+
+' Text that is safe inside one |-separated line, and back again.
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' A user name is also a file name, and file names here are 8.3.
+FUNCTION ValidName (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(u, "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION CleanName (u AS String) AS String
+    VAR s AS String
+    s = u.Trim().Lower()
+    IF ValidName(s) THEN RETURN s
+    RETURN ""
+END FUNCTION
+
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    s = s.Replace(Chr(13), "").Replace(Chr(10), " ").Trim()
+    IF s.Length > most THEN s = s.Substring(0, most)
+    RETURN s
+END FUNCTION
+
+FUNCTION IsNumber (s AS String) AS Bool
+    IF s = "" OR s.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(s, "0123456789")
+END FUNCTION
+
+' The line in text (lines of "key|...") that starts with key, or "".
+FUNCTION FindLine (text AS String, key AS String) AS String
+    VAR at AS Integer
+    text = Chr(10) + text
+    at = text.IndexOf(Chr(10) + key + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    at = text.IndexOf(Chr(10))
+    IF at >= 0 THEN text = text.Substring(0, at)
+    RETURN text
+END FUNCTION
+
+FUNCTION Stamp () AS String
+    RETURN TIME.Date + " " + TIME.Clock.Substring(0, 5)
+END FUNCTION
+
+FUNCTION Counter (name AS String) AS Integer
+    VAR n AS Integer
+    n = Int(Val(ReadOr(DATADIR + "\" + name + ".TXT", "0"))) + 1
+    FS.Write(DATADIR + "\" + name + ".TXT", Str(n))
+    RETURN n
+END FUNCTION
+
+' ---------------------------------------------------------------- money
+
+' What someone typed as cents: "12", "12.5", "12.50", "§12.50", "$1,000".
+' -1 when it is not an amount (negative ones included).
+FUNCTION ParseCents (s AS String) AS Integer
+    VAR whole AS String
+    VAR frac AS String
+    VAR dot AS Integer
+    s = s.Trim().Replace(",", "")
+    IF s.StartsWith("§") OR s.StartsWith("$") THEN s = s.Substring(1, s.Length - 1).Trim()
+    dot = s.IndexOf(".")
+    whole = s
+    IF dot >= 0 THEN
+        whole = s.Substring(0, dot)
+        frac = s.Substring(dot + 1, s.Length - dot - 1)
+        IF frac = "" THEN RETURN -1
+    END IF
+    IF whole = "" THEN whole = "0"
+    IF whole.Length > 7 OR frac.Length > 2 THEN RETURN -1
+    IF NOT OnlyFrom(whole, "0123456789") OR NOT OnlyFrom(frac, "0123456789") THEN RETURN -1
+    frac = (frac + "00").Substring(0, 2)
+    RETURN Int(Val(whole)) * 100 + Int(Val(frac))
+END FUNCTION
+
+' Cents as plain text: 1250 -> "12.50". This is what buttons and verify.asp use.
+FUNCTION Amt (c AS Integer) AS String
+    VAR sign AS String
+    VAR frac AS String
+    IF c < 0 THEN
+        sign = "-"
+        c = 0 - c
+    END IF
+    frac = Str(c MOD 100)
+    IF frac.Length < 2 THEN frac = "0" + frac
+    RETURN sign + Str(Int(c / 100)) + "." + frac
+END FUNCTION
+
+' Cents for a page: 123456 -> "&sect;1,234.56"
+FUNCTION Bucks (c AS Integer) AS String
+    VAR sign AS String
+    VAR whole AS String
+    VAR out AS String
+    VAR frac AS String
+    IF c < 0 THEN
+        sign = "-"
+        c = 0 - c
+    END IF
+    frac = Str(c MOD 100)
+    IF frac.Length < 2 THEN frac = "0" + frac
+    whole = Str(Int(c / 100))
+    WHILE whole.Length > 3
+        out = "," + whole.Substring(whole.Length - 3, 3) + out
+        whole = whole.Substring(0, whole.Length - 3)
+    END WHILE
+    RETURN sign + "&sect;" + whole + out + "." + frac
+END FUNCTION
+
+' ---------------------------------------------------------------- the lock
+
+' Only one page at a time may move money. The lock is a folder, because
+' FS.MakeDir fails when the folder is already there: checking and taking it is
+' one step, which no other page can get in between. A page that dies holding
+' it leaves it behind; after LOCKSTALE seconds the next page clears it.
+FUNCTION TakeLock () AS Bool
+    VAR tries AS Integer
+    VAR got AS Bool
+    VAR at AS String
+    EnsureDisk()
+    WHILE NOT got AND tries < 150
+        tries = tries + 1
+        TRY
+            FS.MakeDir(LOCKDIR)
+            got = TRUE
+        CATCH err
+            got = FALSE
+        END TRY
+        IF NOT got THEN
+            at = ReadOr(LOCKDIR + "\AT.TXT", "")
+            IF (at <> "" AND TIME.Now - Int(Val(at)) > LOCKSTALE) OR (at = "" AND tries MOD 50 = 0) THEN
+                DropLock()
+            ELSE
+                SYS.Sleep(20)
+            END IF
+        END IF
+    END WHILE
+    IF got THEN FS.Write(LOCKDIR + "\AT.TXT", Str(TIME.Now))
+    RETURN got
+END FUNCTION
+
+SUB DropLock ()
+    TRY
+        IF FS.Exists(LOCKDIR + "\AT.TXT") THEN FS.Delete(LOCKDIR + "\AT.TXT")
+        IF FS.Exists(LOCKDIR) THEN FS.Delete(LOCKDIR)
+    CATCH err
+    END TRY
+END SUB
+
+CONST BUSY = "SimPal is very busy right now. Nothing was changed: please try again in a moment."
+
+' ---------------------------------------------------------------- the ledger
+
+FUNCTION ChunkPath (id AS Integer) AS String
+    RETURN DATADIR + "\LEDGER\" + Str(Int((id - 1) / LOGSIZE)) + ".TXT"
+END FUNCTION
+
+FUNCTION LastId () AS Integer
+    RETURN Int(Val(ReadOr(DATADIR + "\NEXTID.TXT", "0")))
+END FUNCTION
+
+FUNCTION AppliedId () AS Integer
+    RETURN Int(Val(ReadOr(DATADIR + "\APPLIED.TXT", "0")))
+END FUNCTION
+
+' Transaction id's ledger line, or "".
+FUNCTION FindTx (id AS Integer) AS String
+    IF id < 1 THEN RETURN ""
+    RETURN FindLine(ReadOr(ChunkPath(id), ""), Str(id))
+END FUNCTION
+
+' Every ledger line after transaction number after, oldest first.
+FUNCTION LinesAfter (after AS Integer) AS Array OF String
+    VAR out AS Array OF String
+    VAR last AS Integer
+    VAR c AS Integer
+    VAR line AS String
+    last = LastId()
+    IF last <= after THEN RETURN out
+    FOR c = Int(after / LOGSIZE) TO Int((last - 1) / LOGSIZE)
+        FOR EACH line IN ReadOr(DATADIR + "\LEDGER\" + Str(c) + ".TXT", "").Lines()
+            IF line = "" THEN CONTINUE
+            IF Int(Val(line.Split("|")[0])) > after THEN out.Add(line)
+        NEXT
+    NEXT
+    RETURN out
+END FUNCTION
+
+' What one ledger line does to u's balance.
+FUNCTION Effect (line AS String, u AS String) AS Integer
+    VAR p AS Array OF String
+    p = line.Split("|")
+    IF p.Count < 9 THEN RETURN 0
+    IF p[3] = u THEN RETURN 0 - Int(Val(p[5]))
+    IF p[4] = u THEN RETURN Int(Val(p[5]))
+    RETURN 0
+END FUNCTION
+
+' u's balance file: cents, and the last transaction applied to it.
+FUNCTION BalRec (u AS String) AS Array OF String
+    VAR rec AS Array OF String
+    rec = (ReadOr(DATADIR + "\BAL\" + u + ".TXT", "0|0").Trim() + "|0").Split("|")
+    RETURN rec
+END FUNCTION
+
+' u's balance: the cached one, plus any ledger lines not applied yet. APPLIED.TXT
+' is read before the cache, so a transfer finishing meanwhile is counted once.
+FUNCTION Balance (u AS String) AS Integer
+    VAR applied AS Integer
+    VAR rec AS Array OF String
+    VAR c AS Integer
+    VAR seen AS Integer
+    VAR line AS String
+    applied = AppliedId()
+    rec = BalRec(u)
+    c = Int(Val(rec[0]))
+    seen = Int(Val(rec[1]))
+    IF applied > seen THEN seen = applied
+    FOR EACH line IN LinesAfter(seen)
+        c = c + Effect(line, u)
+    NEXT
+    RETURN c
+END FUNCTION
+
+' One side of a transaction. Does nothing if u has had it already.
+SUB Book (u AS String, id AS Integer, delta AS Integer)
+    VAR rec AS Array OF String
+    VAR path AS String
+    rec = BalRec(u)
+    IF Int(Val(rec[1])) >= id THEN RETURN
+    path = DATADIR + "\HIST\" + u + ".TXT"
+    IF NOT ReadOr(path, "|").Contains("|" + Str(id) + "|") THEN FS.Write(path, ReadOr(path, "|") + Str(id) + "|")
+    FS.Write(DATADIR + "\BAL\" + u + ".TXT", Str(Int(Val(rec[0])) + delta) + "|" + Str(id))
+END SUB
+
+' Everything a ledger line means, besides being in the ledger. Safe to repeat.
+SUB Apply (line AS String)
+    VAR p AS Array OF String
+    VAR id AS Integer
+    VAR c AS Integer
+    p = line.Split("|")
+    IF p.Count < 9 THEN RETURN
+    id = Int(Val(p[0]))
+    c = Int(Val(p[5]))
+    IF p[3] <> BANK THEN Book(p[3], id, 0 - c)
+    Book(p[4], id, c)
+    IF p[2] = "pay" THEN AddOrder(p[4], Unesc(p[8]), p[7])
+    IF p[2] = "req" AND p[7].StartsWith("Q") THEN SetReqStatus(p[7].Substring(1, p[7].Length - 1), "paid")
+END SUB
+
+' With the lock held: apply whatever a page that died left unapplied.
+SUB Recover ()
+    VAR line AS String
+    VAR last AS Integer
+    last = LastId()
+    IF AppliedId() >= last THEN RETURN
+    FOR EACH line IN LinesAfter(AppliedId())
+        Apply(line)
+    NEXT
+    FS.Write(DATADIR + "\APPLIED.TXT", Str(last))
+END SUB
+
+' With the lock held and the checks done: one transaction, ledger first.
+' Returns its number; a purchase's receipt is left in lastRef.
+FUNCTION Post (kind AS String, from AS String, payee AS String, cents AS Integer, note AS String, ref AS String, order AS String) AS Integer
+    VAR id AS Integer
+    VAR line AS String
+    id = Counter("NEXTID")
+    IF kind = "pay" THEN ref = "R" + Str(id) + "-" + NewToken()
+    line = Str(id) + "|" + Stamp() + "|" + kind + "|" + from + "|" + payee + "|" + Str(cents) + "|" + Esc(note) + "|" + ref + "|" + Esc(order)
+    FS.Append(ChunkPath(id), line + Chr(10))
+    Apply(line)
+    FS.Write(DATADIR + "\APPLIED.TXT", Str(id))
+    lastRef = ref
+    RETURN id
+END FUNCTION
+
+' Checks an amount someone typed. Returns "" or what is wrong.
+FUNCTION AmountProblem (cents AS Integer, most AS Integer) AS String
+    IF cents < 0 THEN RETURN "That isn't an amount of money. Type it like 5 or 12.50 (and no minus signs, please)."
+    IF cents = 0 THEN RETURN "Type an amount, like 5 or 12.50."
+    IF cents > most THEN RETURN "The most you can move at once is " + Bucks(most).Replace("&sect;", "§") + "."
+    RETURN ""
+END FUNCTION
+
+' Money from one member to another. Returns "" or what is wrong.
+FUNCTION SendMoney (from AS String, payee AS String, amount AS String, note AS String) AS String
+    VAR cents AS Integer
+    VAR problem AS String
+    cents = ParseCents(amount)
+    problem = AmountProblem(cents, MAXSEND)
+    IF problem <> "" THEN RETURN problem
+    payee = payee.Trim().Lower()
+    IF NOT UserExists(payee) THEN RETURN "There is no SimPal member called """ + Clip(payee, 20) + """."
+    IF payee = from THEN RETURN "You can't send money to yourself. (Nice try!)"
+    note = Clip(note, MAXNOTE)
+    IF NOT TakeLock() THEN RETURN BUSY
+    Recover()
+    IF Balance(from) < cents THEN
+        problem = "Insufficient funds: you have " + Bucks(Balance(from)).Replace("&sect;", "§") + "."
+    ELSE
+        Post("send", from, payee, cents, note, "", "")
+    END IF
+    DropLock()
+    RETURN problem
+END FUNCTION
+
+' The machine's owner prints money. Returns "" or what is wrong.
+FUNCTION Grant (payee AS String, amount AS String, note AS String) AS String
+    VAR cents AS Integer
+    VAR problem AS String
+    cents = ParseCents(amount)
+    problem = AmountProblem(cents, MAXGRANT)
+    IF problem <> "" THEN RETURN problem
+    payee = payee.Trim().Lower()
+    IF NOT UserExists(payee) THEN RETURN "There is no SimPal member called """ + Clip(payee, 20) + """."
+    note = Clip(note, MAXNOTE)
+    IF note = "" THEN note = "A grant from the bank"
+    IF NOT TakeLock() THEN RETURN BUSY
+    Recover()
+    Post("grant", BANK, payee, cents, note, "", "")
+    DropLock()
+    RETURN ""
+END FUNCTION
+
+' ---------------------------------------------------------------- members
+
+FUNCTION UserPath (u AS String) AS String
+    RETURN DATADIR + "\USERS\" + u + ".TXT"
+END FUNCTION
+
+FUNCTION UserExists (u AS String) AS Bool
+    IF NOT ValidName(u) THEN RETURN FALSE
+    RETURN FS.Exists(UserPath(u))
+END FUNCTION
+
+FUNCTION LoadUser (u AS String) AS Array OF String
+    RETURN ReadOr(UserPath(u), "").Lines()
+END FUNCTION
+
+FUNCTION Field (rec AS Array OF String, key AS String) AS String
+    VAR line AS String
+    FOR EACH line IN rec
+        IF line.StartsWith(key + "=") THEN RETURN Unesc(line.Substring(key.Length + 1, line.Length - key.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION NameOf (u AS String) AS String
+    IF u = BANK THEN RETURN "SimPal"
+    RETURN Field(LoadUser(u), "name")
+END FUNCTION
+
+' Not real cryptography - SIM95 has none - but the password itself never
+' touches the disk. Two running hashes over salt + password, kept under 2^31.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION
+
+FUNCTION NewToken () AS String
+    RETURN Hex(268435456 + Rnd(1879048191))
+END FUNCTION
+
+' A new account, with its welcome bonus in the same locked step, so there is
+' never an account without one. Returns "" or what is wrong.
+FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
+    VAR salt AS String
+    VAR problem AS String
+    IF NOT ValidName(u) THEN RETURN "Pick a user name of 3 to 8 letters or digits."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    name = Clip(name, MAXNAME)
+    IF name = "" THEN RETURN "Tell us your name."
+    IF NOT TakeLock() THEN RETURN BUSY
+    Recover()
+    IF FS.Exists(UserPath(u)) THEN
+        problem = "Somebody already has the name " + u + "."
+    ELSE
+        salt = NewToken()
+        FS.Write(UserPath(u), "name=" + Esc(name) + Chr(10) + "salt=" + salt + Chr(10) + "pass=" + Hash(salt, pw) + Chr(10) + "joined=" + TIME.Date)
+        FS.Append(DATADIR + "\PEOPLE.TXT", u + "|" + Esc(name) + Chr(10))
+        Post("bonus", BANK, u, BONUS, "Welcome to SimPal!", "", "")
+    END IF
+    DropLock()
+    RETURN problem
+END FUNCTION
+
+FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN FALSE
+    rec = LoadUser(u)
+    RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+' Every member, as user|name lines.
+FUNCTION People () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\PEOPLE.TXT", "").Lines()
+        IF line.Contains("|") THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' The machine's owner: the user name and password in C:\SYSTEM\USERS.INI,
+' the same ones the Files service asks for.
+FUNCTION IsOwner (name AS String, pw AS String) AS Bool
+    VAR line AS String
+    VAR owner AS String
+    VAR pass AS String
+    FOR EACH line IN ReadOr("C:\SYSTEM\USERS.INI", "").Lines()
+        line = line.Trim()
+        IF line.Lower().StartsWith("name=") THEN owner = line.Substring(5, line.Length - 5).Trim()
+        IF line.Lower().StartsWith("password=") THEN pass = line.Substring(9, line.Length - 9)
+    NEXT
+    IF owner = "" OR pw = "" THEN RETURN FALSE
+    RETURN owner.Lower() = name.Trim().Lower() AND pass = pw
+END FUNCTION
+
+' ---------------------------------------------------------------- sessions
+
+' A session file holds who is signed in and that session's form token. Every
+' form that changes something carries the token as t, and RequireToken checks
+' it, so another site can't move your money with your cookie (see SimBook).
+
+SUB SignIn (u AS String)
+    VAR token AS String
+    EnsureDisk()
+    token = NewToken()
+    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u + Chr(10) + NewToken() + NewToken())
+    RESPONSE.SetCookie(COOKIE, token)
+END SUB
+
+FUNCTION SessionPath () AS String
+    VAR token AS String
+    token = REQUEST.Cookie(COOKIE)
+    IF token = "" OR token.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(token, "0123456789ABCDEF") THEN RETURN ""
+    RETURN DATADIR + "\SESSIONS\" + token + ".TXT"
+END FUNCTION
+
+SUB SignOut ()
+    VAR path AS String
+    path = SessionPath()
+    IF path <> "" THEN
+        IF FS.Exists(path) THEN FS.Delete(path)
+    END IF
+    RESPONSE.SetCookie(COOKIE, "")
+END SUB
+
+' Who the cookie says is signed in, or "". Also sets formToken.
+FUNCTION CurrentUser () AS String
+    VAR path AS String
+    VAR lines AS Array OF String
+    VAR u AS String
+    path = SessionPath()
+    IF path = "" THEN RETURN ""
+    lines = (ReadOr(path, "") + Chr(10) + Chr(10)).Split(Chr(10))
+    u = lines[0].Trim()
+    IF NOT UserExists(u) OR lines[1].Trim().Length < 16 THEN RETURN ""
+    formToken = lines[1].Trim()
+    RETURN u
+END FUNCTION
+
+SUB RequireLogin ()
+    viewer = CurrentUser()
+    IF viewer = "" THEN RESPONSE.Redirect("index.asp")
+END SUB
+
+SUB RequireToken ()
+    VAR sent AS String
+    sent = REQUEST.Form("t")
+    IF sent = "" THEN sent = REQUEST.Query("t")
+    IF sent = "" OR sent <> formToken THEN RESPONSE.Redirect("home.asp?why=" + UrlEnc("That did not come from a SimPal page, so no money moved."))
+END SUB
+
+FUNCTION TokenField () AS String
+    RETURN "<input type=""hidden"" name=""t"" value=""" + formToken + """>"
+END FUNCTION
+
+FUNCTION TokenArg () AS String
+    RETURN "t=" + formToken
+END FUNCTION
+
+' ---------------------------------------------------------------- requests
+
+' C:\PALDATA\REQUESTS.TXT, one per line:
+'   number|date time|who asks|who should pay|cents|note|open, paid, declined or cancelled
+
+FUNCTION FindRequest (rid AS String) AS String
+    IF NOT IsNumber(rid) THEN RETURN ""
+    RETURN FindLine(ReadOr(DATADIR + "\REQUESTS.TXT", ""), rid)
+END FUNCTION
+
+SUB SetReqStatus (rid AS String, status AS String)
+    VAR text AS String
+    VAR old AS String
+    VAR p AS Array OF String
+    text = ReadOr(DATADIR + "\REQUESTS.TXT", "")
+    old = FindLine(text, rid)
+    IF old = "" THEN RETURN
+    p = old.Split("|")
+    IF p.Count < 7 OR p[6] = status THEN RETURN
+    p[6] = status
+    text = (Chr(10) + text).Replace(Chr(10) + old + Chr(10), Chr(10) + p.Join("|") + Chr(10))
+    FS.Write(DATADIR + "\REQUESTS.TXT", text.Substring(1, text.Length - 1))
+END SUB
+
+FUNCTION AskMoney (asker AS String, payer AS String, amount AS String, note AS String) AS String
+    VAR cents AS Integer
+    VAR problem AS String
+    cents = ParseCents(amount)
+    problem = AmountProblem(cents, MAXSEND)
+    IF problem <> "" THEN RETURN problem
+    payer = payer.Trim().Lower()
+    IF NOT UserExists(payer) THEN RETURN "There is no SimPal member called """ + Clip(payer, 20) + """."
+    IF payer = asker THEN RETURN "You can't ask yourself for money. (We have all tried.)"
+    note = Clip(note, MAXNOTE)
+    IF NOT TakeLock() THEN RETURN BUSY
+    FS.Append(DATADIR + "\REQUESTS.TXT", Str(Counter("NEXTREQ")) + "|" + Stamp() + "|" + asker + "|" + payer + "|" + Str(cents) + "|" + Esc(note) + "|open" + Chr(10))
+    DropLock()
+    RETURN ""
+END FUNCTION
+
+' u pays a request made of them. Returns "" or what is wrong.
+FUNCTION PayRequest (u AS String, rid AS String) AS String
+    VAR p AS Array OF String
+    VAR problem AS String
+    IF NOT TakeLock() THEN RETURN BUSY
+    Recover()
+    p = (FindRequest(rid) + "||||||").Split("|")
+    IF p[3] <> u THEN
+        problem = "That request isn't for you."
+    ELSEIF p[6] <> "open" THEN
+        problem = "That request has already been " + p[6] + "."
+    ELSEIF Balance(u) < Int(Val(p[4])) THEN
+        problem = "Insufficient funds: you have " + Bucks(Balance(u)).Replace("&sect;", "§") + "."
+    ELSE
+        Post("req", u, p[2], Int(Val(p[4])), Unesc(p[5]), "Q" + rid, "")
+    END IF
+    DropLock()
+    RETURN problem
+END FUNCTION
+
+' The payer declines a request, or the one who asked cancels it.
+FUNCTION DropRequest (u AS String, rid AS String) AS String
+    VAR p AS Array OF String
+    VAR problem AS String
+    IF NOT TakeLock() THEN RETURN BUSY
+    p = (FindRequest(rid) + "||||||").Split("|")
+    IF p[3] <> u AND p[2] <> u THEN
+        problem = "That request isn't yours."
+    ELSEIF p[6] <> "open" THEN
+        problem = "That request has already been " + p[6] + "."
+    ELSEIF p[3] = u THEN
+        SetReqStatus(rid, "declined")
+    ELSE
+        SetReqStatus(rid, "cancelled")
+    END IF
+    DropLock()
+    RETURN problem
+END FUNCTION
+
+' Open requests to (toMe) or from u, newest first, as table rows.
+FUNCTION RequestsHtml (u AS String, toMe AS Bool) AS String
+    VAR lines AS Array OF String
+    VAR p AS Array OF String
+    VAR i AS Integer
+    VAR shown AS Integer
+    VAR out AS String
+    lines = ReadOr(DATADIR + "\REQUESTS.TXT", "").Lines()
+    FOR i = lines.Count - 1 TO 0 STEP -1
+        p = lines[i].Split("|")
+        IF p.Count < 7 THEN CONTINUE
+        IF p[6] <> "open" THEN CONTINUE
+        IF toMe AND p[3] = u THEN
+            out = out + "<tr><td><font size=""2""><b>" + H(NameOf(p[2])) + "</b> (" + p[2] + ") asks you for <b>" + Bucks(Int(Val(p[4]))) + "</b>" + NoteText(p[5]) + "<br><font color=""#808080"" size=""1"">" + p[1] + "</font></font></td>" _
+                + "<td align=""right"" nowrap><form action=""request.asp"" method=""post"">" + TokenField() + "<input type=""hidden"" name=""id"" value=""" + p[0] + """><input type=""hidden"" name=""do"" value=""pay""><input type=""submit"" value=""Pay""></form></td>" _
+                + "<td nowrap><form action=""request.asp"" method=""post"">" + TokenField() + "<input type=""hidden"" name=""id"" value=""" + p[0] + """><input type=""hidden"" name=""do"" value=""decline""><input type=""submit"" value=""Decline""></form></td></tr>"
+            shown = shown + 1
+        ELSEIF NOT toMe AND p[2] = u THEN
+            out = out + "<tr><td><font size=""2"">You asked <b>" + H(NameOf(p[3])) + "</b> (" + p[3] + ") for <b>" + Bucks(Int(Val(p[4]))) + "</b>" + NoteText(p[5]) + "<br><font color=""#808080"" size=""1"">" + p[1] + "</font></font></td>" _
+                + "<td align=""right""><form action=""request.asp"" method=""post"">" + TokenField() + "<input type=""hidden"" name=""id"" value=""" + p[0] + """><input type=""hidden"" name=""do"" value=""cancel""><input type=""submit"" value=""Cancel""></form></td></tr>"
+            shown = shown + 1
+        END IF
+        IF shown >= REQSHOW THEN BREAK
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION NoteText (note AS String) AS String
+    IF note = "" THEN RETURN ""
+    RETURN " for &quot;" + H(Unesc(note)) + "&quot;"
+END FUNCTION
+
+' ---------------------------------------------------------------- Pay with SimPal
+
+' C:\PALDATA\ORDERS\<merchant>.TXT: order|receipt, one per order paid, so an
+' order is never paid twice.
+FUNCTION OrderReceipt (merchant AS String, order AS String) AS String
+    VAR line AS String
+    line = FindLine(ReadOr(DATADIR + "\ORDERS\" + merchant + ".TXT", ""), Esc(order))
+    IF line = "" THEN RETURN ""
+    RETURN line.Split("|")[1]
+END FUNCTION
+
+SUB AddOrder (merchant AS String, order AS String, receipt AS String)
+    IF OrderReceipt(merchant, order) <> "" THEN RETURN
+    FS.Append(DATADIR + "\ORDERS\" + merchant + ".TXT", Esc(order) + "|" + receipt + Chr(10))
+END SUB
+
+' Order numbers come from the merchant's page. They travel back on a URL and
+' come out of verify.asp between |s, so keep them plain.
+FUNCTION ValidOrder (order AS String) AS Bool
+    IF order = "" OR order.Length > MAXORDER THEN RETURN FALSE
+    RETURN OnlyFrom(order, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.#:/")
+END FUNCTION
+
+' Where the buyer goes back to: an http:// address with nothing odd in it.
+FUNCTION ValidReturn (url AS String) AS Bool
+    IF url = "" THEN RETURN TRUE
+    IF url.Length > MAXURL OR NOT url.Lower().StartsWith("http://") THEN RETURN FALSE
+    RETURN OnlyFrom(url, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#@!$&()*+,;=%")
+END FUNCTION
+
+' What is wrong with a Pay with SimPal button, or "".
+FUNCTION CheckoutProblem (merchant AS String, amount AS String, order AS String, back AS String) AS String
+    VAR problem AS String
+    IF NOT UserExists(merchant) THEN RETURN "This shop's SimPal account (""" + Clip(merchant, 20) + """) doesn't exist, so it can't be paid."
+    problem = AmountProblem(ParseCents(amount), MAXSEND)
+    IF problem <> "" THEN RETURN "This shop's button has a bad price. " + problem
+    IF NOT ValidOrder(order) THEN RETURN "This shop's button has no order number we can use (up to " + Str(MAXORDER) + " letters, digits and - _ . # : /)."
+    IF NOT ValidReturn(back) THEN RETURN "This shop's button has a return address we won't send you to. It must start with http://"
+    RETURN ""
+END FUNCTION
+
+' The buyer pays for an order. On success lastRef is the receipt. An order
+' the same buyer already paid (pressing Pay twice) gives back that receipt.
+FUNCTION PayMerchant (buyer AS String, merchant AS String, amount AS String, item AS String, order AS String) AS String
+    VAR cents AS Integer
+    VAR problem AS String
+    VAR had AS String
+    cents = ParseCents(amount)
+    IF buyer = merchant THEN RETURN "You can't buy from yourself."
+    IF NOT TakeLock() THEN RETURN BUSY
+    Recover()
+    had = OrderReceipt(merchant, order)
+    IF had <> "" THEN
+        IF (FindTx(ReceiptTx(had)) + "||||").Split("|")[3] = buyer THEN
+            lastRef = had
+        ELSE
+            problem = "Order " + order + " at " + merchant + " has already been paid for."
+        END IF
+    ELSEIF Balance(buyer) < cents THEN
+        problem = "Insufficient funds: this costs " + Bucks(cents).Replace("&sect;", "§") + " and you have " + Bucks(Balance(buyer)).Replace("&sect;", "§") + "."
+    ELSE
+        Post("pay", buyer, merchant, cents, Clip(item, MAXITEM), "", order)
+    END IF
+    DropLock()
+    RETURN problem
+END FUNCTION
+
+' R12-1A2B3C4D -> 12
+FUNCTION ReceiptTx (receipt AS String) AS Integer
+    VAR p AS Array OF String
+    p = receipt.Split("-")
+    IF p.Count <> 2 OR NOT p[0].StartsWith("R") THEN RETURN 0
+    IF NOT IsNumber(p[0].Substring(1, p[0].Length - 1)) THEN RETURN 0
+    RETURN Int(Val(p[0].Substring(1, p[0].Length - 1)))
+END FUNCTION
+
+' ---------------------------------------------------------------- history
+
+' What a ledger line means to u, as a table row.
+FUNCTION TxHtml (line AS String, u AS String) AS String
+    VAR p AS Array OF String
+    VAR what AS String
+    VAR c AS Integer
+    VAR money AS String
+    p = line.Split("|")
+    IF p.Count < 9 THEN RETURN ""
+    c = Effect(line, u)
+    SELECT CASE p[2]
+        CASE "bonus"
+            what = "Welcome bonus from SimPal"
+        CASE "grant"
+            what = "Grant from the SimPal bank"
+        CASE "send"
+            IF c < 0 THEN
+                what = "Sent to <b>" + H(NameOf(p[4])) + "</b> (" + p[4] + ")"
+            ELSE
+                what = "Received from <b>" + H(NameOf(p[3])) + "</b> (" + p[3] + ")"
+            END IF
+        CASE "req"
+            IF c < 0 THEN
+                what = "Paid <b>" + H(NameOf(p[4])) + "</b>'s request"
+            ELSE
+                what = "<b>" + H(NameOf(p[3])) + "</b> paid your request"
+            END IF
+        CASE "pay"
+            IF c < 0 THEN
+                what = "Purchase at <b>" + H(NameOf(p[4])) + "</b> (" + p[4] + ")"
+            ELSE
+                what = "Sale to <b>" + H(NameOf(p[3])) + "</b> (" + p[3] + ")"
+            END IF
+            what = what + "<br><font size=""1"" color=""#808080"">order " + H(Unesc(p[8])) + " &middot; receipt " + p[7] + "</font>"
+        CASE ELSE
+            RETURN ""
+    END SELECT
+    IF p[6] <> "" THEN what = what + "<br><font size=""1"">&quot;" + H(Unesc(p[6])) + "&quot;</font>"
+    IF c < 0 THEN
+        money = "<font color=""#CC0000"">" + Bucks(c) + "</font>"
+    ELSE
+        money = "<font color=""#008000"">+" + Bucks(c) + "</font>"
+    END IF
+    RETURN "<tr><td valign=""top"" nowrap><font size=""2"">" + p[1] + "</font></td><td valign=""top""><font size=""2"">" + what + "</font></td><td valign=""top"" align=""right"" nowrap><font size=""2""><b>" + money + "</b></font></td><td valign=""top""><font size=""1"" color=""#808080"">#" + p[0] + "</font></td></tr>"
+END FUNCTION
+
+' u's newest transactions, newest first.
+FUNCTION HistoryHtml (u AS String, most AS Integer) AS String
+    VAR ids AS Array OF String
+    VAR i AS Integer
+    VAR shown AS Integer
+    VAR out AS String
+    ids = ReadOr(DATADIR + "\HIST\" + u + ".TXT", "|").Split("|")
+    FOR i = ids.Count - 1 TO 0 STEP -1
+        IF NOT IsNumber(ids[i]) THEN CONTINUE
+        out = out + TxHtml(FindTx(Int(Val(ids[i]))), u)
+        shown = shown + 1
+        IF shown >= most THEN BREAK
+    NEXT
+    IF out = "" THEN RETURN "<tr><td><font size=""2"" color=""#808080"">No transactions yet.</font></td></tr>"
+    RETURN out
+END FUNCTION
+
+FUNCTION TxCount (u AS String) AS Integer
+    RETURN ReadOr(DATADIR + "\HIST\" + u + ".TXT", "|").Split("|").Count - 2
+END FUNCTION
+
+' ---------------------------------------------------------------- page furniture
+
+FUNCTION Top (title AS String) AS String
+    VAR s AS String
+    s = "<html><head><title>" + H(title) + " - SimPal</title></head>" _
+      + "<body bgcolor=""#FFFFFF"" text=""#000000"" link=""#003087"" vlink=""#003087"">" _
+      + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#003087""><tr>" _
+      + "<td><a href=""index.asp""><font size=""6"" color=""#FFFFFF""><b><i>Sim</i></b></font><font size=""6"" color=""#009CDE""><b><i>Pal</i></b></font></a>" _
+      + "<font color=""#FFCC00"" size=""2"">&nbsp; the way to send money on the information superhighway</font></td>" _
+      + "<td align=""right""><font color=""#FFFFFF"" size=""2"">"
+    IF viewer <> "" THEN
+        s = s + "<a href=""home.asp""><font color=""#FFFFFF"">My Account</font></a> | " _
+              + "<a href=""send.asp""><font color=""#FFFFFF"">Send</font></a> | " _
+              + "<a href=""request.asp""><font color=""#FFFFFF"">Request</font></a> | " _
+              + "<a href=""history.asp""><font color=""#FFFFFF"">History</font></a> | " _
+              + "<a href=""logout.asp?" + TokenArg() + """><font color=""#FFFFFF"">Log Out</font></a>"
+    ELSE
+        s = s + "<a href=""index.asp""><font color=""#FFFFFF"">Log In</font></a> | <a href=""index.asp""><font color=""#FFFFFF"">Sign Up</font></a>"
+    END IF
+    RETURN s + "</font></td></tr></table>" _
+         + "<table width=""100%"" cellpadding=""2"" cellspacing=""0"" bgcolor=""#FFCC00""><tr><td align=""center""><font size=""1"" color=""#003087""><b>NEW!</b> Sign up today and get " + Bucks(BONUS) + " FREE! &middot; Your money is safe with us!!</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">SimPal on " + H(SERVER.Name) + " &middot; " + TIME.Date + " &middot; " _
+         + "<a href=""merchant.asp"">SimPal for your web site</a> &middot; <a href=""simmart.asp"">Shop at SimMart</a> &middot; <a href=""simpal.htm"">About SimPal</a><br>" _
+         + "Copyright &copy; 1999 SimPal. All rights reserved. SimBucks (&sect;) have no value outside SIM95. Best viewed in Voyager at 640x480.</font></center></body></html>"
+END FUNCTION
+
+FUNCTION BoxTop (title AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""0""><tr><td bgcolor=""#009CDE""><font color=""#FFFFFF"" size=""2""><b>" + title + "</b></font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Notice (text AS String) AS String
+    IF text = "" THEN RETURN ""
+    RETURN "<table width=""100%"" cellpadding=""4""><tr><td bgcolor=""#FFF9D7""><font size=""2"">" + H(text) + "</font></td></tr></table>"
+END FUNCTION
+
+' The "Secure transaction" padlock, drawn in text, as every serious site had.
+FUNCTION Padlock () AS String
+    RETURN "<table cellpadding=""4"" cellspacing=""0"" border=""1"" bgcolor=""#FFFFE0""><tr><td bgcolor=""#FFCC00""><pre><font color=""#003087"">" _
+         + "  .--.  " + Chr(10) _
+         + " / .. \ " + Chr(10) _
+         + " | || | " + Chr(10) _
+         + "[======]" + Chr(10) _
+         + "[  ()  ]" + Chr(10) _
+         + "[  ||  ]" + Chr(10) _
+         + "[======]</font></pre></td><td valign=""middle""><font size=""2"" color=""#003087""><b>Secure transaction</b></font><br>" _
+         + "<font size=""1"">Protected by SimCrypt&trade; 40-bit<br>export-grade security.<br>Your money is safe with us!!</font></td></tr></table>"
+END FUNCTION
