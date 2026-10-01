@@ -1,0 +1,403 @@
+' BOOK.SPK - SimBook, a little social network for SIM95.
+' Every page in C:\WEB\BOOK pulls this in with <%@ import file="BOOK.SPK" %>.
+'
+' There is no database server: everything lives in plain text files under
+' C:\BOOKDATA (outside C:\WEB, so the web server never hands it out), and every
+' change is written to disk the moment it happens. Nothing is kept in memory
+' between requests.
+'
+'   C:\BOOKDATA\USERS\<user>.TXT    one profile, key=value per line
+'   C:\BOOKDATA\FRIENDS\<user>.TXT  |ann|bob|cat|  (friendship is mutual)
+'   C:\BOOKDATA\WALLS\<user>.TXT    every post on that user's wall, oldest first
+'   C:\BOOKDATA\POSTS.TXT           every post on every wall: the feed reads this
+'   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory
+'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to
+'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out
+'   C:\WEB\BOOK\PICS\<user>.PIC     profile pictures (Sketch .PIC files)
+'
+' A post is one line: id|date time|author|author name|wall|wall name|text
+' Names and text are escaped with Esc so they never contain | or a line break.
+'
+' A server page that runs too long is stopped, and the whole page is built
+' before Voyager sees any of it, so loops here stay short: the feed and walls
+' stop after a screenful, and the feed only looks back through recent posts.
+
+CONST DATADIR = "C:\BOOKDATA"
+CONST PICDIR = "C:\WEB\BOOK\PICS"
+CONST COOKIE = "simbook"
+CONST FEEDSIZE = 25
+CONST FEEDSCAN = 1000
+CONST MAXPOST = 1000
+CONST MAXPIC = 40000
+
+VAR viewer AS String          ' who is signed in; "" for nobody
+
+' ---------------------------------------------------------------- the disk
+
+SUB EnsureDisk ()
+    IF FS.Exists(DATADIR + "\SESSIONS") THEN RETURN
+    IF NOT FS.Exists(DATADIR) THEN FS.MakeDir(DATADIR)
+    IF NOT FS.Exists(DATADIR + "\USERS") THEN FS.MakeDir(DATADIR + "\USERS")
+    IF NOT FS.Exists(DATADIR + "\FRIENDS") THEN FS.MakeDir(DATADIR + "\FRIENDS")
+    IF NOT FS.Exists(DATADIR + "\WALLS") THEN FS.MakeDir(DATADIR + "\WALLS")
+    IF NOT FS.Exists(PICDIR) THEN FS.MakeDir(PICDIR)
+    FS.MakeDir(DATADIR + "\SESSIONS")
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+' Text that is safe inside one |-separated line, and back again.
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+' Text that is safe inside a page; Br also keeps the line breaks.
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION Br (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s).Replace(Chr(10), "<br>")
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+' Only letters and digits are allowed in characters, so that a name or a session
+' id from a visitor can never reach outside its folder.
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' A user name is also a file name, and file names here are 8.3.
+FUNCTION ValidName (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(u, "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION CleanName (u AS String) AS String
+    VAR s AS String
+    s = u.Trim().Lower()
+    IF ValidName(s) THEN RETURN s
+    RETURN ""
+END FUNCTION
+
+' ---------------------------------------------------------------- users
+
+FUNCTION UserPath (u AS String) AS String
+    RETURN DATADIR + "\USERS\" + u + ".TXT"
+END FUNCTION
+
+FUNCTION UserExists (u AS String) AS Bool
+    IF NOT ValidName(u) THEN RETURN FALSE
+    RETURN FS.Exists(UserPath(u))
+END FUNCTION
+
+' A profile is the lines of its file; Field and SetField work on that array.
+FUNCTION LoadUser (u AS String) AS Array OF String
+    RETURN FS.Read(UserPath(u)).Lines()
+END FUNCTION
+
+SUB SaveUser (u AS String, rec AS Array OF String)
+    FS.Write(UserPath(u), rec.Join(Chr(10)))
+END SUB
+
+FUNCTION Field (rec AS Array OF String, key AS String) AS String
+    VAR line AS String
+    FOR EACH line IN rec
+        IF line.StartsWith(key + "=") THEN RETURN Unesc(line.Substring(key.Length + 1, line.Length - key.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB SetField (rec AS Array OF String, key AS String, value AS String)
+    VAR i AS Integer
+    FOR i = 0 TO rec.Count - 1
+        IF rec[i].StartsWith(key + "=") THEN
+            rec[i] = key + "=" + Esc(value)
+            RETURN
+        END IF
+    NEXT
+    rec.Add(key + "=" + Esc(value))
+END SUB
+
+FUNCTION NameOf (u AS String) AS String
+    RETURN Field(LoadUser(u), "name")
+END FUNCTION
+
+' Not real cryptography - SIM95 has none - but the password itself never
+' touches the disk. Two running hashes over salt + password, kept under 2^31.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION
+
+FUNCTION NewToken () AS String
+    RETURN Hex(268435456 + Rnd(1879048191))
+END FUNCTION
+
+' Returns "" on success, otherwise what is wrong.
+FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
+    VAR rec AS Array OF String
+    VAR salt AS String
+    EnsureDisk()
+    IF NOT ValidName(u) THEN RETURN "Pick a user name of 3 to 8 letters or digits."
+    IF FS.Exists(UserPath(u)) THEN RETURN "Somebody already has the name " + u + "."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    IF name.Trim() = "" THEN RETURN "Tell us your name."
+    salt = NewToken()
+    SetField(rec, "name", name.Trim())
+    SetField(rec, "salt", salt)
+    SetField(rec, "pass", Hash(salt, pw))
+    SetField(rec, "joined", TIME.Date)
+    SaveUser(u, rec)
+    FS.Write(DATADIR + "\FRIENDS\" + u + ".TXT", "|")
+    FS.Append(DATADIR + "\PEOPLE.TXT", u + "|" + Esc(name.Trim()) + Chr(10))
+    RETURN ""
+END FUNCTION
+
+FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN FALSE
+    rec = LoadUser(u)
+    RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+' Keep the member directory in step when someone changes their name.
+SUB RenamePerson (u AS String, name AS String)
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    lines = ReadOr(DATADIR + "\PEOPLE.TXT", "").Lines()
+    FOR i = 0 TO lines.Count - 1
+        IF lines[i].StartsWith(u + "|") THEN lines[i] = u + "|" + Esc(name)
+    NEXT
+    FS.Write(DATADIR + "\PEOPLE.TXT", lines.Join(Chr(10)))
+END SUB
+
+FUNCTION HasPicture (u AS String) AS Bool
+    RETURN FS.Exists(PICDIR + "\" + u + ".PIC")
+END FUNCTION
+
+' ---------------------------------------------------------------- sessions
+
+SUB SignIn (u AS String)
+    VAR token AS String
+    EnsureDisk()
+    token = NewToken()
+    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u)
+    RESPONSE.SetCookie(COOKIE, token)
+END SUB
+
+SUB SignOut ()
+    VAR token AS String
+    token = REQUEST.Cookie(COOKIE)
+    IF token <> "" AND token.Length <= 8 THEN
+        IF OnlyFrom(token, "0123456789ABCDEF") AND FS.Exists(DATADIR + "\SESSIONS\" + token + ".TXT") THEN
+            FS.Delete(DATADIR + "\SESSIONS\" + token + ".TXT")
+        END IF
+    END IF
+    RESPONSE.SetCookie(COOKIE, "")
+END SUB
+
+' Who the cookie says is signed in, or "".
+FUNCTION CurrentUser () AS String
+    VAR token AS String
+    VAR path AS String
+    VAR u AS String
+    token = REQUEST.Cookie(COOKIE)
+    IF token = "" OR token.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(token, "0123456789ABCDEF") THEN RETURN ""
+    path = DATADIR + "\SESSIONS\" + token + ".TXT"
+    IF NOT FS.Exists(path) THEN RETURN ""
+    u = FS.Read(path).Trim()
+    IF NOT UserExists(u) THEN RETURN ""
+    RETURN u
+END FUNCTION
+
+' The first line of every members-only page.
+SUB RequireLogin ()
+    viewer = CurrentUser()
+    IF viewer = "" THEN RESPONSE.Redirect("index.asp")
+END SUB
+
+' ---------------------------------------------------------------- friends
+
+FUNCTION FriendList (u AS String) AS String
+    RETURN ReadOr(DATADIR + "\FRIENDS\" + u + ".TXT", "|")
+END FUNCTION
+
+FUNCTION IsFriend (a AS String, b AS String) AS Bool
+    RETURN FriendList(a).Contains("|" + b + "|")
+END FUNCTION
+
+FUNCTION Friends (u AS String) AS Array OF String
+    VAR all AS Array OF String
+    VAR out AS Array OF String
+    VAR f AS String
+    all = FriendList(u).Split("|")
+    FOR EACH f IN all
+        IF f <> "" THEN out.Add(f)
+    NEXT
+    RETURN out
+END FUNCTION
+
+SUB AddFriend (a AS String, b AS String)
+    IF a = b OR IsFriend(a, b) THEN RETURN
+    FS.Write(DATADIR + "\FRIENDS\" + a + ".TXT", FriendList(a) + b + "|")
+    FS.Write(DATADIR + "\FRIENDS\" + b + ".TXT", FriendList(b) + a + "|")
+END SUB
+
+SUB RemoveFriend (a AS String, b AS String)
+    FS.Write(DATADIR + "\FRIENDS\" + a + ".TXT", FriendList(a).Replace("|" + b + "|", "|"))
+    FS.Write(DATADIR + "\FRIENDS\" + b + ".TXT", FriendList(b).Replace("|" + a + "|", "|"))
+END SUB
+
+' ---------------------------------------------------------------- posts
+
+FUNCTION NextId () AS Integer
+    VAR n AS Integer
+    n = Int(Val(ReadOr(DATADIR + "\NEXTID.TXT", "0"))) + 1
+    FS.Write(DATADIR + "\NEXTID.TXT", Str(n))
+    RETURN n
+END FUNCTION
+
+' Write on someone's wall (your own wall is your status). Returns "" or a problem.
+FUNCTION AddPost (author AS String, wall AS String, text AS String) AS String
+    VAR line AS String
+    text = text.Replace(Chr(13), "").Trim()
+    IF text = "" THEN RETURN "Write something first."
+    IF text.Length > MAXPOST THEN RETURN "Keep it under " + Str(MAXPOST) + " characters."
+    IF NOT UserExists(wall) THEN RETURN "There is nobody called " + wall + "."
+    IF author <> wall AND NOT IsFriend(author, wall) THEN RETURN "Only friends can write on " + wall + "'s Wall."
+    EnsureDisk()
+    line = Str(NextId()) + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|" + author + "|" + Esc(NameOf(author)) + "|" + wall + "|" + Esc(NameOf(wall)) + "|" + Esc(text)
+    FS.Append(DATADIR + "\POSTS.TXT", line + Chr(10))
+    FS.Append(DATADIR + "\WALLS\" + wall + ".TXT", line + Chr(10))
+    RETURN ""
+END FUNCTION
+
+' One post as a row of the feed or a wall. onWall leaves out "on X's Wall".
+FUNCTION PostHtml (line AS String, onWall AS Bool) AS String
+    VAR p AS Array OF String
+    VAR who AS String
+    p = line.Split("|")
+    IF p.Count < 7 THEN RETURN ""
+    who = "<a href=""profile.asp?u=" + p[2] + """><b>" + H(Unesc(p[3])) + "</b></a>"
+    IF p[2] <> p[4] AND NOT onWall THEN
+        who = who + " &raquo; <a href=""profile.asp?u=" + p[4] + """><b>" + H(Unesc(p[5])) + "</b></a>"
+    END IF
+    RETURN "<tr><td bgcolor=""#F7F7F7""><font size=""2"">" + who + " <font color=""#808080"">" + p[1] + "</font><br>" + Br(Unesc(p[6])) + "</font></td></tr>"
+END FUNCTION
+
+' The newest posts on one wall.
+FUNCTION WallHtml (u AS String) AS String
+    VAR lines AS Array OF String
+    VAR out AS String
+    VAR i AS Integer
+    VAR shown AS Integer
+    lines = ReadOr(DATADIR + "\WALLS\" + u + ".TXT", "").Lines()
+    FOR i = lines.Count - 1 TO 0 STEP -1
+        IF lines[i] <> "" THEN
+            out = out + PostHtml(lines[i], TRUE)
+            shown = shown + 1
+            IF shown >= FEEDSIZE THEN BREAK
+        END IF
+    NEXT
+    IF out = "" THEN RETURN "<tr><td><font size=""2"" color=""#808080"">Nothing on the Wall yet.</font></td></tr>"
+    RETURN out
+END FUNCTION
+
+' The News Feed: what you and your friends wrote, or what was written to you or them.
+FUNCTION FeedHtml (u AS String) AS String
+    VAR lines AS Array OF String
+    VAR p AS Array OF String
+    VAR circle AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR stop AS Integer
+    VAR shown AS Integer
+    circle = FriendList(u) + u + "|"
+    lines = ReadOr(DATADIR + "\POSTS.TXT", "").Lines()
+    stop = lines.Count - FEEDSCAN
+    IF stop < 0 THEN stop = 0
+    FOR i = lines.Count - 1 TO stop STEP -1
+        p = lines[i].Split("|")
+        IF p.Count >= 7 THEN
+            IF circle.Contains("|" + p[2] + "|") OR circle.Contains("|" + p[4] + "|") THEN
+                out = out + PostHtml(lines[i], FALSE)
+                shown = shown + 1
+                IF shown >= FEEDSIZE THEN BREAK
+            END IF
+        END IF
+    NEXT
+    IF out = "" THEN RETURN "<tr><td><font size=""2"" color=""#808080"">Nothing here yet. Write something above, or find some <a href=""people.asp"">people</a> to be friends with.</font></td></tr>"
+    RETURN out
+END FUNCTION
+
+' ---------------------------------------------------------------- page furniture
+
+FUNCTION Top (title AS String) AS String
+    VAR s AS String
+    s = "<html><head><title>" + H(title) + " - SimBook</title></head>" _
+      + "<body bgcolor=""#FFFFFF"" text=""#000000"" link=""#3B5998"" vlink=""#3B5998"">" _
+      + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#3B5998""><tr>" _
+      + "<td><a href=""index.asp""><font color=""#FFFFFF"" size=""5""><b>[simbook]</b></font></a></td>" _
+      + "<td align=""right""><font color=""#FFFFFF"" size=""2"">"
+    IF viewer <> "" THEN
+        s = s + "<a href=""home.asp""><font color=""#FFFFFF"">home</font></a> | " _
+              + "<a href=""profile.asp?u=" + viewer + """><font color=""#FFFFFF"">profile</font></a> | " _
+              + "<a href=""people.asp""><font color=""#FFFFFF"">people</font></a> | " _
+              + "<a href=""edit.asp""><font color=""#FFFFFF"">edit</font></a> | " _
+              + "<a href=""logout.asp""><font color=""#FFFFFF"">logout</font></a>"
+    ELSE
+        s = s + "<a href=""index.asp""><font color=""#FFFFFF"">login</font></a> | <a href=""index.asp""><font color=""#FFFFFF"">register</font></a>"
+    END IF
+    RETURN s + "</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">SimBook on " + H(SERVER.Name) + " &middot; " + TIME.Date + "</font></center></body></html>"
+END FUNCTION
+
+' A titled box, the way every section of a profile is drawn.
+FUNCTION BoxTop (title AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""0""><tr><td bgcolor=""#6D84B4""><font color=""#FFFFFF"" size=""2""><b>" + title + "</b></font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Notice (text AS String) AS String
+    IF text = "" THEN RETURN ""
+    RETURN "<table width=""100%"" cellpadding=""4""><tr><td bgcolor=""#FFF9D7""><font size=""2"">" + H(text) + "</font></td></tr></table>"
+END FUNCTION
+
+' One <option> of a <select>, chosen when it is the current value.
+FUNCTION Opt (value AS String, current AS String) AS String
+    IF value = current THEN RETURN "<option selected>" + H(value) + "</option>"
+    RETURN "<option>" + H(value) + "</option>"
+END FUNCTION
+
+FUNCTION Picture (u AS String) AS String
+    IF HasPicture(u) THEN RETURN "<img src=""pics/" + u + ".pic"" alt=""" + u + """>"
+    RETURN "<img src=""nopic.pic"" alt=""no picture"">"
+END FUNCTION
