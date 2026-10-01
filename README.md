@@ -7,6 +7,8 @@ A series of programs for the sim95 playground
   real mail between SIM95 machines.
 * [`frostbird/`](frostbird/) – Frostbird, a desktop mail program for ColdMail
   (folders, letters, Get Mail, Write, Reply, Forward).
+* [`clippy/`](clippy/) – Clippy, an assistant who watches what you do and
+  offers to help ("It looks like you're writing a letter...").
 * [`asksim/`](asksim/) – AskSim, an Ask Jeeves-style search engine with a
   real crawler that goes round every machine's web pages.
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
@@ -26,4 +28,4 @@ a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy). Rebuild the installers with `node tools/build-installer.mjs`.

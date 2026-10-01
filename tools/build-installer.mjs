@@ -127,6 +127,20 @@ const apps = {
     done: `Print("Frostbird is running. Next time, start C:\\PROGRAMS\\FROSTBRD.SPK from Files.")`,
     code: () => "",
   },
+  clippy: {
+    title: "Clippy",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
+' Clippy, your SIM95 assistant, to C:\\PROGRAMS\\CLIPPY.SPK, starts him, and
+' adds him to C:\\SYSTEM\\STARTUP so he is there whenever the machine starts.
+' He can be told to stop that (ask him to go away). His settings are in
+' C:\\SYSTEM\\CLIPPY.INI.`,
+    copy: [["clippy/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
+    first: [],
+    last: [`StartService("CLIPPY", "C:\\PROGRAMS\\CLIPPY.SPK", "CLIPPY.RUN")`],
+    done: `Print("It looks like you've installed Clippy! Would you like help?")`,
+    code: () => startService,
+  },
   eliza: {
     title: "ELIZA-95",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95

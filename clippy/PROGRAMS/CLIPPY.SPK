@@ -1,0 +1,662 @@
+' CLIPPY.SPK - Clippy, your SIM95 assistant.
+'
+' A paperclip with eyebrows who watches what you are doing and offers to help,
+' whether or not you wanted it. Every couple of seconds it looks at the
+' programs that are running (SYS.Tasks) and the files in C:\MYFILES; when
+' something new turns up it has an opinion ("It looks like you're writing a
+' letter..."), with buttons. Click it to ask a question: it knows a little
+' about SIM95, and searches the Web (AskSim, in Simxplorer) for the rest.
+'
+' Settings in C:\SYSTEM\CLIPPY.INI: quiet=<topics it was told to stop on>,
+' tips=<minutes between idle tips, 0 for none>.
+
+CONST INIFILE = "C:\SYSTEM\CLIPPY.INI"
+CONST RUNFILE = "C:\SYSTEM\STARTUP\CLIPPY.RUN"
+CONST BROWSER = "C:\PROGRAMS\SIMXPLOR.SPK"
+CONST MAILER = "C:\PROGRAMS\FROSTBRD.SPK"
+CONST W = 300                  ' the window's width
+CONST CLIPH = 150              ' the part of it Clippy stands in
+CONST LINECHARS = 28           ' balloon text: the canvas font is 16 pixels, about 9.6 wide
+
+VAR EOL AS String
+VAR win AS GUI_Window
+VAR art AS GUI_Canvas
+VAR clock AS GUI_Timer
+VAR opt AS Array OF GUI_Button     ' the balloon's choices
+VAR askBox AS GUI_TextBox
+VAR askGo AS GUI_Button
+
+' what is in the balloon
+VAR say AS String                  ' its text ("" when there is no balloon)
+VAR topic AS String                ' what it is about, for the buttons and "don't show me this again"
+VAR choices AS Array OF String
+VAR asking AS Bool
+VAR balloonSince AS Integer
+VAR detail AS String               ' e.g. the file a tip is about
+
+' how Clippy looks right now
+VAR frame AS Integer
+VAR mood AS String = "idle"        ' idle, attention, thinking, writing
+VAR moodUntil AS Integer
+VAR gaze AS Integer
+VAR blinkAt AS Integer
+VAR blinking AS Bool
+VAR drawn AS String
+
+' what it has noticed
+VAR seenTasks AS String = "|"
+VAR seenFiles AS String = "|"
+VAR lastLook AS Integer
+VAR lastTip AS Integer
+VAR quietTopics AS String = "|"
+VAR tipMinutes AS Integer = 4
+VAR tipNext AS Integer
+
+' ================================================================ start
+
+SUB Main ()
+    VAR i AS Integer
+    VAR b AS GUI_Button
+    EOL = Chr(10)
+    LoadSettings()
+    win = GUI_Window.New("Clippy", W, CLIPH)
+    win.Icon = "help"
+    win.onClose = Win_OnClose
+    art = GUI_Canvas.New(win)
+    art.SetBounds(0, 0, W, CLIPH)
+    art.onDraw = Art_OnDraw
+    art.onMouseDown = Art_OnMouseDown
+    FOR i = 0 TO 2
+        b = GUI_Button.New(win)
+        b.Visible = FALSE
+        opt.Add(b)
+    NEXT
+    opt[0].onClick = Choice0_Click
+    opt[1].onClick = Choice1_Click
+    opt[2].onClick = Choice2_Click
+    askBox = GUI_TextBox.New(win)
+    askBox.Visible = FALSE
+    askBox.onEnter = Ask_Go
+    askGo = GUI_Button.New(win)
+    askGo.Text = "&Search"
+    askGo.Visible = FALSE
+    askGo.onClick = Ask_Go
+    clock = GUI_Timer.New(win)
+    clock.Interval = 150
+    clock.onTick = Clock_OnTick
+    clock.Start()
+    ' what is already there when it starts does not count as news
+    Look(TRUE)
+    win.X = 480
+    win.Y = 160
+    win.Show()
+    blinkAt = SYS.Ticks + 3000
+    lastTip = SYS.Ticks
+    Balloon("hello", "Hi! I'm Clippy, your SIM95 assistant. I'll be right here, watching everything you do. Click me if you need help!", ["Thanks, Clippy!", "Please go away"])
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+SUB LoadSettings ()
+    VAR line AS String
+    FOR EACH line IN ReadOr(INIFILE, "").Lines()
+        IF line.StartsWith("quiet=") THEN quietTopics = line.Substring(6, line.Length - 6)
+        IF line.StartsWith("tips=") THEN tipMinutes = Int(Val(line.Substring(5, line.Length - 5)))
+    NEXT
+    IF NOT quietTopics.StartsWith("|") THEN quietTopics = "|" + quietTopics
+END SUB
+
+SUB SaveSettings ()
+    TRY
+        FS.Write(INIFILE, "quiet=" + quietTopics + EOL + "tips=" + Str(tipMinutes) + EOL)
+    CATCH err
+    END TRY
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+' ================================================================ the balloon
+
+' Shows a balloon about topic, with up to three choices. Topics the user told
+' it to stop on stay quiet.
+SUB Balloon (about AS String, text AS String, buttons AS Array OF String)
+    IF quietTopics.Contains("|" + about + "|") THEN RETURN
+    topic = about
+    say = text
+    choices = buttons
+    asking = FALSE
+    balloonSince = SYS.Ticks
+    win.Tag = text
+    SetMood("attention", 1500)
+    Layout()
+END SUB
+
+SUB AskBalloon (text AS String)
+    topic = "ask"
+    say = text
+    choices.Clear()
+    choices.Add("Never mind")
+    asking = TRUE
+    balloonSince = SYS.Ticks
+    win.Tag = text
+    askBox.Text = ""
+    SetMood("thinking", 800)
+    Layout()
+    askBox.Focus()
+END SUB
+
+SUB CloseBalloon ()
+    say = ""
+    topic = ""
+    asking = FALSE
+    win.Tag = ""
+    Layout()
+END SUB
+
+' Words into lines that fit the balloon.
+FUNCTION Wrap (text AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR para AS String
+    VAR word AS String
+    VAR line AS String
+    FOR EACH para IN text.Split(EOL)
+        line = ""
+        FOR EACH word IN para.Split(" ")
+            IF line = "" THEN
+                line = word
+            ELSEIF line.Length + 1 + word.Length <= LINECHARS THEN
+                line = line + " " + word
+            ELSE
+                out.Add(line)
+                line = word
+            END IF
+        NEXT
+        out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION BalloonHeight () AS Integer
+    VAR h AS Integer
+    IF say = "" THEN RETURN 0
+    h = 16 + Wrap(say).Count * 18 + 8 + choices.Count * 26 + 22
+    IF asking THEN h = h + 28
+    RETURN h
+END FUNCTION
+
+' Sizes the window to the balloon and puts its controls in place.
+SUB Layout ()
+    VAR bh AS Integer
+    VAR y AS Integer
+    VAR i AS Integer
+    bh = BalloonHeight()
+    win.Height = bh + CLIPH
+    art.SetBounds(0, 0, W, bh + CLIPH)
+    y = 16 + Wrap(say).Count * 18 + 6
+    askBox.Visible = asking
+    askGo.Visible = asking
+    IF asking THEN
+        askBox.SetBounds(18, y, 180, 22)
+        askGo.SetBounds(204, y, 72, 22)
+        y = y + 28
+    END IF
+    FOR i = 0 TO 2
+        IF i < choices.Count AND say <> "" THEN
+            opt[i].Text = choices[i]
+            opt[i].SetBounds(18, y, W - 40, 22)
+            opt[i].Visible = TRUE
+            y = y + 26
+        ELSE
+            opt[i].Visible = FALSE
+        END IF
+    NEXT
+    drawn = ""
+    Draw()
+END SUB
+
+SUB Choice0_Click ()
+    IF choices.Count > 0 THEN Chose(choices[0])
+END SUB
+
+SUB Choice1_Click ()
+    IF choices.Count > 1 THEN Chose(choices[1])
+END SUB
+
+SUB Choice2_Click ()
+    IF choices.Count > 2 THEN Chose(choices[2])
+END SUB
+
+' ================================================================ what it watches
+
+SUB Clock_OnTick ()
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
+    frame = frame + 1
+    IF SYS.Ticks > moodUntil AND mood <> "idle" THEN mood = "idle"
+    IF SYS.Ticks > blinkAt THEN
+        blinking = NOT blinking
+        IF blinking THEN
+            blinkAt = SYS.Ticks + 150
+        ELSE
+            blinkAt = SYS.Ticks + 2500 + Rnd(3000)
+            ' and a look around now and then
+            IF Rnd(3) = 0 THEN gaze = Rnd(3) - 1
+        END IF
+    END IF
+    Draw()
+    IF SYS.Ticks - lastLook > 2000 THEN
+        lastLook = SYS.Ticks
+        Look(FALSE)
+    END IF
+    ' a balloon nobody answers drifts away
+    IF say <> "" AND NOT asking AND SYS.Ticks - balloonSince > 30000 THEN CloseBalloon()
+    IF say = "" AND tipMinutes > 0 AND SYS.Ticks - lastTip > tipMinutes * 60000 THEN
+        lastTip = SYS.Ticks
+        Tip()
+    END IF
+END SUB
+
+' Programs that started and files that appeared since last time.
+SUB Look (quietly AS Bool)
+    VAR task AS String
+    VAR name AS String
+    VAR now AS String = "|"
+    VAR f AS String
+    VAR files AS String = "|"
+    FOR EACH task IN SYS.Tasks()
+        name = task.Split("|")[1].Upper()
+        now = now + name + "|"
+        IF NOT seenTasks.Contains("|" + name + "|") AND NOT quietly THEN Noticed(name)
+    NEXT
+    seenTasks = now
+    IF FS.Exists("C:\MYFILES") THEN
+        FOR EACH f IN FS.List("C:\MYFILES")
+            IF f.EndsWith("\") THEN CONTINUE
+            files = files + f + ":" + Str(FS.Size("C:\MYFILES\" + f)) + "|"
+            IF NOT seenFiles.Contains("|" + f + ":" + Str(FS.Size("C:\MYFILES\" + f)) + "|") AND NOT quietly THEN Saved(f)
+        NEXT
+    END IF
+    seenFiles = files
+END SUB
+
+' A program started.
+SUB Noticed (name AS String)
+    IF say <> "" AND topic <> "hello" THEN RETURN
+    SELECT CASE name
+        CASE "NOTES"
+            Balloon("letter", "It looks like you're writing a letter." + EOL + EOL + "Would you like help?", ["Get help with writing the letter", "Just type the letter without help", "Don't show me this tip again"])
+        CASE "SPARK"
+            Balloon("program", "It looks like you're writing a program!" + EOL + EOL + "Would you like me to add some bugs, or would you rather find your own?", ["Add bugs for me", "I'll make my own", "Don't show me this tip again"])
+        CASE "VOYAGER", "SIMXPLOR"
+            Balloon("web", "It looks like you're surfing the Information Superhighway!" + EOL + EOL + "Would you like me to search for something?", ["Search the Web", "I'm just browsing", "Don't show me this tip again"])
+        CASE "FROSTBRD"
+            Balloon("mail", "It looks like you're writing a letter. For real this time!" + EOL + EOL + "Remember: there is no Unsend button. There never will be.", ["Good point", "Don't show me this tip again"])
+        CASE "SKETCH"
+            Balloon("drawing", "It looks like you're drawing a picture." + EOL + EOL + "Would you like help adding a stick figure?", ["Yes, add a stick figure", "I'm an artist", "Don't show me this tip again"])
+        CASE "MINES"
+            Balloon("mines", "It looks like you're playing Minesweeper during work hours." + EOL + EOL + "Would you like me to keep watch for your boss?", ["Yes, keep watch", "I'm on my break", "Don't show me this tip again"])
+        CASE "TERMINAL"
+            Balloon("terminal", "It looks like you're typing commands." + EOL + EOL + "Have you tried turning it off and on again?", ["That's not how this works", "Don't show me this tip again"])
+        CASE "CHAT"
+            Balloon("chat", "It looks like you're chatting." + EOL + EOL + "Remember: on the Internet, nobody knows you're a paperclip.", ["Ha!", "Don't show me this tip again"])
+        CASE "FILES"
+            Balloon("files", "It looks like you're looking for a file." + EOL + EOL + "Would you like help? I can't find files either, but we could look together.", ["Let's look together", "No thanks", "Don't show me this tip again"])
+        CASE "DOOM", "SIMDOOM"
+            Balloon("doom", "It looks like you're fighting the demons of Hell." + EOL + EOL + "Would you like help with that?", ["Yes, help!", "Rip and tear", "Don't show me this tip again"])
+    END SELECT
+END SUB
+
+' A file in C:\MYFILES is new, or bigger or smaller than it was.
+SUB Saved (f AS String)
+    VAR text AS String
+    IF say <> "" AND topic <> "hello" THEN RETURN
+    detail = "C:\MYFILES\" + f
+    IF f.EndsWith(".TXT") OR f.EndsWith(".HTM") THEN
+        text = ReadOr(detail, "").Trim()
+        IF text.Lower().StartsWith("dear ") OR text.Lower().StartsWith("to whom") THEN
+            Balloon("letter", "It looks like you're writing a letter!" + EOL + EOL + "(I read " + f + ". I read everything.)" + EOL + EOL + "Would you like me to mail it?", ["Mail it with Frostbird", "Just type the letter without help", "Don't show me this tip again"])
+            RETURN
+        END IF
+        IF text.Lower().Contains("todo") OR text.Lower().Contains("to do") THEN
+            Balloon("todo", "It looks like you're making a to-do list." + EOL + EOL + "Would you like me to add ""Close Clippy"" to it?", ["Yes, add it", "No thanks", "Don't show me this tip again"])
+            RETURN
+        END IF
+    END IF
+    IF f.EndsWith(".SPK") THEN
+        Balloon("program", "Nice program, " + f + "!" + EOL + EOL + "Would you like me to run it? What's the worst that could happen?", ["Run it", "Not now", "Don't show me this tip again"])
+        RETURN
+    END IF
+    IF f.EndsWith(".PIC") THEN
+        Balloon("drawing", "What a lovely picture!" + EOL + EOL + "Is that me?", ["It is you, Clippy", "No", "Don't show me this tip again"])
+    END IF
+END SUB
+
+' Now and then, unbidden, a tip.
+SUB Tip ()
+    VAR tips AS Array OF String
+    tips = ["Did you know? You can press F5 in SPARK to run your program. You can also press it in Simxplorer to read the same page again, which is less exciting.", _
+            "Tip: Every SIM95 machine can run a web server. Imagine: your own home page, with a guestbook and a hit counter!", _
+            "Did you know? In Simxplorer you can type words into the Address bar to search the Web. Try ? paperclips", _
+            "Tip: Save early, save often. I have seen things, in C:\MYFILES. Terrible things.", _
+            "Did you know? Paperclips were invented in 1899. I was invented later, which is why I'm better.", _
+            "Tip: A letter that can't be delivered comes back from MAILER-DAEMON. He means well.", _
+            "Did you know? You can close me with the X. You won't, though. Will you?", _
+            "Tip: To make a program start with the machine, put its path in C:\SYSTEM\STARTUP\NAME.RUN. That's how I got here!"]
+    Balloon("tips", tips[Rnd(tips.Count)], ["Thanks, Clippy!", "Don't show me tips"])
+END SUB
+
+' ================================================================ answers
+
+SUB Chose (choice AS String)
+    VAR t AS String
+    t = topic
+    CloseBalloon()
+    SELECT CASE choice
+        CASE "Don't show me this tip again", "Don't show me tips"
+            IF choice = "Don't show me tips" THEN tipMinutes = 0
+            quietTopics = quietTopics + t + "|"
+            SaveSettings()
+            Balloon("ok", "OK! I won't mention it again." + EOL + EOL + "(I'll think it, though.)", ["Fine"])
+        CASE "Please go away"
+            Balloon("goodbye", "Go away? But we were having so much fun!" + EOL + EOL + "Shall I stop starting with SIM95, too?", ["Yes, hide and don't start with SIM95", "Just hide for now", "Never mind, stay"])
+        CASE "Yes, hide and don't start with SIM95"
+            IF FS.Exists(RUNFILE) THEN FS.Delete(RUNFILE)
+            SYS.Exit(0)
+        CASE "Just hide for now"
+            SYS.Exit(0)
+        CASE "Get help with writing the letter"
+            Balloon("letter", "Here's how to write a letter:" + EOL + "1. Start with ""Dear"".  2. Write the letter.  3. Sign it." + EOL + EOL + "You're welcome!", ["That's not help", "Thanks, Clippy!"])
+        CASE "That's not help"
+            Balloon("letter", "It looks like you're getting frustrated." + EOL + EOL + "Would you like help with that?", ["No!", "Don't show me this tip again"])
+        CASE "Mail it with Frostbird"
+            IF FS.Exists(MAILER) THEN
+                SYS.Start(MAILER, "mailto:")
+                Balloon("letter", "I've opened Frostbird. Copy your letter in and press Send. I'd do it myself but I have no hands.", ["OK"])
+            ELSE
+                Balloon("letter", "There's no Frostbird on this machine. Ask a friend for its INSTALL.SPK, or use the webmail.", ["OK"])
+            END IF
+        CASE "Add bugs for me"
+            SetMood("writing", 2500)
+            Balloon("program", "Done! I've taken out one END SUB at random." + EOL + EOL + "Just kidding. Probably.", ["Clippy!", "Ha ha"])
+        CASE "Search the Web"
+            AskBalloon("What would you like to search for?")
+        CASE "Yes, add a stick figure"
+            Balloon("drawing", "  O" + EOL + " /|\" + EOL + " / \" + EOL + EOL + "There you go. You'll have to copy it in yourself.", ["Thanks, Clippy!"])
+        CASE "Yes, keep watch"
+            SetMood("thinking", 4000)
+            Balloon("mines", "Watching..." + EOL + EOL + "If anybody comes, I'll say you're doing spreadsheets.", ["Thanks, Clippy!"])
+        CASE "Let's look together"
+            SYS.Start("C:\PROGRAMS\FILES.SPK", "C:\MYFILES")
+            Balloon("files", "I've opened My Files. Is it there? It's always in the last place you look.", ["Found it"])
+        CASE "Yes, help!"
+            Balloon("doom", "Have you tried asking the demons nicely?" + EOL + EOL + "No? Then shoot them. Lots.", ["Rip and tear"])
+        CASE "Yes, add it"
+            IF detail <> "" AND FS.Exists(detail) THEN FS.Append(detail, EOL + "[ ] Close Clippy" + EOL)
+            Balloon("todo", "Added! Though I don't think you'll ever need it.", ["We'll see"])
+        CASE "Run it"
+            IF detail <> "" AND FS.Exists(detail) THEN SYS.Run(detail)
+            Balloon("program", "Running " + detail + "... Fingers crossed! (I don't have fingers.)", ["OK"])
+        CASE "Ask another question"
+            AskBalloon("What would you like to do?")
+    END SELECT
+END SUB
+
+' Click Clippy, and he asks what you'd like to do.
+SUB Art_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    IF y < BalloonHeight() THEN RETURN
+    AskBalloon("What would you like to do?" + EOL + EOL + "Type a question, then click Search.")
+END SUB
+
+SUB Ask_Go ()
+    VAR q AS String
+    q = askBox.Text.Trim()
+    IF q = "" THEN RETURN
+    Answer(q)
+END SUB
+
+FUNCTION Has (q AS String, words AS String) AS Bool
+    VAR w AS String
+    FOR EACH w IN words.Split("|")
+        IF (" " + q + " ").Contains(" " + w) THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' Built-in help for the questions it knows, the Web for the rest.
+SUB Answer (question AS String)
+    VAR q AS String
+    q = question.Lower().Replace("?", "").Replace(".", "").Replace(",", "").Replace("!", "")
+    SetMood("thinking", 1200)
+    IF Has(q, "go away|turn you off|turn off clippy|hide|uninstall|get rid|kill you|close you|shut up|stop") THEN
+        Balloon("goodbye", "I'm sorry, Dave. I'm afraid I can't do that." + EOL + EOL + "Just kidding! Do you want me to go?", ["Yes, hide and don't start with SIM95", "Just hide for now", "Never mind, stay"])
+    ELSEIF Has(q, "install|app|program for|add a site|web site|website|home page") THEN
+        Balloon("help", "To install an app, open SPARK, paste in its INSTALL.SPK, save it as C:\MYFILES\INSTALL.SPK and press F5." + EOL + EOL + "Web apps become your machine's home page.", ["Ask another question", "Thanks, Clippy!"])
+    ELSEIF Has(q, "mail|e-mail|email|letter") THEN
+        IF FS.Exists(MAILER) THEN SYS.Start(MAILER, "")
+        Balloon("help", "Mail goes from name@machine to name@machine. Frostbird reads it, if you have it; I've opened it if so. Or use ColdMail's webmail in your browser.", ["Ask another question", "Thanks, Clippy!"])
+    ELSEIF Has(q, "browse|internet|web|surf") THEN
+        OpenBrowser("")
+        Balloon("help", "Here's the Web! Type an address like http://alpha/ into the Address bar, or some words to search.", ["Ask another question", "Thanks, Clippy!"])
+    ELSEIF Has(q, "time|date|day is it") THEN
+        Balloon("help", "It's " + TIME.Clock.Substring(0, 5) + " on " + TIME.Date + "." + EOL + EOL + "Time flies when you're with a paperclip!", ["Ask another question", "Thanks, Clippy!"])
+    ELSEIF Has(q, "joke|funny|laugh") THEN
+        Balloon("help", "Why did the paperclip apply for a job?" + EOL + EOL + "It wanted to hold things together.", ["Ask another question", "Groan"])
+    ELSEIF Has(q, "who are you|what are you|your name|are you alive|sentient|are you an ai|llm") THEN
+        Balloon("help", "I'm Clippy, a paperclip! I'm not a large language model. I'm a small office supply with ambition.", ["Ask another question", "Thanks, Clippy!"])
+    ELSEIF Has(q, "game|play|bored|fun") THEN
+        Balloon("help", "All work and no play! Try Minesweeper. If anybody has installed games on this machine, they'll be in C:\PROGRAMS too.", ["Ask another question", "Thanks, Clippy!"])
+    ELSEIF Has(q, "save|lost|file") THEN
+        Balloon("help", "Your files live in C:\MYFILES. Open My Files to see them. If it isn't there, did you press Save? I did ask.", ["Let's look together", "Ask another question"])
+    ELSEIF Has(q, "hello|hi|hey") THEN
+        Balloon("help", "Hello! It looks like you're saying hello." + EOL + EOL + "Would you like help with that?", ["Ask another question", "No!"])
+    ELSE
+        ' to the Web
+        IF OpenBrowser(question) THEN
+            Balloon("help", "I don't know about """ + question + """, but the Web might. I've asked AskSim for you.", ["Ask another question", "Thanks, Clippy!"])
+        ELSE
+            Balloon("help", "I don't know about """ + question + """ and there's no browser here to ask the Web with." + EOL + EOL + "I'm just a paperclip.", ["Ask another question", "OK"])
+        END IF
+    END IF
+END SUB
+
+' Opens the browser, searching for words if there are any. FALSE if there
+' is no browser to open.
+FUNCTION OpenBrowser (words AS String) AS Bool
+    VAR search AS String
+    VAR line AS String
+    VAR url AS String
+    FOR EACH line IN ReadOr("C:\SYSTEM\SIMXPLOR.INI", "").Lines()
+        IF line.StartsWith("search=") THEN search = line.Substring(7, line.Length - 7).Trim()
+    NEXT
+    IF words <> "" THEN
+        IF search = "" AND FS.Exists("C:\WEB\ASK.SPK") THEN search = "http://" + NET.HostName.Lower() + "/index.asp?q=%s"
+        IF search <> "" THEN
+            url = search.Replace("%s", UrlEnc(words))
+        ELSE
+            url = "about:search?" + UrlEnc(words)
+        END IF
+    END IF
+    IF FS.Exists(BROWSER) THEN
+        SYS.Start(BROWSER, url)
+        RETURN TRUE
+    END IF
+    IF url.StartsWith("about:") THEN RETURN FALSE
+    SYS.Start("C:\SYSTEM\VOYAGER.EXE", url)
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR c AS String
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i)
+        IF c = " " THEN
+            out = out + "+"
+        ELSEIF "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.".Contains(c) THEN
+            out = out + c
+        ELSE
+            out = out + "%" + ("0" + Hex(Asc(c) MOD 256)).Substring(("0" + Hex(Asc(c) MOD 256)).Length - 2, 2)
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+' ================================================================ drawing Clippy
+
+SUB SetMood (m AS String, ms AS Integer)
+    mood = m
+    moodUntil = SYS.Ticks + ms
+END SUB
+
+SUB Art_OnDraw (canvas AS GUI_Canvas)
+    drawn = ""
+    Draw()
+END SUB
+
+' Only what changed is worth drawing again: a still Clippy is drawn once.
+SUB Draw ()
+    VAR state AS String
+    VAR bob AS Integer
+    VAR bh AS Integer
+    IF mood = "attention" THEN bob = Int(MATH.Abs(MATH.Sin(frame * 0.9)) * 6)
+    state = mood + Str(bob) + Str(gaze) + Str(blinking) + say
+    IF mood = "writing" OR mood = "thinking" THEN state = state + Str(frame MOD 2)
+    IF state = drawn THEN RETURN
+    drawn = state
+    bh = BalloonHeight()
+    art.Clear()
+    art.SetColor(7)
+    art.FillRect(0, 0, W, bh + CLIPH)
+    IF say <> "" THEN DrawBalloon(bh)
+    DrawClippy(110, bh + 10 - bob)
+END SUB
+
+SUB DrawBalloon (bh AS Integer)
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR x AS Integer
+    ' a pale yellow balloon with a black edge, and its tail down to Clippy
+    art.SetColor(0)
+    art.FillRect(5, 5, W - 10, bh - 18)
+    art.SetColor(15)
+    art.FillRect(6, 6, W - 12, bh - 20)
+    art.SetColor(11)
+    art.FillRect(7, 7, W - 14, bh - 22)
+    FOR i = 0 TO 11
+        art.SetColor(0)
+        art.Line(140 - i + i / 2, bh - 13 + i, 150 - i / 2, bh - 13 + i)
+        art.SetColor(11)
+        art.Line(141 - i + i / 2, bh - 14 + i, 149 - i / 2, bh - 14 + i)
+    NEXT
+    art.SetColor(0)
+    lines = Wrap(say)
+    FOR i = 0 TO lines.Count - 1
+        art.Text(14, 14 + i * 18, lines[i])
+    NEXT
+END SUB
+
+' The wire, as a fat line: a dark edge and a light middle make it shine.
+SUB Wire (x1 AS Integer, y1 AS Integer, x2 AS Integer, y2 AS Integer)
+    VAR i AS Integer
+    VAR n AS Integer
+    n = Int(MATH.Max(MATH.Abs(x2 - x1), MATH.Abs(y2 - y1)) / 2) + 1
+    FOR i = 0 TO n
+        art.SetColor(8)
+        art.FillCircle(x1 + Int((x2 - x1) * i / n), y1 + Int((y2 - y1) * i / n), 3)
+    NEXT
+    FOR i = 0 TO n
+        art.SetColor(7)
+        art.FillCircle(x1 + Int((x2 - x1) * i / n) - 1, y1 + Int((y2 - y1) * i / n) - 1, 1)
+    NEXT
+END SUB
+
+' Half a circle of wire: from angle a to b (degrees, 0 = right, 90 = down).
+SUB Bend (cx AS Integer, cy AS Integer, r AS Integer, a AS Integer, b AS Integer)
+    VAR d AS Integer
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR dir AS Integer
+    dir = 15
+    IF b < a THEN dir = -15
+    FOR d = a TO b STEP dir
+        x = cx + Int(r * MATH.Cos(d * MATH.Pi / 180))
+        y = cy + Int(r * MATH.Sin(d * MATH.Pi / 180))
+        art.SetColor(8)
+        art.FillCircle(x, y, 3)
+        art.SetColor(7)
+        art.FillCircle(x - 1, y - 1, 1)
+    NEXT
+END SUB
+
+SUB DrawClippy (ox AS Integer, oy AS Integer)
+    VAR px AS Integer
+    VAR py AS Integer
+    VAR i AS Integer
+    ' the sheet of paper he stands on
+    art.SetColor(15)
+    art.FillRect(ox - 40, oy + 116, 110, 18)
+    art.SetColor(8)
+    art.Rect(ox - 40, oy + 116, 110, 18)
+    art.SetColor(14)
+    FOR i = 0 TO 2
+        art.Line(ox - 34, oy + 121 + i * 5, ox + 64, oy + 121 + i * 5)
+    NEXT
+    ' the clip: in on the left, round the top, down the right, round the bottom, up the inside
+    Wire(ox + 4, oy + 100, ox + 4, oy + 32)
+    Bend(ox + 14, oy + 32, 10, 180, 360)
+    Wire(ox + 24, oy + 32, ox + 24, oy + 110)
+    Bend(ox + 12, oy + 110, 12, 0, 180)
+    Wire(ox + 0, oy + 110, ox + 0, oy + 52)
+    IF mood = "writing" THEN
+        ' scribbling with a pencil
+        art.SetColor(11)
+        art.FillRect(ox + 34, oy + 96 + (frame MOD 2) * 3, 16, 5)
+        art.SetColor(0)
+        art.Line(ox + 50, oy + 98 + (frame MOD 2) * 3, ox + 55, oy + 100 + (frame MOD 2) * 3)
+    END IF
+    ' eyes
+    py = 0
+    px = gaze * 2
+    IF mood = "thinking" THEN
+        py = -2
+        px = 2
+    END IF
+    FOR i = 0 TO 1
+        art.SetColor(0)
+        art.FillCircle(ox + 2 + i * 22, oy + 50, 8)
+        IF blinking THEN
+            art.SetColor(7)
+            art.FillCircle(ox + 2 + i * 22, oy + 50, 7)
+            art.SetColor(0)
+            art.Line(ox - 4 + i * 22, oy + 50, ox + 8 + i * 22, oy + 50)
+        ELSE
+            art.SetColor(15)
+            art.FillCircle(ox + 2 + i * 22, oy + 50, 7)
+            art.SetColor(0)
+            art.FillCircle(ox + 3 + i * 22 + px, oy + 51 + py, 3)
+        END IF
+    NEXT
+    ' eyebrows: up for attention, one cocked for thinking
+    art.SetColor(0)
+    IF mood = "attention" THEN
+        art.Line(ox - 6, oy + 34, ox + 8, oy + 31)
+        art.Line(ox + 18, oy + 31, ox + 32, oy + 34)
+    ELSEIF mood = "thinking" THEN
+        art.Line(ox - 6, oy + 38, ox + 8, oy + 38)
+        art.Line(ox + 18, oy + 33, ox + 32, oy + 37)
+    ELSE
+        art.Line(ox - 6, oy + 39, ox + 8, oy + 37)
+        art.Line(ox + 18, oy + 37, ox + 32, oy + 39)
+    END IF
+END SUB
