@@ -245,6 +245,32 @@ const apps = {
     done: `Print("Open http://" + NET.HostName.Lower() + "/ in Voyager. Then install the web apps (in any order), and run C:\\PROGRAMS\\MOVEIN.SPK to bring your other machines' data here.")`,
     code: () => moveHomePage + "\n" + read("simhost/SETUP.SPK") + relocateCode(),
   },
+  simtube: {
+    folder: "TUBE",
+    vapor: { folder: "TUBE", id: "SIMTUBE", name: "SimTube", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "Movies for the SIM95 network: watch, upload, rate and comment, with SimPlayer (C:\\PROGRAMS\\PLAYER.SPK) to play them. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "SimTube",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimTube becomes
+' this machine's home page: its pages go into C:\\WEB (the stock INDEX.HTM moves
+' to WELCOME.HTM), and SimPlayer, the movie player, into C:\\PROGRAMS\\PLAYER.SPK.
+' The sample movies wait in C:\\TUBEDATA\\SEED until the first visit to the front
+' page puts them up. Movies, accounts and comments in C:\\TUBEDATA are left
+' alone, so running it again upgrades SimTube. Then open http://YOURNAME/ in
+' Voyager, and play a movie with C:\\PROGRAMS\\PLAYER.SPK.`,
+    copy: [["simtube/WEB", "C:\\WEB"], ["simtube/PROGRAMS", "C:\\PROGRAMS"]],
+    // the sample movies, made by tools/make-movies.mjs
+    generated: fs.readdirSync(path.join(root, "simtube/MOVIES")).sort().map((f) => ({ dest: "C:\\TUBEDATA\\SEED\\" + f.toUpperCase(), text: () => read("simtube/MOVIES/" + f) })),
+    dirs: [],
+    first: ["MoveHomePage()", "TubeDirs()"],
+    last: [],
+    url: "/",
+    code: () => moveHomePage + `
+' Where the movies live, outside C:\\WEB, and where the samples wait.
+SUB TubeDirs ()
+    IF NOT FS.Exists("C:\\TUBEDATA") THEN FS.MakeDir("C:\\TUBEDATA")
+    IF NOT FS.Exists("C:\\TUBEDATA\\SEED") THEN FS.MakeDir("C:\\TUBEDATA\\SEED")
+END SUB
+`,
+  },
   eliza: {
     folder: "ELIZA",
     vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
@@ -270,7 +296,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", eliza: "BOT.SPK", simtube: "TUBE.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);

@@ -13,6 +13,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | ColdMail | `http://HOST/mail/`  | `C:\WEB\MAIL`  |
 | AskSim   | `http://HOST/ask/`   | `C:\WEB\ASK`   |
 | ELIZA-95 | `http://HOST/eliza/` | `C:\WEB\ELIZA` |
+| SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
 `http://HOST/` becomes a front page that lists them. Each app keeps its data

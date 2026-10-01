@@ -17,6 +17,8 @@ A series of programs for the sim95 playground
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
   program with a JavaScript interpreter written in SPARK.
+* [`simtube/`](simtube/) – SimTube, a movie site, and SimPlayer, a streaming
+  player for SimMovies (canvas drawing, one line a frame).
 * [`simhost/`](simhost/) – SimHost: every web app on one machine, each in a
   folder of its own, and Move In to bring the other machines' data over.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
@@ -35,4 +37,4 @@ machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird, clippy, vapor, simhost). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy, vapor, simhost, simtube). Rebuild the installers with `node tools/build-installer.mjs`.

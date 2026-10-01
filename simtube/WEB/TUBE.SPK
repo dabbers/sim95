@@ -1,0 +1,1048 @@
+' TUBE.SPK - SimTube, the movie site for SIM95. Every page pulls this in with
+' <%@ import file="TUBE.SPK" %>.
+'
+' Movies are SimMovies (.SMV): text, a header and then one line of canvas
+' drawing commands per frame (see README.md). Voyager can't play them; the
+' watch page gives the movie's address to open in SimPlayer
+' (C:\PROGRAMS\PLAYER.SPK). That address, movie.asp?v=N, answers with a
+' manifest (Content-Type video/x-simmovie) naming the parts, and
+' movie.asp?v=N&p=K with part K: each part is under 15K, so it fits in one
+' network message with plenty to spare.
+'
+' Everything lives in plain text files under C:\TUBEDATA, outside C:\WEB:
+'
+'   C:\TUBEDATA\VIDEOS.TXT           one line per movie (see below)
+'   C:\TUBEDATA\MOVIES\<id>\<n>.SMV  the parts of a movie; THUMB.PIC its picture
+'   C:\TUBEDATA\VIEWS\<id>.TXT       how many times it has been watched
+'   C:\TUBEDATA\RATINGS\<id>.TXT     |ann=5|bob=3|  one rating each, 1 to 5 stars
+'   C:\TUBEDATA\COMMENTS\<id>.TXT    date time|user|text, oldest first
+'   C:\TUBEDATA\USERS\<user>.TXT     an account, key=value per line
+'   C:\TUBEDATA\SESSIONS\<id>.TXT    who a sign-in cookie belongs to, and its form token
+'   C:\TUBEDATA\NEXTID.TXT           the last movie number handed out
+'   C:\TUBEDATA\SEED\*.SMV           sample movies from the installer, put on
+'                                    the shelf by the first visit to the front page
+'
+' A movie's line: id|owner|title|date|frames|fps|width|height|parts|chars|about|author|bg
+' Text is escaped with Esc so it never holds | or a line break.
+'
+' Server pages are stopped after about ten million steps and must send less
+' than 64K, so lists stop after a screenful and the work done for a movie
+' (cutting it into parts and drawing its thumbnail) happens once, on upload.
+
+CONST DATADIR = "C:\TUBEDATA"
+CONST COOKIE = "simtube"
+CONST MIME = "video/x-simmovie"
+CONST PARTSIZE = 15000       ' characters to a part; Vapor cuts its games the same
+CONST MAXUPLOAD = 60000      ' a whole request must fit in one 64K message
+CONST MAXTITLE = 60
+CONST MAXABOUT = 500
+CONST MAXCOMMENT = 500
+CONST MAXNAME = 40
+CONST GRIDSIZE = 12              ' movies on the front page
+CONST TOPSHOWN = 20          ' on the Most Viewed page
+CONST COMMENTSHOWN = 30
+CONST COMMENTROOM = 24000    ' how much of a page the comments may take
+CONST THUMBW = 80
+
+VAR viewer AS String          ' who is signed in; "" for nobody
+VAR formToken AS String
+VAR lastId AS String          ' the movie ImportMovie made
+
+' ---------------------------------------------------------------- the disk
+
+SUB EnsureDisk ()
+    VAR dir AS String
+    VAR dirs AS Array OF String
+    dirs = ["", "\USERS", "\SESSIONS", "\MOVIES", "\VIEWS", "\RATINGS", "\COMMENTS", "\SEED"]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
+    NEXT
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION Br (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s).Replace(Chr(10), "<br>")
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION IsNumber (s AS String) AS Bool
+    IF s = "" OR s.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(s, "0123456789")
+END FUNCTION
+
+FUNCTION ValidName (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(u, "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION CleanName (u AS String) AS String
+    VAR s AS String
+    s = u.Trim().Lower()
+    IF ValidName(s) THEN RETURN s
+    RETURN ""
+END FUNCTION
+
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    s = s.Replace(Chr(13), "").Trim()
+    IF s.Length > most THEN s = s.Substring(0, most)
+    RETURN s
+END FUNCTION
+
+FUNCTION OneLine (s AS String) AS String
+    RETURN s.Replace(Chr(13), " ").Replace(Chr(10), " ")
+END FUNCTION
+
+FUNCTION Clamp (n AS Integer, lo AS Integer, hi AS Integer) AS Integer
+    IF n < lo THEN RETURN lo
+    IF n > hi THEN RETURN hi
+    RETURN n
+END FUNCTION
+
+FUNCTION Stamp () AS String
+    RETURN TIME.Date + " " + TIME.Clock.Substring(0, 5)
+END FUNCTION
+
+' Where this page is: C:\WEB, or C:\WEB\TUBE when SimTube has a folder of its own.
+FUNCTION AppDir () AS String
+    VAR page AS String
+    page = SERVER.ScriptName
+    RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
+END FUNCTION
+
+' Where SimTube is on the web: http://host/ or http://host/tube/
+FUNCTION SiteUrl () AS String
+    IF AppDir().Upper() = "C:\WEB" THEN RETURN "http://" + SERVER.Name.Lower() + "/"
+    RETURN "http://" + SERVER.Name.Lower() + "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
+' The address SimPlayer opens.
+FUNCTION MovieUrl (id AS String) AS String
+    RETURN SiteUrl() + "movie.asp?v=" + id
+END FUNCTION
+
+' ---------------------------------------------------------------- accounts
+' The same as SimBook's: a salted hash, never the password; a session file
+' named by the cookie; a form token on everything that changes something.
+
+FUNCTION UserPath (u AS String) AS String
+    RETURN DATADIR + "\USERS\" + u + ".TXT"
+END FUNCTION
+
+FUNCTION UserExists (u AS String) AS Bool
+    IF NOT ValidName(u) THEN RETURN FALSE
+    RETURN FS.Exists(UserPath(u))
+END FUNCTION
+
+FUNCTION LoadUser (u AS String) AS Array OF String
+    RETURN FS.Read(UserPath(u)).Lines()
+END FUNCTION
+
+SUB SaveUser (u AS String, rec AS Array OF String)
+    FS.Write(UserPath(u), rec.Join(Chr(10)))
+END SUB
+
+FUNCTION Field (rec AS Array OF String, name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN rec
+        IF line.StartsWith(name + "=") THEN RETURN Unesc(line.Substring(name.Length + 1, line.Length - name.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB SetField (rec AS Array OF String, name AS String, value AS String)
+    VAR i AS Integer
+    FOR i = 0 TO rec.Count - 1
+        IF rec[i].StartsWith(name + "=") THEN
+            rec[i] = name + "=" + Esc(value)
+            RETURN
+        END IF
+    NEXT
+    rec.Add(name + "=" + Esc(value))
+END SUB
+
+' What a member is called. The sample movies belong to SimTube itself.
+FUNCTION NameOf (u AS String) AS String
+    IF u = "simtube" THEN RETURN "SimTube"
+    IF NOT UserExists(u) THEN RETURN u
+    RETURN Field(LoadUser(u), "name")
+END FUNCTION
+
+' Not real cryptography - SIM95 has none - but the password itself never
+' touches the disk.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION
+
+FUNCTION NewToken () AS String
+    RETURN Hex(268435456 + Rnd(1879048191))
+END FUNCTION
+
+FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
+    VAR rec AS Array OF String
+    VAR salt AS String
+    EnsureDisk()
+    IF NOT ValidName(u) THEN RETURN "Pick a user name of 3 to 8 letters or digits."
+    IF u = "simtube" OR FS.Exists(UserPath(u)) THEN RETURN "Somebody already has the name " + u + "."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    name = OneLine(Clip(name, MAXNAME))
+    IF name = "" THEN RETURN "Tell us your name."
+    salt = NewToken()
+    SetField(rec, "name", name)
+    SetField(rec, "salt", salt)
+    SetField(rec, "pass", Hash(salt, pw))
+    SetField(rec, "joined", TIME.Date)
+    SaveUser(u, rec)
+    RETURN ""
+END FUNCTION
+
+FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN FALSE
+    rec = LoadUser(u)
+    RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+SUB SignIn (u AS String)
+    VAR token AS String
+    EnsureDisk()
+    token = NewToken()
+    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u + Chr(10) + NewToken() + NewToken())
+    RESPONSE.SetCookie(COOKIE, token)
+END SUB
+
+FUNCTION SessionPath () AS String
+    VAR token AS String
+    token = REQUEST.Cookie(COOKIE)
+    IF token = "" OR token.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(token, "0123456789ABCDEF") THEN RETURN ""
+    RETURN DATADIR + "\SESSIONS\" + token + ".TXT"
+END FUNCTION
+
+SUB SignOut ()
+    VAR path AS String
+    path = SessionPath()
+    IF path <> "" THEN
+        IF FS.Exists(path) THEN FS.Delete(path)
+    END IF
+    RESPONSE.SetCookie(COOKIE, "")
+END SUB
+
+' Who the cookie says is signed in, or "". Also sets formToken.
+FUNCTION CurrentUser () AS String
+    VAR path AS String
+    VAR lines AS Array OF String
+    VAR u AS String
+    path = SessionPath()
+    IF path = "" THEN RETURN ""
+    IF NOT FS.Exists(path) THEN RETURN ""
+    lines = FS.Read(path).Lines()
+    IF lines.Count < 2 THEN RETURN ""
+    u = lines[0].Trim()
+    IF NOT UserExists(u) THEN RETURN ""
+    formToken = lines[1].Trim()
+    RETURN u
+END FUNCTION
+
+SUB RequireLogin ()
+    viewer = CurrentUser()
+    IF viewer = "" THEN RESPONSE.Redirect("index.asp?e=login")
+END SUB
+
+' Voyager sends SimTube's cookie with a form on any site, so the cookie alone
+' proves nothing: every form carries the session's token too.
+SUB RequireToken ()
+    VAR sent AS String
+    sent = REQUEST.Form("t")
+    IF sent = "" THEN sent = REQUEST.Query("t")
+    IF sent = "" OR sent <> formToken THEN RESPONSE.Redirect("index.asp?e=token")
+END SUB
+
+FUNCTION TokenField () AS String
+    RETURN "<input type=""hidden"" name=""t"" value=""" + formToken + """>"
+END FUNCTION
+
+FUNCTION TokenArg () AS String
+    RETURN "t=" + formToken
+END FUNCTION
+
+FUNCTION Counter (name AS String) AS Integer
+    VAR n AS Integer
+    n = Int(Val(ReadOr(DATADIR + "\" + name + ".TXT", "0"))) + 1
+    FS.Write(DATADIR + "\" + name + ".TXT", Str(n))
+    RETURN n
+END FUNCTION
+
+' ---------------------------------------------------------------- the movies
+
+FUNCTION AllVideos () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\VIDEOS.TXT", "").Lines()
+        IF line.Split("|").Count >= 13 THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' The line of movie id, or "".
+FUNCTION FindVideo (id AS String) AS String
+    VAR text AS String
+    VAR at AS Integer
+    IF NOT IsNumber(id) THEN RETURN ""
+    text = Chr(10) + ReadOr(DATADIR + "\VIDEOS.TXT", "")
+    at = text.IndexOf(Chr(10) + id + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    IF text.IndexOf(Chr(10)) >= 0 THEN text = text.Substring(0, text.IndexOf(Chr(10)))
+    RETURN text
+END FUNCTION
+
+FUNCTION VF (line AS String, i AS Integer) AS String
+    RETURN line.Split("|")[i]
+END FUNCTION
+
+FUNCTION VTitle (line AS String) AS String
+    RETURN Unesc(VF(line, 2))
+END FUNCTION
+
+' A movie's line, changed (more frames came).
+SUB ReplaceVideo (old AS String, line AS String)
+    VAR text AS String
+    text = (Chr(10) + ReadOr(DATADIR + "\VIDEOS.TXT", "")).Replace(Chr(10) + old + Chr(10), Chr(10) + line + Chr(10))
+    FS.Write(DATADIR + "\VIDEOS.TXT", text.Substring(1, text.Length - 1))
+END SUB
+
+FUNCTION Views (id AS String) AS Integer
+    RETURN Int(Val(ReadOr(DATADIR + "\VIEWS\" + id + ".TXT", "0")))
+END FUNCTION
+
+SUB AddView (id AS String)
+    EnsureDisk()
+    FS.Write(DATADIR + "\VIEWS\" + id + ".TXT", Str(Views(id) + 1))
+END SUB
+
+' How long a movie runs, as m:ss.
+FUNCTION RunTime (line AS String) AS String
+    VAR s AS Integer
+    s = Int(Val(VF(line, 4)) / MATH.Max(1, Val(VF(line, 5))))
+    RETURN Str(Int(s / 60)) + ":" + Str(100 + s MOD 60).Substring(1, 2)
+END FUNCTION
+
+FUNCTION Plural (n AS Integer, one AS String, many AS String) AS String
+    IF n = 1 THEN RETURN "1 " + one
+    RETURN Str(n) + " " + many
+END FUNCTION
+
+' ---------------------------------------------------------------- ratings
+
+FUNCTION RatingsOf (id AS String) AS String
+    RETURN ReadOr(DATADIR + "\RATINGS\" + id + ".TXT", "|")
+END FUNCTION
+
+' The average, times ten (so 4.5 stars is 45); 0 for none.
+FUNCTION Rating (id AS String) AS Integer
+    VAR r AS String
+    VAR sum AS Integer
+    VAR n AS Integer
+    FOR EACH r IN RatingsOf(id).Split("|")
+        IF r.Contains("=") THEN
+            sum = sum + Int(Val(r.Split("=")[1]))
+            n = n + 1
+        END IF
+    NEXT
+    IF n = 0 THEN RETURN 0
+    RETURN MATH.Round(sum * 10 / n)
+END FUNCTION
+
+FUNCTION RatingCount (id AS String) AS Integer
+    RETURN RatingsOf(id).Split("=").Count - 1
+END FUNCTION
+
+FUNCTION MyRating (id AS String, u AS String) AS Integer
+    VAR r AS String
+    FOR EACH r IN RatingsOf(id).Split("|")
+        IF r.StartsWith(u + "=") THEN RETURN Int(Val(r.Split("=")[1]))
+    NEXT
+    RETURN 0
+END FUNCTION
+
+' One rating each; rating again changes it.
+SUB Rate (id AS String, u AS String, stars AS Integer)
+    VAR out AS String
+    VAR r AS String
+    EnsureDisk()
+    out = "|"
+    FOR EACH r IN RatingsOf(id).Split("|")
+        IF r <> "" AND NOT r.StartsWith(u + "=") THEN out = out + r + "|"
+    NEXT
+    FS.Write(DATADIR + "\RATINGS\" + id + ".TXT", out + u + "=" + Str(Clamp(stars, 1, 5)) + "|")
+END SUB
+
+' Five stars, filled in gold as far as the rating goes.
+FUNCTION Stars (r AS Integer) AS String
+    VAR n AS Integer
+    VAR s AS String
+    n = Int((r + 5) / 10)
+    s = "<font color=""#FFB400""><b>" + "*****".Substring(0, n) + "</b></font><font color=""#C0C0C0""><b>" + "*****".Substring(0, 5 - n) + "</b></font>"
+    RETURN s
+END FUNCTION
+
+' ---------------------------------------------------------------- comments
+
+FUNCTION Comments (id AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\COMMENTS\" + id + ".TXT", "").Lines()
+        IF line.Split("|").Count >= 3 THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION AddComment (id AS String, u AS String, text AS String) AS String
+    text = text.Replace(Chr(13), "").Trim()
+    IF text = "" THEN RETURN "Write something first."
+    IF text.Length > MAXCOMMENT THEN RETURN "Keep comments under " + Str(MAXCOMMENT) + " characters."
+    EnsureDisk()
+    FS.Append(DATADIR + "\COMMENTS\" + id + ".TXT", Stamp() + "|" + u + "|" + Esc(text) + Chr(10))
+    RETURN ""
+END FUNCTION
+
+' The newest comments, as many as fit, newest first.
+FUNCTION CommentsHtml (all AS Array OF String) AS String
+    VAR out AS String
+    VAR p AS Array OF String
+    VAR i AS Integer
+    VAR shown AS Integer
+    IF all.Count = 0 THEN RETURN "<tr><td><font size=""2"" color=""#808080"">No comments yet. Be the first!</font></td></tr>"
+    FOR i = all.Count - 1 TO 0 STEP -1
+        IF shown >= COMMENTSHOWN OR out.Length > COMMENTROOM THEN BREAK
+        p = all[i].Split("|")
+        out = out + "<tr><td bgcolor=""#EEEEEE""><font size=""2""><b>" + H(NameOf(p[1])) + "</b> <font color=""#808080"">" + H(p[0]) + "</font><br>" + Br(Unesc(p[2])) + "</font></td></tr>"
+        shown = shown + 1
+    NEXT
+    IF shown < all.Count THEN out = out + "<tr><td><font size=""1"" color=""#808080"">The newest " + Str(shown) + " of " + Str(all.Count) + " comments.</font></td></tr>"
+    RETURN out
+END FUNCTION
+
+' ---------------------------------------------------------------- reading a movie
+
+' The header of a SimMovie: its lines up to the "." that ends it, or an
+' empty list when it is not one.
+FUNCTION HeadOf (lines AS Array OF String) AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    IF lines.Count = 0 THEN RETURN out
+    IF NOT lines[0].StartsWith("SIMMOVIE 1") THEN RETURN out
+    FOR i = 1 TO MATH.Min(lines.Count - 1, 40)
+        IF lines[i] = "." THEN
+            out.Add(".")
+            RETURN out
+        END IF
+        out.Add(lines[i])
+    NEXT
+    out.Clear()
+    RETURN out
+END FUNCTION
+
+FUNCTION Meta (head AS Array OF String, name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN head
+        IF line.StartsWith(name + "=") THEN RETURN line.Substring(name.Length + 1, line.Length - name.Length - 1)
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' What is wrong with a movie, or "". head is its header (HeadOf).
+FUNCTION CheckMovie (lines AS Array OF String, head AS Array OF String) AS String
+    VAR w AS Integer
+    VAR ht AS Integer
+    VAR fps AS Integer
+    IF head.Count = 0 THEN RETURN "That is not a SimMovie. A SimMovie starts with the line SIMMOVIE 1, and its header ends with a line holding just a full stop."
+    w = Int(Val(Meta(head, "width")))
+    ht = Int(Val(Meta(head, "height")))
+    fps = Int(Val(Meta(head, "fps")))
+    IF w < 16 OR w > 320 OR ht < 16 OR ht > 240 THEN RETURN "A SimMovie is from 16x16 to 320x240. This one says " + Str(w) + "x" + Str(ht) + "."
+    IF fps < 1 OR fps > 30 THEN RETURN "A SimMovie plays at 1 to 30 frames a second. This one says " + Str(fps) + "."
+    RETURN ""
+END FUNCTION
+
+FUNCTION IsFrame (line AS String) AS Bool
+    RETURN line <> "" AND NOT line.StartsWith("!") AND NOT line.StartsWith("'")
+END FUNCTION
+
+' ---------------------------------------------------------------- putting a movie up
+
+' Takes an uploaded (or sample) movie: cuts it into parts, draws its
+' thumbnail, and puts it on the shelf. Returns "" (and sets lastId) or what is wrong.
+FUNCTION ImportMovie (owner AS String, text AS String, title AS String, about AS String) AS String
+    VAR lines AS Array OF String
+    VAR head AS Array OF String
+    VAR body AS Array OF String
+    VAR line AS String
+    VAR problem AS String
+    VAR id AS String
+    VAR n AS Integer
+    VAR i AS Integer
+    VAR parts AS Integer
+    text = text.Replace(Chr(13), "")
+    IF text.Length > MAXUPLOAD THEN RETURN "That movie is too big for one upload (" + Str(Int(text.Length / 1024)) + "K). Upload the first " + Str(MAXUPLOAD / 1000) + "K, then add the rest with Add More Frames."
+    lines = text.Lines()
+    head = HeadOf(lines)
+    problem = CheckMovie(lines, head)
+    IF problem <> "" THEN RETURN problem
+    FOR i = head.Count + 1 TO lines.Count - 1
+        line = lines[i]
+        IF line.Length > PARTSIZE - 200 THEN RETURN "Line " + Str(i + 1) + " is too long: keep each frame and picture under " + Str(PARTSIZE - 200) + " characters."
+        IF IsFrame(line) THEN n = n + 1
+        IF line <> "" THEN body.Add(line)
+    NEXT
+    IF n = 0 THEN RETURN "That movie has no frames."
+    title = OneLine(Clip(title, MAXTITLE))
+    IF title = "" THEN title = OneLine(Clip(Meta(head, "title"), MAXTITLE))
+    IF title = "" THEN title = "Untitled"
+    about = Clip(about, MAXABOUT)
+    IF about = "" THEN about = Clip(Meta(head, "about"), MAXABOUT)
+    EnsureDisk()
+    id = Str(Counter("NEXTID"))
+    FS.MakeDir(DATADIR + "\MOVIES\" + id)
+    ' the header SimPlayer reads first, with the real count of frames
+    body.Insert(0, ".")
+    FOR i = head.Count - 2 TO 0 STEP -1
+        IF NOT head[i].StartsWith("title=") AND NOT head[i].StartsWith("frames=") THEN body.Insert(0, head[i])
+    NEXT
+    body.Insert(0, "frames=" + Str(n))
+    body.Insert(0, "title=" + title)
+    body.Insert(0, "SIMMOVIE 1")
+    parts = WriteParts(id, 0, "", body, 0)
+    FS.Append(DATADIR + "\VIDEOS.TXT", id + "|" + owner + "|" + Esc(title) + "|" + TIME.Date + "|" + Str(n) + "|" + Meta(head, "fps") + "|" + Meta(head, "width") + "|" + Meta(head, "height") + "|" + Str(parts) + "|" + Str(text.Length) + "|" + Esc(about) + "|" + Esc(OneLine(Clip(Meta(head, "author"), MAXNAME))) + "|" + Str(Clamp(Int(Val(Meta(head, "bg"))), 0, 15)) + Chr(10))
+    FS.Write(DATADIR + "\MOVIES\" + id + "\THUMB.PIC", Thumbnail(body, Int(Val(Meta(head, "width"))), Int(Val(Meta(head, "height"))), Clamp(Int(Val(Meta(head, "bg"))), 0, 15), Int(Val(Meta(head, "thumb")))))
+    lastId = id
+    RETURN ""
+END FUNCTION
+
+' Writes lines into parts of at most PARTSIZE characters, starting with
+' part done + 1, which begins with carry. start: the first line to write.
+' Returns how many parts there are now.
+FUNCTION WriteParts (id AS String, done AS Integer, carry AS String, lines AS Array OF String, start AS Integer) AS Integer
+    VAR i AS Integer
+    VAR cur AS String
+    cur = carry
+    FOR i = start TO lines.Count - 1
+        IF cur.Length + lines[i].Length + 1 > PARTSIZE AND cur <> "" THEN
+            done = done + 1
+            FS.Write(DATADIR + "\MOVIES\" + id + "\" + Str(done) + ".SMV", cur)
+            cur = ""
+        END IF
+        cur = cur + lines[i] + Chr(10)
+    NEXT
+    IF cur <> "" THEN
+        done = done + 1
+        FS.Write(DATADIR + "\MOVIES\" + id + "\" + Str(done) + ".SMV", cur)
+    END IF
+    RETURN done
+END FUNCTION
+
+' Add More Frames: a long movie goes up in pieces under 64K. A piece may start
+' with the movie's header (it is skipped), or be just more frame lines.
+FUNCTION AppendMovie (line AS String, text AS String) AS String
+    VAR id AS String
+    VAR lines AS Array OF String
+    VAR head AS Array OF String
+    VAR body AS Array OF String
+    VAR first AS Array OF String
+    VAR p AS Array OF String
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR parts AS Integer
+    VAR last AS String
+    VAR skip AS Integer
+    text = text.Replace(Chr(13), "")
+    IF text.Length > MAXUPLOAD THEN RETURN "That piece is too big for one upload. Keep each piece under " + Str(MAXUPLOAD / 1000) + "K."
+    lines = text.Lines()
+    head = HeadOf(lines)
+    IF head.Count > 0 THEN
+        IF Meta(head, "width") <> VF(line, 6) OR Meta(head, "height") <> VF(line, 7) THEN RETURN "That piece is " + Meta(head, "width") + "x" + Meta(head, "height") + "; the movie is " + VF(line, 6) + "x" + VF(line, 7) + "."
+    END IF
+    skip = 0
+    IF head.Count > 0 THEN skip = head.Count + 1
+    FOR i = skip TO lines.Count - 1
+        IF lines[i] = "" THEN CONTINUE
+        IF lines[i].StartsWith("SIMMOVIE") THEN RETURN "That piece has a header in the middle."
+        IF lines[i].Length > PARTSIZE - 200 THEN RETURN "Line " + Str(i + 1) + " is too long: keep each frame and picture under " + Str(PARTSIZE - 200) + " characters."
+        IF IsFrame(lines[i]) THEN n = n + 1
+        body.Add(lines[i])
+    NEXT
+    IF n = 0 THEN RETURN "That piece has no frames in it."
+    id = VF(line, 0)
+    parts = Int(Val(VF(line, 8)))
+    last = ReadOr(DATADIR + "\MOVIES\" + id + "\" + Str(parts) + ".SMV", "")
+    parts = WriteParts(id, parts - 1, last, body, 0)
+    n = n + Int(Val(VF(line, 4)))
+    ' part 1's header says how many frames there are
+    first = ReadOr(DATADIR + "\MOVIES\" + id + "\1.SMV", "").Lines()
+    FOR i = 0 TO MATH.Min(first.Count - 1, 40)
+        IF first[i] = "." THEN BREAK
+        IF first[i].StartsWith("frames=") THEN first[i] = "frames=" + Str(n)
+    NEXT
+    FS.Write(DATADIR + "\MOVIES\" + id + "\1.SMV", first.Join(Chr(10)))
+    p = line.Split("|")
+    p[4] = Str(n)
+    p[8] = Str(parts)
+    p[9] = Str(Int(Val(p[9])) + text.Length)
+    ReplaceVideo(line, p.Join("|"))
+    RETURN ""
+END FUNCTION
+
+' The manifest SimPlayer reads at movie.asp?v=N: what the movie is, and where its parts are.
+FUNCTION Manifest (line AS String) AS String
+    VAR s AS String
+    VAR i AS Integer
+    VAR id AS String
+    id = VF(line, 0)
+    s = "SIMMOVIE-PARTS 1" + Chr(10) _
+      + "title=" + VTitle(line) + Chr(10) _
+      + "author=" + Unesc(VF(line, 11)) + Chr(10) _
+      + "uploader=" + NameOf(VF(line, 1)) + Chr(10) _
+      + "width=" + VF(line, 6) + Chr(10) _
+      + "height=" + VF(line, 7) + Chr(10) _
+      + "fps=" + VF(line, 5) + Chr(10) _
+      + "frames=" + VF(line, 4) + Chr(10) _
+      + "bg=" + VF(line, 12) + Chr(10) _
+      + "parts=" + VF(line, 8) + Chr(10)
+    FOR i = 1 TO Int(Val(VF(line, 8)))
+        s = s + "part=movie.asp?v=" + id + "&p=" + Str(i) + Chr(10)
+    NEXT
+    RETURN s
+END FUNCTION
+
+' The installer leaves sample movies in C:\TUBEDATA\SEED. The first visit to
+' the front page puts them on the shelf, once each (SEEDED.TXT remembers).
+SUB Seed ()
+    VAR f AS String
+    VAR text AS String
+    VAR done AS String
+    IF NOT FS.Exists(DATADIR + "\SEED") THEN RETURN
+    done = ReadOr(DATADIR + "\SEEDED.TXT", "|")
+    FOR EACH f IN FS.List(DATADIR + "\SEED")
+        IF f.EndsWith("\") OR NOT f.Upper().EndsWith(".SMV") THEN CONTINUE
+        IF NOT done.Contains("|" + f.Upper() + "|") THEN
+            text = FS.Read(DATADIR + "\SEED\" + f)
+            IF ImportMovie("simtube", text, "", "") = "" THEN
+                done = done + f.Upper() + "|"
+                FS.Write(DATADIR + "\SEEDED.TXT", done)
+            END IF
+        END IF
+        FS.Delete(DATADIR + "\SEED\" + f)
+    NEXT
+END SUB
+
+' ---------------------------------------------------------------- thumbnails
+' A movie's picture is one of its frames (thumb= in its header, or the first),
+' drawn small into a .PIC the way SimPlayer would draw it on a canvas.
+
+VAR px AS Array OF Integer
+VAR tw AS Integer
+VAR th AS Integer
+VAR tk AS Real               ' thumbnail pixels to a movie pixel
+VAR pen AS Integer
+VAR paper AS Integer
+VAR tBg AS Integer
+VAR tPicNames AS Array OF String
+VAR tPicData AS Array OF String
+
+FUNCTION Thumbnail (body AS Array OF String, w AS Integer, ht AS Integer, bg AS Integer, want AS Integer) AS String
+    VAR frames AS Array OF Integer
+    VAR i AS Integer
+    VAR start AS Integer
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR row AS String
+    VAR out AS String
+    VAR digits AS String
+    VAR past AS Bool
+    digits = "0123456789ABCDEF"
+    tw = THUMBW
+    tk = THUMBW / w
+    th = Clamp(Int(ht * tk), 8, 80)
+    tPicNames.Clear()
+    tPicData.Clear()
+    ' which lines are frames (after the header's "."), and the pictures
+    FOR i = 0 TO body.Count - 1
+        IF NOT past THEN
+            IF body[i] = "." THEN past = TRUE
+        ELSEIF body[i].StartsWith("!") THEN
+            IF body[i].IndexOf("|") > 1 THEN
+                tPicNames.Add(body[i].Substring(1, body[i].IndexOf("|") - 1))
+                tPicData.Add(body[i].Substring(body[i].IndexOf("|") + 1, body[i].Length - body[i].IndexOf("|") - 1))
+            END IF
+        ELSEIF IsFrame(body[i]) THEN
+            frames.Add(i)
+        END IF
+    NEXT
+    tBg = bg
+    paper = bg
+    pen = 0
+    px.Clear()
+    FOR i = 1 TO tw * th
+        px.Add(bg)
+    NEXT
+    IF frames.Count > 0 THEN
+        want = Clamp(want, 0, frames.Count - 1)
+        start = want
+        WHILE start > 0 AND NOT body[frames[start]].StartsWith("*")
+            start = start - 1
+        END WHILE
+        FOR i = start TO want
+            ThumbFrame(body[frames[i]])
+        NEXT
+    END IF
+    out = "SIM95PIC " + Str(tw) + " " + Str(th)
+    FOR y = 0 TO th - 1
+        row = ""
+        FOR x = 0 TO tw - 1
+            row = row + digits.CharAt(px[y * tw + x])
+        NEXT
+        out = out + Chr(10) + row
+    NEXT
+    RETURN out + Chr(10)
+END FUNCTION
+
+SUB ThumbFrame (line AS String)
+    VAR c AS String
+    IF line.StartsWith("*") THEN
+        paper = tBg
+        ThumbClear()
+        pen = 0
+        line = line.Substring(1, line.Length - 1)
+    END IF
+    IF line = "-" OR line = "" THEN RETURN
+    FOR EACH c IN line.Split(";")
+        IF c <> "" THEN ThumbCmd(c)
+    NEXT
+END SUB
+
+SUB ThumbClear ()
+    VAR i AS Integer
+    FOR i = 0 TO px.Count - 1
+        px[i] = paper
+    NEXT
+END SUB
+
+FUNCTION TNums (s AS String, most AS Integer) AS Array OF Integer
+    VAR out AS Array OF Integer
+    VAR p AS String
+    FOR EACH p IN s.Split(",")
+        IF most > 0 AND out.Count >= most THEN BREAK
+        out.Add(Int(Val(p.Trim())))
+    NEXT
+    RETURN out
+END FUNCTION
+
+' A box of thumbnail pixels, in movie coordinates.
+SUB TBox (x AS Integer, y AS Integer, w AS Integer, ht AS Integer)
+    VAR x0 AS Integer
+    VAR y0 AS Integer
+    VAR x1 AS Integer
+    VAR y1 AS Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    x0 = Clamp(Int(x * tk), 0, tw)
+    y0 = Clamp(Int(y * tk), 0, th)
+    x1 = Clamp(MATH.Max(Int((x + w) * tk), x0 + 1), 0, tw)
+    y1 = Clamp(MATH.Max(Int((y + ht) * tk), y0 + 1), 0, th)
+    FOR j = y0 TO y1 - 1
+        FOR i = x0 TO x1 - 1
+            px[j * tw + i] = pen
+        NEXT
+    NEXT
+END SUB
+
+SUB TDot (x AS Integer, y AS Integer)
+    IF x >= 0 AND y >= 0 AND x < tw AND y < th THEN px[y * tw + x] = pen
+END SUB
+
+' A line, in thumbnail pixels.
+SUB TLine (x1 AS Real, y1 AS Real, x2 AS Real, y2 AS Real)
+    VAR n AS Integer
+    VAR i AS Integer
+    n = Int(MATH.Max(Abs(x2 - x1), Abs(y2 - y1))) + 1
+    FOR i = 0 TO n
+        TDot(Int(x1 + (x2 - x1) * i / n), Int(y1 + (y2 - y1) * i / n))
+    NEXT
+END SUB
+
+SUB ThumbCmd (c AS String)
+    VAR op AS String
+    VAR rest AS String
+    VAR n AS Array OF Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR k AS Integer
+    VAR r AS Real
+    VAR cx AS Real
+    VAR cy AS Real
+    op = c.CharAt(0)
+    rest = c.Substring(1, c.Length - 1)
+    SELECT CASE op
+        CASE "C"
+            pen = Clamp(Int(Val(rest)), 0, 15)
+        CASE "B"
+            paper = Clamp(Int(Val(rest)), 0, 15)
+        CASE "X"
+            ThumbClear()
+        CASE "F"
+            n = TNums(rest, 4)
+            IF n.Count = 4 THEN TBox(n[0], n[1], n[2], n[3])
+        CASE "R"
+            n = TNums(rest, 4)
+            IF n.Count = 4 THEN
+                TLine(n[0] * tk, n[1] * tk, (n[0] + n[2]) * tk, n[1] * tk)
+                TLine(n[0] * tk, (n[1] + n[3]) * tk, (n[0] + n[2]) * tk, (n[1] + n[3]) * tk)
+                TLine(n[0] * tk, n[1] * tk, n[0] * tk, (n[1] + n[3]) * tk)
+                TLine((n[0] + n[2]) * tk, n[1] * tk, (n[0] + n[2]) * tk, (n[1] + n[3]) * tk)
+            END IF
+        CASE "D", "O"
+            n = TNums(rest, 3)
+            IF n.Count = 3 THEN
+                cx = n[0] * tk
+                cy = n[1] * tk
+                r = n[2] * tk
+                IF op = "D" THEN
+                    FOR j = Int(cy - r) TO Int(cy + r)
+                        k = Int(MATH.Sqrt(MATH.Max(0, r * r - (j + 0.5 - cy) * (j + 0.5 - cy))))
+                        FOR i = Int(cx - k) TO Int(cx + k)
+                            TDot(i, j)
+                        NEXT
+                    NEXT
+                ELSE
+                    k = MATH.Max(8, Int(r * 7))
+                    FOR i = 0 TO k
+                        TDot(Int(cx + r * MATH.Cos(i * 2 * MATH.Pi / k)), Int(cy + r * MATH.Sin(i * 2 * MATH.Pi / k)))
+                    NEXT
+                END IF
+            END IF
+        CASE "L", "P"
+            n = TNums(rest, 0)
+            k = Int(n.Count / 2)
+            FOR i = 0 TO k - 2
+                TLine(n[i * 2] * tk, n[i * 2 + 1] * tk, n[i * 2 + 2] * tk, n[i * 2 + 3] * tk)
+            NEXT
+            IF op = "P" AND k > 2 THEN TLine(n[k * 2 - 2] * tk, n[k * 2 - 1] * tk, n[0] * tk, n[1] * tk)
+        CASE "Q"
+            n = TNums(rest, 0)
+            IF n.Count >= 6 THEN TPoly(n)
+        CASE "T"
+            ' text is too small to read in a thumbnail: a smudge for each letter
+            n = TNums(rest, 2)
+            i = rest.IndexOf(",")
+            IF n.Count = 2 AND i >= 0 THEN
+                rest = rest.Substring(i + 1, rest.Length - i - 1)
+                IF rest.IndexOf(",") >= 0 THEN
+                    rest = rest.Substring(rest.IndexOf(",") + 1, rest.Length - rest.IndexOf(",") - 1)
+                    FOR i = 0 TO MATH.Min(rest.Length, 60) - 1
+                        IF rest.CharAt(i) <> " " THEN TBox(n[0] + i * 7 + 1, n[1] + 3, 5, 7)
+                    NEXT
+                END IF
+            END IF
+        CASE "I"
+            n = TNums(rest, 2)
+            i = rest.IndexOf(",")
+            IF n.Count = 2 AND i >= 0 THEN
+                rest = rest.Substring(i + 1, rest.Length - i - 1)
+                IF rest.IndexOf(",") >= 0 THEN
+                    i = tPicNames.IndexOf(rest.Substring(rest.IndexOf(",") + 1, rest.Length - rest.IndexOf(",") - 1))
+                    IF i >= 0 THEN TPicture(n[0], n[1], tPicData[i])
+                END IF
+            END IF
+    END SELECT
+END SUB
+
+' A filled polygon, a row of thumbnail pixels at a time.
+SUB TPoly (n AS Array OF Integer)
+    VAR k AS Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR y AS Integer
+    VAR x AS Integer
+    VAR yy AS Real
+    VAR upper AS Real
+    VAR lower AS Real
+    VAR xs AS Array OF Real
+    k = Int(n.Count / 2)
+    upper = n[1]
+    lower = n[1]
+    FOR i = 1 TO k - 1
+        upper = MATH.Min(upper, n[i * 2 + 1])
+        lower = MATH.Max(lower, n[i * 2 + 1])
+    NEXT
+    FOR y = Int(upper * tk) TO Int(lower * tk)
+        yy = (y + 0.5) / tk
+        xs.Clear()
+        FOR i = 0 TO k - 1
+            j = (i + 1) MOD k
+            IF (n[i * 2 + 1] <= yy AND n[j * 2 + 1] > yy) OR (n[j * 2 + 1] <= yy AND n[i * 2 + 1] > yy) THEN xs.Add(n[i * 2] + (yy - n[i * 2 + 1]) * (n[j * 2] - n[i * 2]) / (n[j * 2 + 1] - n[i * 2 + 1]))
+        NEXT
+        xs.Sort()
+        FOR i = 0 TO xs.Count - 2 STEP 2
+            FOR x = Int(xs[i] * tk) TO Int(xs[i + 1] * tk)
+                TDot(x, y)
+            NEXT
+        NEXT
+    NEXT
+END SUB
+
+' A picture (SIM95PIC w h|row|row...), shrunk to fit.
+SUB TPicture (x AS Integer, y AS Integer, data AS String)
+    VAR rows AS Array OF String
+    VAR w AS Integer
+    VAR ht AS Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR sx AS Integer
+    VAR sy AS Integer
+    VAR c AS Integer
+    rows = data.Split("|")
+    IF rows.Count < 2 OR rows[0].Split(" ").Count < 3 THEN RETURN
+    w = Int(Val(rows[0].Split(" ")[1]))
+    ht = Int(Val(rows[0].Split(" ")[2]))
+    FOR j = Int(y * tk) TO Int((y + ht) * tk) - 1
+        sy = Int((j + 0.5) / tk) - y
+        IF sy < 0 OR sy >= ht OR sy + 1 >= rows.Count THEN CONTINUE
+        FOR i = Int(x * tk) TO Int((x + w) * tk) - 1
+            sx = Int((i + 0.5) / tk) - x
+            IF sx < 0 OR sx >= rows[sy + 1].Length THEN CONTINUE
+            c = "0123456789ABCDEF".IndexOf(rows[sy + 1].CharAt(sx).Upper())
+            IF c >= 0 THEN
+                pen = c
+                TDot(i, j)
+            END IF
+        NEXT
+    NEXT
+END SUB
+
+' ---------------------------------------------------------------- page furniture
+
+FUNCTION Top (title AS String) AS String
+    VAR s AS String
+    s = "<html><head><title>" + H(title) + " - SimTube</title></head>" _
+      + "<body bgcolor=""#FFFFFF"" text=""#000000"" link=""#0033CC"" vlink=""#663399"">" _
+      + "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr>" _
+      + "<td><a href=""index.asp""><font size=""6"" color=""#000000""><b>Sim</b></font><font size=""6"" color=""#FFFFFF""><b><font color=""#CC0000"">[</font>Tube<font color=""#CC0000"">]</font></b></font></a>" _
+      + "<br><font size=""1"" color=""#808080"">Your 16-colour television</font></td>" _
+      + "<td align=""right"" valign=""bottom""><font size=""2"">" _
+      + "<a href=""index.asp"">Home</a> | <a href=""top.asp"">Most Viewed</a> | <a href=""upload.asp"">Upload</a> | <a href=""simtube.htm"">Help</a>"
+    IF viewer <> "" THEN
+        s = s + " | <b>" + H(NameOf(viewer)) + "</b> (<a href=""logout.asp?" + TokenArg() + """>log out</a>)"
+    ELSE
+        s = s + " | <a href=""index.asp#login"">Log in</a>"
+    END IF
+    RETURN s + "</font></td></tr></table><table width=""100%"" cellpadding=""0"" cellspacing=""0""><tr><td bgcolor=""#CC0000""><font size=""1"">&nbsp;</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">SimTube on " + H(SERVER.Name) + " &middot; " + TIME.Date + " &middot; <a href=""simtube.htm"">About SimTube</a> &middot; <a href=""getplay.asp"">Get SimPlayer</a></font></center></body></html>"
+END FUNCTION
+
+FUNCTION BoxTop (title AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""0""><tr><td bgcolor=""#CC0000""><font color=""#FFFFFF"" size=""2""><b>" + title + "</b></font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Notice (text AS String) AS String
+    IF text = "" THEN RETURN ""
+    RETURN "<table width=""100%"" cellpadding=""4""><tr><td bgcolor=""#FFF9D7""><font size=""2"">" + H(text) + "</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Thumb (id AS String) AS String
+    RETURN "<a href=""watch.asp?v=" + id + """><img src=""thumb.asp?v=" + id + """ width=""80"" height=""60"" border=""1"" alt=""""></a>"
+END FUNCTION
+
+' One movie on a list: its picture, title, length, views and stars.
+FUNCTION VideoCell (line AS String) AS String
+    VAR id AS String
+    id = VF(line, 0)
+    RETURN "<td valign=""top"" width=""33%"">" + Thumb(id) + "<br><font size=""2""><a href=""watch.asp?v=" + id + """><b>" + H(VTitle(line)) + "</b></a></font><br>" _
+         + "<font size=""1"">" + RunTime(line) + " &middot; " + Plural(Views(id), "view", "views") + "<br>" + Stars(Rating(id)) + "<br>From: " + H(NameOf(VF(line, 1))) + "</font></td>"
+END FUNCTION
+
+' Movies, three to a row.
+FUNCTION Grid (lines AS Array OF String) AS String
+    VAR s AS String
+    VAR i AS Integer
+    IF lines.Count = 0 THEN RETURN "<p><font size=""2"" color=""#808080"">No movies here yet. <a href=""upload.asp"">Upload one!</a></font></p>"
+    s = "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr>"
+    FOR i = 0 TO lines.Count - 1
+        IF i > 0 AND i MOD 3 = 0 THEN s = s + "</tr><tr>"
+        s = s + VideoCell(lines[i])
+    NEXT
+    RETURN s + "</tr></table>"
+END FUNCTION
+
+' The newest movies first.
+FUNCTION Newest (most AS Integer) AS Array OF String
+    VAR all AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    all = AllVideos()
+    FOR i = all.Count - 1 TO 0 STEP -1
+        IF out.Count >= most THEN BREAK
+        out.Add(all[i])
+    NEXT
+    RETURN out
+END FUNCTION
+
+' The most watched movies first.
+FUNCTION MostViewed (most AS Integer) AS Array OF String
+    VAR all AS Array OF String
+    VAR keys AS Array OF String
+    VAR out AS Array OF String
+    VAR k AS String
+    VAR i AS Integer
+    all = AllVideos()
+    FOR i = 0 TO all.Count - 1
+        keys.Add(Str(Views(VF(all[i], 0))).PadLeft(9) + "|" + Str(100000 - i).PadLeft(6) + "|" + Str(i))
+    NEXT
+    keys.Sort()
+    keys.Reverse()
+    FOR EACH k IN keys
+        IF out.Count >= most THEN BREAK
+        out.Add(all[Int(Val(k.Split("|")[2]))])
+    NEXT
+    RETURN out
+END FUNCTION
