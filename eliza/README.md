@@ -1,6 +1,6 @@
 # ELIZA-95
 
-*A Large Language Model for the Information Superhighway.* Context window:
+*A Language Model of Certain Size for the Information Superhighway.* Context window:
 640K. Knowledge cutoff: 1995.
 
 A chatbot that is ELIZA underneath (Weizenbaum, 1966), dressed up with every
@@ -23,7 +23,37 @@ when it runs out of ideas.
 
 > I feel tired of my job → *Why do you feel tired of your job?*
 > My mother says I work too much → *Tell me more about your mother.*
-> Can you fly? → *As a large language model, I can do almost anything, except fly.*
+> Can you fly? → *As a Language Model of Certain Size, I can do almost anything, except fly.*
+
+**Keeping the conversation going.** At temperature 0.7 (the default) or 1.5:
+
+* **No repeats.** It remembers the last 40 lines it said, per visitor, and
+  picks something it hasn't said lately.
+* **Questions back.** Now and then it asks about you: what you do for fun,
+  your music, food, job, pets, where you are, your first computer. It
+  remembers the answers and brings them up later ("How is the painting
+  going?").
+* **Games that last several turns:**
+  * **"quiz me"**: computer trivia with a score;
+  * **"let's play rock paper scissors"**, with a running score;
+  * **"guess my number"**, 1 to 100: higher, lower.
+
+  "stop" ends a game.
+* **One-off fun:**
+  * **"tell me a joke"**, from 16 nerdy ones;
+  * **"flip a coin"**, **"roll a d20"**, **"8 ball, ..."**, and
+    **"horoscope"**.
+* **Moods and small talk:**
+  * sad, lonely, bored, tired, happy, angry and stressed each get a
+    real answer, plus something to do;
+  * so do "how are you", "lol", "ok", "bye", compliments, insults and
+    favourites;
+  * so do topics like music, movies, games, food, school, work, weather,
+    Y2K and the other SIM95 apps.
+* **Repeats from you.** Say the same thing twice and it notices.
+
+At temperature 0 it stays the classic, predictable ELIZA, which is what the
+tests use for exact answers.
 
 **The LLM tropes.**
 

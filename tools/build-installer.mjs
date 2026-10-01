@@ -247,7 +247,7 @@ const apps = {
   },
   eliza: {
     folder: "ELIZA",
-    vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with Language-Model-of-Certain-Size manners, games, jokes and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "ELIZA-95",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95
 ' in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to

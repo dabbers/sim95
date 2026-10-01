@@ -13,7 +13,7 @@ A series of programs for the sim95 playground
   time, achievements), with SimDOOM (a raycast 3D shooter) and Snake 95.
 * [`asksim/`](asksim/) – AskSim, an Ask Jeeves-style search engine with a
   real crawler that goes round every machine's web pages.
-* [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
+* [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with Language-Model-of-Certain-Size
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
   program with a JavaScript interpreter written in SPARK.

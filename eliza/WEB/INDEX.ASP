@@ -63,7 +63,7 @@ NEXT
 <body bgcolor="#FFFFFF" text="#000000" link="#008080" vlink="#008080"<% IF last <> "" THEN %> onload="Type_It"<% END IF %>>
 <table width="100%" cellpadding="6" cellspacing="0" bgcolor="#008080"><tr>
 <td><font size="6" color="#FFFFFF"><b>ELIZA-95</b></font><br>
-<font size="2" color="#E0FFFF">A Large Language Model for the Information Superhighway</font></td>
+<font size="2" color="#E0FFFF">A Language Model of Certain Size for the Information Superhighway</font></td>
 <td align="right" valign="bottom"><font size="1" color="#E0FFFF">context window: 640K &middot; knowledge cutoff: 1995 &middot; running on <%= H(NET.HostName.Lower()) %></font></td>
 </tr></table>
 <table width="100%" cellpadding="6" cellspacing="2">
@@ -71,7 +71,8 @@ NEXT
 <tr><td valign="top" width="90"><font size="2" color="#008080"><b>ELIZA-95</b></font></td><td><font size="2">
 Hello! I am ELIZA-95. I can answer questions, write SPARK programs, compose poetry, and apologise.
 Try: <i>build me a website about cats</i> &middot; <i>write a fizzbuzz program</i> &middot;
-<i>how many r's in strawberry?</i> &middot; <i>what is 12 times 7?</i> &middot; <i>I feel tired</i>
+<i>how many r's in strawberry?</i> &middot; <i>what is 12 times 7?</i> &middot; <i>I feel tired</i> &middot;
+<i>tell me a joke</i> &middot; <i>quiz me</i> &middot; <i>let's play rock paper scissors</i> &middot; <i>8 ball, will it rain?</i>
 </font></td></tr>
 <% ELSE %>
 <%= rows %>

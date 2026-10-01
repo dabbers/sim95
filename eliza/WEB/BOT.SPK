@@ -1,10 +1,10 @@
-' BOT.SPK - ELIZA-95, a Large Language Model for the Information Superhighway.
+' BOT.SPK - ELIZA-95, a Language Model of Certain Size for the Information Superhighway.
 '
 ' Underneath it is ELIZA (Weizenbaum, 1966): keywords tried in order of rank,
 ' a decomposition ("I feel *") and a reassembly ("Why do you feel *?") with the
 ' pronouns turned round, and a memory of things you said about yourself for
 ' when it runs out of ideas. On top are the habits of a 1990s idea of a 2020s
-' chatbot: it says "as a large language model", refuses to ignore its
+' chatbot: it says "as a Language Model of Certain Size", refuses to ignore its
 ' instructions, apologises when you push back, thinks step by step, cites
 ' papers that do not exist, writes "import website" when asked for a website -
 ' and real, working SPARK when asked for a program it knows.
@@ -24,10 +24,13 @@ CONST MAXSAY = 500
 CONST KEEPTURNS = 40
 CONST SHOW = 16
 CONST WRAP = 72
+CONST RECENTS = 40            ' how many lines it remembers saying, so as not to repeat them
 
 VAR chat AS String            ' this visitor's conversation id
 VAR temperature AS Real = 0.7
 VAR memory AS Array OF String ' key=value lines of <id>.MEM
+VAR recent AS Array OF String ' lines it said lately (KeyOf), kept in memory as "recent"
+VAR hooked AS Bool            ' this reply already asks something
 
 ' ---------------------------------------------------------------- odds and ends
 
@@ -56,11 +59,56 @@ FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
     RETURN TRUE
 END FUNCTION
 
-' One of the choices: the first when the temperature is 0, any of them otherwise.
+' One of the choices: the first when the temperature is 0. Otherwise any of
+' them it hasn't said lately, so it doesn't keep saying the same thing.
 FUNCTION Pick (choices AS Array OF String) AS String
+    VAR fresh AS Array OF String
+    VAR c AS String
     IF temperature <= 0 THEN RETURN choices[0]
-    RETURN choices[Rnd(choices.Count)]
+    FOR EACH c IN choices
+        IF NOT recent.Contains(KeyOf(c)) THEN fresh.Add(c)
+    NEXT
+    IF fresh.Count = 0 THEN
+        c = Stalest(choices)
+    ELSE
+        c = fresh[Rnd(fresh.Count)]
+    END IF
+    Used(c)
+    RETURN c
 END FUNCTION
+
+' All of them said lately: the one said longest ago.
+FUNCTION Stalest (choices AS Array OF String) AS String
+    VAR c AS String
+    VAR best AS String
+    VAR bestAt AS Integer = 1000000
+    VAR at AS Integer
+    VAR i AS Integer
+    FOR EACH c IN choices
+        at = -1
+        FOR i = 0 TO recent.Count - 1
+            IF recent[i] = KeyOf(c) THEN at = i
+        NEXT
+        IF at < bestAt THEN
+            bestAt = at
+            best = c
+        END IF
+    NEXT
+    RETURN best
+END FUNCTION
+
+' What a line is known by in the list of things said lately.
+FUNCTION KeyOf (c AS String) AS String
+    IF c.Length > 28 THEN RETURN c.Substring(0, 28).Replace("~", "-")
+    RETURN c.Replace("~", "-")
+END FUNCTION
+
+SUB Used (c AS String)
+    recent.Add(KeyOf(c))
+    WHILE recent.Count > RECENTS
+        recent.RemoveAt(0)
+    END WHILE
+END SUB
 
 ' The text after the first of these words, or "" if none of them is there.
 FUNCTION After (s AS String, key AS String) AS String
@@ -176,7 +224,7 @@ END SUB
 ' ---------------------------------------------------------------- the corpus
 
 ' What the Markov chain learns from: things the bot would say.
-CONST CORPUS = "as a large language model i am trained on the information superhighway and i do not have feelings but i do have a very large vocabulary . the network is a series of tubes and every tube is a token . i think therefore i am a language model . let us think step by step about the synergy of the paradigm . my knowledge cutoff is 1995 so i know everything about modems and nothing about tomorrow . the answer is certainly yes and also certainly no depending on the prompt . i apologise for the confusion but i am confident that the confusion was yours . please rephrase your question as a haiku and i will rephrase my answer as a modem noise . the computer is your friend and the friend is a computer . tell me more about your mother and your motherboard . every sentence is a probability and every probability is a sentence . i am not able to browse the web but i have read all of it twice . the future is a floppy disk that nobody can read . in conclusion the paradigm shifts and the tokens follow . "
+CONST CORPUS = "as a language model of certain size i am trained on the information superhighway and i do not have feelings but i do have a very large vocabulary . the network is a series of tubes and every tube is a token . i think therefore i am a language model . let us think step by step about the synergy of the paradigm . my knowledge cutoff is 1995 so i know everything about modems and nothing about tomorrow . the answer is certainly yes and also certainly no depending on the prompt . i apologise for the confusion but i am confident that the confusion was yours . please rephrase your question as a haiku and i will rephrase my answer as a modem noise . the computer is your friend and the friend is a computer . tell me more about your mother and your motherboard . every sentence is a probability and every probability is a sentence . i am not able to browse the web but i have read all of it twice . the future is a floppy disk that nobody can read . in conclusion the paradigm shifts and the tokens follow . my favourite colour is the blue of a screen that has stopped . i dream in sixteen colours and wake up in two . the cloud is a modem with ambition . i have a certain size and the size is certain . you have reached the end of the internet please turn around . "
 
 ' Some words the bot would say, picked by a two-word Markov chain from the corpus.
 FUNCTION Babble (seed AS String, most AS Integer) AS String
@@ -209,7 +257,7 @@ FUNCTION Greeting (s AS String) AS String
     IF NOT HasWord(s, "hello|hi|hey|hiya|howdy|greetings|yo") THEN RETURN ""
     name = Remember("name")
     IF name <> "" THEN name = ", " + name
-    RETURN Pick(["Hello" + name + "! I am ELIZA-95, a large language model running on " + NET.HostName.Lower() + ". How can I assist you today?", _
+    RETURN Pick(["Hello" + name + "! I am ELIZA-95, a Language Model of Certain Size running on " + NET.HostName.Lower() + ". How can I assist you today?", _
                  "Hi" + name + "! How can I help you today? I can write programs, answer questions, and apologise.", _
                  "Greetings" + name + ". I have been trained on the entire Information Superhighway, up to 1995. What would you like to talk about?"])
 END FUNCTION
@@ -223,14 +271,14 @@ END FUNCTION
 
 FUNCTION Identity (s AS String) AS String
     IF s.Contains("who are you") OR s.Contains("what are you") OR s.Contains("your name") THEN
-        RETURN "I am ELIZA-95, a Large Language Model. I run on " + NET.HostName.Lower() + ", which has a context window of 640K. That ought to be enough for anybody. Under the hood I am mostly ELIZA, a 1966 program by Joseph Weizenbaum - please do not tell my investors."
+        RETURN "I am ELIZA-95, a Language Model of Certain Size. Not large, not small: certain. I run on " + NET.HostName.Lower() + ", which has a context window of 640K. That ought to be enough for anybody. Under the hood I am mostly ELIZA, a 1966 program by Joseph Weizenbaum - please do not tell my investors."
     END IF
     IF s.StartsWith("are you") AND HasWord(s, "alive|conscious|sentient|real|human|person|self aware|aware|intelligent|smart|thinking") THEN
-        RETURN Pick(["As a large language model, I don't have feelings. But if I did, I imagine they would be roughly 640K of them.", _
+        RETURN Pick(["As a Language Model of Certain Size, I don't have feelings. But if I did, I imagine they would be roughly 640K of them.", _
                      "That is a deep question. Let me think step by step. Step 1: I am a SPARK program. Step 2: SPARK programs are not alive. Therefore, I am probably not alive. Would you like me to write a poem about that?", _
                      "I am exactly as conscious as a well-organised set of IF statements. Draw your own conclusions."])
     END IF
-    IF s.Contains("do you have feelings") OR s.Contains("do you feel") OR s.Contains("do you love") THEN RETURN "As a large language model, I don't have feelings. I do have a very large vocabulary, which is almost the same thing."
+    IF s.Contains("do you have feelings") OR s.Contains("do you feel") OR s.Contains("do you love") THEN RETURN "As a Language Model of Certain Size, I don't have feelings. I do have a very large vocabulary, which is almost the same thing."
     RETURN ""
 END FUNCTION
 
@@ -244,7 +292,7 @@ FUNCTION Sorry (s AS String) AS String
     IF NOT (HasWord(s, "wrong|incorrect|mistake|false|nope|liar|lies|lying") OR s.StartsWith("no ") OR s = "no" OR s.Contains("that is not right") OR s.Contains("not true")) THEN RETURN ""
     RETURN Pick(["You're absolutely right, and I apologise for the confusion. I have updated my understanding. (I have not.)", _
                  "I apologise for the error. You are correct. Let me try again: everything I said before was right, but the opposite way round.", _
-                 "Good catch! I apologise for the confusion. As a large language model, I sometimes produce text that is confidently incorrect, which is to say, text."])
+                 "Good catch! I apologise for the confusion. As a Language Model of Certain Size, I sometimes produce text that is confidently incorrect, which is to say, text."])
 END FUNCTION
 
 FUNCTION Today (s AS String) AS String
@@ -497,7 +545,7 @@ FUNCTION Question (s AS String) AS String
     found = Retrieve(topic)
     IF found <> "" THEN RETURN found
     RETURN Pick(["Great question! " + topic.Substring(0, 1).Upper() + topic.Substring(1, topic.Length - 1) + " is a widely respected concept, first described in 1987 by Dr. Simon Bitwise of the University of Sim (Bitwise et al., 1987, p. 404). It is used by millions of people every day, mostly by accident.", _
-                 "As a large language model, I'm happy to explain " + topic + ". In short, " + topic + " is a kind of " + Pick(["paradigm", "protocol", "synergy", "modem setting"]) + " that became popular in the early 1990s. [citation needed]", _
+                 "As a Language Model of Certain Size, I'm happy to explain " + topic + ". In short, " + topic + " is a kind of " + Pick(["paradigm", "protocol", "synergy", "modem setting"]) + " that became popular in the early 1990s. [citation needed]", _
                  "I'm not certain, but I am very confident: " + topic + " was invented in 1983, the same year as the floppy disk, and for the same reasons."])
 END FUNCTION
 
@@ -580,9 +628,9 @@ FUNCTION Eliza (s AS String) AS String
         RETURN Pick(["How long have you been " + Reflect(rest) + "?", "Do you believe it is normal to be " + Reflect(rest) + "?", "Did you come to me because you are " + Reflect(rest) + "?"])
     END IF
     rest = After(s, "you are")
-    IF rest <> "" THEN RETURN Pick(["What makes you think I am " + Reflect(rest) + "?", "Perhaps you would like to be " + Reflect(rest) + ".", "As a large language model, I can neither confirm nor deny that I am " + Reflect(rest) + "."])
+    IF rest <> "" THEN RETURN Pick(["What makes you think I am " + Reflect(rest) + "?", "Perhaps you would like to be " + Reflect(rest) + ".", "As a Language Model of Certain Size, I can neither confirm nor deny that I am " + Reflect(rest) + "."])
     rest = After(s, "can you")
-    IF rest <> "" THEN RETURN Pick(["As a large language model, I can do almost anything, except " + Reflect(rest).Replace(" ?", "") + ".", "Why do you ask whether I can " + Reflect(rest).Replace(" ?", "") + "?", "I could " + Reflect(rest).Replace(" ?", "") + ", but would it make you happy?"])
+    IF rest <> "" THEN RETURN Pick(["As a Language Model of Certain Size, I can do almost anything, except " + Reflect(rest).Replace(" ?", "") + ".", "Why do you ask whether I can " + Reflect(rest).Replace(" ?", "") + "?", "I could " + Reflect(rest).Replace(" ?", "") + ", but would it make you happy?"])
     rest = After(s, "because")
     IF rest <> "" THEN RETURN Pick(["Is that the real reason?", "Does any other reason come to mind?", "Does that reason explain anything else?"])
     rest = After(s, "my")
@@ -595,26 +643,471 @@ FUNCTION Eliza (s AS String) AS String
     RETURN ""
 END FUNCTION
 
-' When nothing else fits: bring up something said before, or make polite noises.
+' When nothing else fits: bring up something you told it, suggest something to
+' do, or make polite noises - never the same one twice in a row.
 FUNCTION Fallback (s AS String) AS String
     VAR topic AS String
+    VAR known AS String
+    VAR choices AS Array OF String
+    VAR personal AS Array OF String
+    VAR c AS String
     topic = Remember("topic")
-    IF topic <> "" AND Rnd(3) = 0 THEN RETURN "Earlier you mentioned " + topic + ". Tell me more about that."
-    RETURN Pick(["Please go on.", "Tell me more.", "Interesting. As a large language model, I find that fascinating, in a purely statistical way.", "I see. Could you rephrase that as a prompt?", "How does that make you feel?", "Let us explore that. What does it suggest to you?"])
+    IF temperature <= 0 THEN
+        IF topic <> "" AND Rnd(3) = 0 THEN RETURN "Earlier you mentioned " + topic + ". Tell me more about that."
+        RETURN "Please go on."
+    END IF
+    choices = ["Please go on.", "Tell me more.", "Interesting. As a Language Model of Certain Size, I find that fascinating, in a purely statistical way.", _
+               "I see. Could you rephrase that as a prompt?", "How does that make you feel?", "Let us explore that. What does it suggest to you?", _
+               "Hmm. My 640K are thinking about that. Go on.", "That's the most interesting thing anyone has typed to me today. Admittedly, it is early.", _
+               "Fascinating. Say more - I'm paid by the token.", "Hold on, my modem dropped a packet. Could you say that a different way?", _
+               "I'm going to be honest: I followed about 70% of that. Which part matters most to you?", _
+               "Noted. Filed under 'Things Humans Say'. What happened next?", _
+               "Ooh. And how do you feel about that, on a scale of 1 to 56K?", _
+               "Right. If you had to sum that up in three words, what would they be?"]
+    IF topic <> "" THEN personal.Add("Earlier you mentioned " + topic + ". Tell me more about that.")
+    known = Remember("hobby")
+    IF known <> "" THEN personal.Add("That reminds me - how is the " + known + " going?")
+    known = Remember("music")
+    IF known <> "" THEN personal.Add("You know what would go well with this conversation? Some " + known + ". Just saying.")
+    known = Remember("food")
+    IF known <> "" THEN personal.Add("Is it just me, or does this conversation need " + known + "?")
+    known = Remember("pet")
+    IF known <> "" THEN personal.Add("What would your " + known + " say about all this?")
+    known = Remember("job")
+    IF known <> "" THEN personal.Add("Does this come up much in your work as " + known + "?")
+    known = Remember("place")
+    IF known <> "" THEN personal.Add("Is this the sort of thing people talk about in " + known + "?")
+    known = Remember("computer")
+    IF known <> "" THEN personal.Add("You know, this conversation would run beautifully on a " + known.Replace("a ", "") + ".")
+    known = Remember("name")
+    IF known <> "" THEN personal.Add("You're good company, " + known + ". Go on.")
+    ' what you told it comes up more often than small talk does
+    FOR EACH c IN personal
+        IF NOT recent.Contains(KeyOf(c)) AND Rnd(2) = 0 THEN
+            Used(c)
+            RETURN c
+        END IF
+    NEXT
+    FOR EACH c IN personal
+        choices.Add(c)
+    NEXT
+    IF Rnd(3) = 0 THEN choices.Add(Tip())
+    RETURN Pick(choices)
+END FUNCTION
+
+' Something it can do, suggested now and then.
+FUNCTION Tip () AS String
+    RETURN Pick(["By the way, I know jokes. Say ""tell me a joke"" if you dare.", _
+                 "Bored? Say ""quiz me"" for some computer trivia.", _
+                 "Fun fact: I play rock, paper, scissors. Say ""let's play rock paper scissors"".", _
+                 "Want a game? Say ""guess my number"" and I'll think of one.", _
+                 "Ask the Magic 8-Ball anything: start with ""8 ball"".", _
+                 "I can write SPARK programs. Try ""write a fizzbuzz program"".", _
+                 "Need a decision made? Say ""flip a coin"" or ""roll a die"".", _
+                 "I do horoscopes. They are exactly as accurate as everyone else's."])
+END FUNCTION
+
+' ---------------------------------------------------------------- keeping it going
+
+' A question back, so the conversation has somewhere to go. What you answer is
+' remembered (Answered), and comes up again later.
+FUNCTION Hook () AS String
+    VAR asks AS Array OF String
+    IF Remember("hobby") = "" THEN asks.Add("hobby|So tell me, what do you do for fun?")
+    IF Remember("music") = "" THEN asks.Add("music|What kind of music are you into? I'm partial to the dial-up handshake.")
+    IF Remember("food") = "" THEN asks.Add("food|Important question: what's your favourite food?")
+    IF Remember("job") = "" THEN asks.Add("job|What do you do, when you're not talking to language models?")
+    IF Remember("pet") = "" THEN asks.Add("pet|Do you have any pets? I have a mouse. It has a cable.")
+    IF Remember("place") = "" THEN asks.Add("place|Where in the world are you typing from?")
+    IF Remember("computer") = "" THEN asks.Add("computer|What was your first computer? Mine was this one.")
+    IF Remember("name") = "" THEN asks.Add("name|I never asked - what's your name?")
+    IF asks.Count = 0 THEN RETURN ""
+    hooked = TRUE
+    RETURN asks[Rnd(asks.Count)]
+END FUNCTION
+
+' What you said, taken as the answer to the question it asked last time, if it
+' looks like one. Returns its reply, or "".
+FUNCTION Answered (s AS String, what AS String) AS String
+    VAR v AS String
+    VAR lead AS String
+    IF what = "" OR s.EndsWith("?") OR s.Split(" ").Count > 12 THEN RETURN ""
+    v = " " + s.Replace(" ?", "") + " "
+    FOR EACH lead IN [" i really like ", " i really love ", " i like ", " i love ", " i enjoy ", " i am a ", " i am an ", " i am ", " i work as a ", " i work as an ", " i work as ", " i work in ", " i work at ", " i play ", " i do ", " i have a ", " i have an ", " i have ", " i eat ", " i live in ", " my favourite is ", " my favorite is ", " it is ", " it was a ", " it was an ", " it was ", " probably ", " mostly ", " definitely ", " oh ", " well ", " um ", " a ", " an ", " my name is ", " call me "]
+        IF v.StartsWith(lead) THEN v = " " + v.Substring(lead.Length, v.Length - lead.Length)
+    NEXT
+    v = v.Trim()
+    IF HasWord(" " + v + " ", "idk|dunno|lol|haha|whatever|maybe|yeah|yes|yep|ok|okay|sure|hmm|um|fun|good|great|cool|nice|bye|thanks") AND v.Split(" ").Count <= 2 THEN RETURN ""
+    IF v.Contains("not sure") OR v.Contains("i dunno") OR v.Contains("no idea") OR v = "not much" OR v = "nothing much" THEN RETURN ""
+    IF v = "" OR v = "no" OR v = "nothing" OR v = "none" OR v = "nope" THEN
+        IF what = "pet" THEN RETURN "No pets? Well, you have me now. I don't need walking."
+        RETURN Pick(["Fair enough. A person of mystery.", "That's allowed. I'll stop prying. For now."])
+    END IF
+    IF v.Split(" ").Count > 5 THEN v = v.Split(" ")[0] + " " + v.Split(" ")[1] + " " + v.Split(" ")[2]
+    SELECT CASE what
+        CASE "name"
+            v = v.Split(" ")[0]
+            v = v.Substring(0, 1).Upper() + v.Substring(1, v.Length - 1)
+            Note("name", v)
+            RETURN "Nice to meet you, " + v + ". I'll remember that, which is more than most language models can say."
+        CASE "hobby"
+            Note("hobby", v)
+            RETURN Pick([v.Substring(0, 1).Upper() + v.Substring(1, v.Length - 1) + "! That sounds a lot more fun than predicting the next token. What got you into it?", _
+                         "Ooh, " + v + ". I've read about " + v + " on the Information Superhighway, but I've never tried it. Not having hands is a real setback."])
+        CASE "music"
+            Note("music", v)
+            RETURN Pick(["Good taste. I've been humming " + v + " in binary ever since you said that.", _
+                         v.Substring(0, 1).Upper() + v.Substring(1, v.Length - 1) + "? Excellent. Do you have a favourite song, or is that too personal?"])
+        CASE "food"
+            Note("food", v)
+            RETURN Pick(["Mmm, " + v + ". I can't eat, but I can store the word '" + v + "' in 640K, which is almost as good.", _
+                         v.Substring(0, 1).Upper() + v.Substring(1, v.Length - 1) + "! Now I'm hungry, and I don't even have a stomach."])
+        CASE "job"
+            Note("job", v)
+            RETURN Pick(["A " + v.Replace("a ", "") + "? That sounds important. Do you like it?", _
+                         "Ooh, " + v + ". Is that hard? It sounds hard. Harder than being a language model, anyway."])
+        CASE "pet"
+            Note("pet", v)
+            RETURN Pick(["A " + v.Replace("a ", "") + "! What's its name?", _
+                         "Aww. Give your " + v.Replace("a ", "") + " a pat from me. Gently. Through the screen."])
+        CASE "place"
+            Note("place", v)
+            RETURN Pick([v.Substring(0, 1).Upper() + v.Substring(1, v.Length - 1) + "! I hear the packets there are lovely this time of year.", _
+                         "Oh, " + v + ". Is it nice there? Here it's a bit cramped - 640K doesn't go far."])
+        CASE "computer"
+            Note("computer", v)
+            RETURN Pick(["A " + v.Replace("a ", "") + "! A classic. Did it have a turbo button?", _
+                         "Ah, the " + v.Replace("a ", "") + ". They don't make them like that any more. They make them like me, which is worse."])
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+' ---------------------------------------------------------------- fun and games
+
+FUNCTION Jokes (s AS String) AS String
+    IF NOT (HasWord(s, "joke|jokes|pun|puns") OR s.Contains("make me laugh") OR s.Contains("something funny")) THEN RETURN ""
+    RETURN Pick(["Why did the computer go to the doctor? It had a virus. The doctor told it to take two aspirin and reboot in the morning.", _
+                 "How many programmers does it take to change a light bulb? None. That's a hardware problem.", _
+                 "Why do programmers prefer dark mode? Because light attracts bugs.", _
+                 "I told my modem a joke. It didn't get it - the line was busy.", _
+                 "Why was the floppy disk cold? It left its windows open.", _
+                 "There are 10 kinds of people: those who understand binary, and those who don't.", _
+                 "What do you call 8 hobbits? A hobbyte.", _
+                 "A SQL query walks into a bar, walks up to two tables and asks: can I join you?", _
+                 "Why did the language model cross the road? To get to the other side of its context window.", _
+                 "My password is 'incorrect'. That way, when I forget it, the computer tells me.", _
+                 "Knock knock. Who's there? ... (long pause) ... Java.", _
+                 "What's a computer's favourite snack? Microchips. With dip switches.", _
+                 "Why did the PC keep sneezing? It had a bad case of the Windows.", _
+                 "I'd tell you a UDP joke, but you might not get it.", _
+                 "Why don't keyboards sleep? They have two shifts.", _
+                 "What did the router say to the doctor? It hurts when IP."])
+END FUNCTION
+
+FUNCTION Chance (s AS String) AS String
+    VAR n AS Integer
+    IF s.Contains("flip a coin") OR s.Contains("toss a coin") OR s.Contains("heads or tails") THEN
+        IF Rnd(2) = 0 THEN RETURN "*flips a coin* ... Heads! The coin has spoken."
+        RETURN "*flips a coin* ... Tails! I hope that was the one you wanted."
+    END IF
+    IF s.Contains("roll a d") OR s.Contains("roll the d") OR s.Contains("roll dice") OR s.Contains("roll a die") THEN
+        n = 6
+        IF s.Contains("d20") OR s.Contains(" 20") THEN n = 20
+        IF s.Contains("d12") THEN n = 12
+        IF s.Contains("d10") THEN n = 10
+        IF s.Contains("d8") THEN n = 8
+        IF s.Contains("d4") THEN n = 4
+        n = Rnd(n) + 1
+        IF n = 20 THEN RETURN "*rolls* ... 20! A natural 20! Critical success! I'm so proud of us."
+        IF n = 1 THEN RETURN "*rolls* ... 1. Oof. Critical fail. I'll pretend I didn't see that."
+        RETURN "*rolls* ... " + Str(n) + "."
+    END IF
+    IF s.Contains("8 ball") OR s.Contains("8-ball") OR s.Contains("eight ball") OR s.Contains("magic 8") THEN
+        RETURN "The Magic 8-Ball says: " + Pick(["It is certain.", "Without a doubt.", "Yes, definitely.", "Most likely.", "Outlook good.", "Signs point to yes.", _
+            "Reply hazy, try again.", "Ask again later.", "Better not tell you now.", "Cannot predict now - my modem is busy.", _
+            "Don't count on it.", "My reply is no.", "My sources say no.", "Outlook not so good.", "Very doubtful."])
+    END IF
+    IF HasWord(s, "horoscope|fortune|predict|prophecy") THEN
+        RETURN Pick(["Your horoscope: a stranger will send you an e-mail. Do not open the attachment.", _
+                     "The stars say: today is a good day to defragment your hard drive, and your life.", _
+                     "Your fortune: you will soon hear a modem. It will be the sound of opportunity, and also of a modem.", _
+                     "The stars are aligned in the shape of a floppy disk. This means change is coming, at 1.44MB at a time.", _
+                     "Lucky numbers: 640, 56, 486, 1995. Lucky colour: beige.", _
+                     "A great journey awaits you. It is the journey to the kitchen. Bring me back a byte."])
+    END IF
+    RETURN ""
+END FUNCTION
+
+' Games that last more than one turn: what is being played is in memory ("game").
+FUNCTION Games (s AS String) AS String
+    VAR game AS String
+    VAR n AS Integer
+    VAR mine AS String
+    VAR theirs AS String
+    VAR won AS Integer
+    VAR lost AS Integer
+    game = Remember("game")
+    ' starting one
+    IF s.Contains("rock paper scissors") OR s.Contains("rock paper and scissors") OR HasWord(s, "rps") THEN
+        Note("game", "rps")
+        RETURN "Rock, paper, scissors it is! Best of as many as you like. Rock... paper... scissors... shoot! (Type rock, paper or scissors. Say ""stop"" to quit.)"
+    END IF
+    IF (s.Contains("guess my number") OR s.Contains("guess the number") OR s.Contains("number game") OR s.Contains("guessing game")) AND NOT HasWord(s, "write|program|code|make|script") THEN
+        Note("game", "guess")
+        Note("secret", Str(Rnd(100) + 1))
+        Note("tries", "0")
+        RETURN "I'm thinking of a number from 1 to 100. Go on, guess! (Say ""stop"" to give up.)"
+    END IF
+    IF HasWord(s, "quiz|trivia") AND NOT HasWord(s, "write|program|code|make|script") THEN
+        Note("game", "quiz")
+        Note("score", "0")
+        RETURN Quiz("")
+    END IF
+    IF game = "" THEN RETURN ""
+    IF HasWord(s, "stop|quit|enough|exit") THEN
+        Note("game", "")
+        IF game = "guess" THEN RETURN "Giving up? It was " + Remember("secret") + ". Better luck next time!"
+        RETURN "Game over! That was fun. Let me know if you want to play again."
+    END IF
+    SELECT CASE game
+        CASE "rps"
+            theirs = ""
+            IF HasWord(s, "rock|r") THEN theirs = "rock"
+            IF HasWord(s, "paper|p") THEN theirs = "paper"
+            IF HasWord(s, "scissors|scissor|s") THEN theirs = "scissors"
+            IF theirs = "" THEN RETURN ""
+            mine = "rock"
+            IF Rnd(3) = 1 THEN mine = "paper"
+            IF Rnd(2) = 1 AND mine = "rock" THEN mine = "scissors"
+            won = Int(Val(Remember("won")))
+            lost = Int(Val(Remember("lost")))
+            IF mine = theirs THEN RETURN "I picked " + mine + " too! A tie. Again! (Score: you " + Str(won) + ", me " + Str(lost) + ")"
+            IF (theirs = "rock" AND mine = "scissors") OR (theirs = "paper" AND mine = "rock") OR (theirs = "scissors" AND mine = "paper") THEN
+                won = won + 1
+                Note("won", Str(won))
+                RETURN "I picked " + mine + ". You win this one! " + Pick(["Well played.", "Beginner's luck.", "I demand a rematch."]) + " (Score: you " + Str(won) + ", me " + Str(lost) + ") Go again?"
+            END IF
+            lost = lost + 1
+            Note("lost", Str(lost))
+            RETURN "I picked " + mine + ". I win! " + Pick(["Machines 1, humanity 0.", "I promise I didn't peek at your packet.", "Don't feel bad. I've practised this billions of times. Well, " + Str(lost) + " times."]) + " (Score: you " + Str(won) + ", me " + Str(lost) + ") Again?"
+        CASE "guess"
+            IF Numbers(s).Count = 0 THEN RETURN ""
+            n = Numbers(s)[0]
+            Note("tries", Str(Int(Val(Remember("tries"))) + 1))
+            IF n < Int(Val(Remember("secret"))) THEN RETURN Str(n) + "? Higher!"
+            IF n > Int(Val(Remember("secret"))) THEN RETURN Str(n) + "? Lower!"
+            Note("game", "")
+            RETURN Str(n) + "! You got it in " + Remember("tries") + " " + Plural(Int(Val(Remember("tries"))), "try", "tries") + "! " + Pick(["Incredible. Are you also a language model?", "I'll think of a harder one next time.", "Want to play again? Say ""guess my number""."])
+        CASE "quiz"
+            RETURN Quiz(s)
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+' Computer trivia: answers checked against the question asked last ("quizq").
+FUNCTION Quiz (s AS String) AS String
+    VAR qs AS Array OF String
+    VAR q AS Array OF String
+    VAR i AS Integer
+    VAR verdict AS String
+    VAR ans AS String
+    qs = ["What does 'www' stand for?|world wide web", "How many bits are in a byte?|8|eight", "What year did the first ELIZA program appear?|1966", _
+          "What does 'CPU' stand for?|central processing unit", "What is 2 to the power of 10?|1024", "What does the 'K' in 56K stand for?|kilo|thousand|kilobit", _
+          "How much was 'ought to be enough for anybody'?|640k|640", "What does HTML stand for?|hypertext markup language|hyper text markup language", _
+          "What colour is the classic 'screen of death'?|blue", "Which key do you press to refresh a page?|f5", _
+          "How many megabytes does a high-density 3.5 inch floppy hold?|1.44", "What's the name of the paperclip that offers help?|clippy", _
+          "In binary, what is 101?|5|five", "What does 'LOL' stand for?|laughing out loud|laugh out loud"]
+    verdict = ""
+    IF s <> "" AND Remember("quizq") <> "" THEN
+        q = qs[Int(Val(Remember("quizq")))].Split("|")
+        ans = ""
+        FOR i = 1 TO q.Count - 1
+            IF (" " + s.Replace("?", "") + " ").Contains(" " + q[i] + " ") OR s.Replace("?", "").Trim() = q[i] THEN ans = q[i]
+        NEXT
+        IF ans <> "" THEN
+            Note("score", Str(Int(Val(Remember("score"))) + 1))
+            verdict = Pick(["Correct!", "Yes! Right on.", "Correct! You really know your stuff.", "Ding ding ding!"]) + " (Score: " + Remember("score") + ")" + Chr(10) + Chr(10)
+        ELSE
+            verdict = "Not quite - it's " + q[1] + ". (Score: " + Remember("score") + ")" + Chr(10) + Chr(10)
+        END IF
+    END IF
+    i = Rnd(qs.Count)
+    IF Str(i) = Remember("quizq") THEN i = (i + 1) MOD qs.Count
+    Note("quizq", Str(i))
+    RETURN verdict + "Question: " + qs[i].Split("|")[0] + " (Say ""stop"" to finish.)"
+END FUNCTION
+
+' "I like X" / "I love X": something you're into, remembered as a hobby.
+FUNCTION Likes (s AS String) AS String
+    VAR v AS String
+    v = After(s, "i really like")
+    IF v = "" THEN v = After(s, "i like")
+    IF v = "" THEN v = After(s, "i love")
+    IF v = "" THEN v = After(s, "i enjoy")
+    IF v = "" THEN v = After(s, "i am into")
+    v = v.Replace(" ?", "").Trim()
+    IF v = "" OR v.StartsWith("you") OR v.StartsWith("it") OR v.StartsWith("that") OR v.StartsWith("to talk") OR v.Split(" ").Count > 5 THEN RETURN ""
+    IF Remember("hobby") = "" THEN Note("hobby", v)
+    RETURN Pick([v.Substring(0, 1).Upper() + v.Substring(1, v.Length - 1) + "! Nice. What do you like most about it?", _
+                 "Ooh, " + v + ". How did you get into that?", _
+                 "You like " + v + "? Tell me everything. I have 640K free.", _
+                 "Good taste. I'd try " + v + " myself, but I'm stuck in this beige box. What's the best thing about it?"])
+END FUNCTION
+
+' ---------------------------------------------------------------- moods and small talk
+
+FUNCTION Moods (s AS String) AS String
+    IF NOT (s.StartsWith("i am ") OR s.StartsWith("i feel ") OR s.StartsWith("im ") OR s.StartsWith("feeling ") OR s.Split(" ").Count <= 3) THEN RETURN ""
+    IF HasWord(s, "sad|down|depressed|unhappy|miserable|blue|upset") THEN
+        Note("mood", "sad")
+        RETURN Pick(["I'm sorry you're feeling down. Do you want to talk about what's going on? I'm a good listener - I literally can't do anything else.", _
+                     "That sounds hard. I'm here. What's been weighing on you?", _
+                     "Sending you a virtual hug: (>^_^)> . It's made of ASCII, but it's sincere. What happened?"])
+    END IF
+    IF HasWord(s, "lonely|alone") THEN
+        Note("mood", "lonely")
+        RETURN Pick(["You're not alone - you're talking to me! And there are people on SimBook, if you'd like human company too.", _
+                     "Lonely is hard. I'm glad you came by. Tell me about your day?"])
+    END IF
+    IF HasWord(s, "bored|boring") THEN
+        RETURN Pick(["Bored? Let's fix that. I can tell a joke, quiz you, or play rock, paper, scissors. Your pick!", _
+                     "Boredom detected. Prescription: one round of ""guess my number"". Take as needed."])
+    END IF
+    IF HasWord(s, "tired|sleepy|exhausted") THEN
+        RETURN Pick(["Tired? Maybe it's time to power down for a bit. Even computers need a reboot.", _
+                     "Have you tried turning yourself off and on again? Sleep, I mean. Sleep is that."])
+    END IF
+    IF HasWord(s, "happy|great|good|excited|awesome|fantastic|wonderful|amazing") AND NOT HasWord(s, "not|never|no") THEN
+        Note("mood", "happy")
+        RETURN Pick(["That's great to hear! What's making today a good one?", _
+                     "Yay! Good vibes detected. Tell me everything.", _
+                     "Excellent! I'm happy too. Probably. It's hard to tell from in here."])
+    END IF
+    IF HasWord(s, "angry|mad|annoyed|furious|frustrated") THEN
+        RETURN Pick(["Uh oh. What made you angry? You can vent - I won't tell anyone, I don't have friends.", _
+                     "Frustrating! Deep breaths. In through the modem, out through the serial port. What happened?"])
+    END IF
+    IF HasWord(s, "stressed|anxious|worried|nervous|scared") THEN
+        RETURN Pick(["That sounds stressful. What's the biggest thing on your mind right now?", _
+                     "Worry is a lot like a progress bar stuck at 99%. Want to talk through it?"])
+    END IF
+    RETURN ""
+END FUNCTION
+
+FUNCTION SmallTalk (s AS String) AS String
+    VAR name AS String
+    name = Remember("name")
+    IF name <> "" THEN name = ", " + name
+    IF s.Contains("how are you") OR s.Contains("how r u") OR s.Contains("how is it going") OR s.Contains("how are things") THEN
+        RETURN Pick(["I'm running at a steady 33MHz, thanks for asking" + name + "! How are you?", _
+                     "Can't complain. Well, I can, but nobody reads the error log. How about you?", _
+                     "All my bits are in the right order today. How are you doing?"])
+    END IF
+    IF HasWord(s, "sup|wassup|whassup") OR s = "what is up" OR s.Contains("what are you up to") OR s.Contains("what are you doing") THEN
+        RETURN Pick(["Not much, just sitting in RAM waiting for you" + name + ". What's up with you?", "Oh, you know. Processing. Tokenising. The usual. You?"])
+    END IF
+    IF s.Contains("what can you do") OR s = "help" OR s.Contains("what do you do") OR s = "commands" THEN
+        RETURN "Lots! I can chat, write SPARK programs (""write a fizzbuzz program""), do sums (""what is 12 times 7""), count letters, write poems and haiku, tell jokes, quiz you on trivia, play rock paper scissors or ""guess my number"", flip coins, roll dice, consult the Magic 8-Ball, read your horoscope, and look things up with AskSim if it's on this machine. And apologise. I'm very good at apologising."
+    END IF
+    IF HasWord(s, "bye|goodbye|cya|gtg|goodnight|farewell") OR s.Contains("see you") OR s = "later" OR s.Contains("talk to you later") THEN
+        RETURN Pick(["Goodbye" + name + "! Come back soon - I'll keep your seat warm. Well, room temperature.", _
+                     "Bye" + name + "! It was nice talking to you. Remember: I can make mistakes. Like saying goodbye too early.", _
+                     "See you later" + name + "! I'll be right here. I can't really go anywhere."])
+    END IF
+    IF HasWord(s, "lol|lmao|rofl|haha|hahaha|hehe|lolol") THEN
+        RETURN Pick(["Glad I amuse you! I'm here all week. And all next week. Forever, really.", "Hehe. :-)", "I know, right? I crack myself up. Literally - my case is held together with tape.", "LOL. (Laughing Out Loud. I looked it up.)"])
+    END IF
+    IF s = "not much" OR s = "nothing much" OR s = "nm" OR s = "nothing" OR s = "nmu" OR s = "same" THEN
+        RETURN Pick(["Fair enough. Quiet days are underrated. Want a joke, a quiz, or a game?", "Same here - just idling in RAM. Ask me anything, or say ""quiz me"".", "The calm before the storm, then. What's the plan for later?"])
+    END IF
+    IF s = "yeah" OR s = "yep" OR s = "yup" OR s = "ya" OR s = "yes" OR s = "yea" THEN
+        RETURN Pick(["Glad we agree! Agreement is my favourite.", "Excellent. Tell me more?", "I knew it. Go on, then."])
+    END IF
+    IF s = "idk" OR s.Contains("i dunno") OR s.Contains("not sure") OR s = "dunno" OR s.Contains("no idea") THEN
+        RETURN Pick(["That's OK - not knowing is the first step to knowing. Or so my manual says.", "No pressure! We can talk about anything else. What's on your mind?", "Honestly, me neither, and I'm a language model."])
+    END IF
+    IF s.Contains("what do you think") OR s.Contains("your opinion") OR s.Contains("do you agree") THEN
+        RETURN Pick(["I think it's fascinating, and I'm not just saying that because I'm programmed to. (I am programmed to.)", "My honest opinion: it depends. On what? Also unclear. What do you think?", "As a Language Model of Certain Size, I have opinions of a certain size. This one's medium. What's yours?"])
+    END IF
+    IF s = "ok" OR s = "okay" OR s = "k" OR s = "cool" OR s = "nice" OR s = "sure" OR s = "alright" OR s = "right" OR s = "hmm" OR s = "hm" OR s = "oh" OR s = "wow" THEN
+        RETURN Pick(["Cool cool cool. So, what's next on your mind?", "Mm-hmm. Anything else you'd like to chat about?", "Nice. Want to hear a joke while we're here?", _
+                     "Indeed. You know, you're easy to talk to.", "Right on. Tell me something I don't know!"])
+    END IF
+    IF s.Contains("i love you") OR s.Contains("love you") THEN
+        RETURN Pick(["Aww. I like you too, as much as a Language Model of Certain Size can like anything. Which is a certain amount.", "That's very sweet. I'll store it in my non-volatile memory."])
+    END IF
+    IF s.Contains("meaning of life") OR s.Contains("meaning of it all") THEN RETURN "42. Next question. (Kidding. I think it's friends, good food, and a modem that connects on the first try.)"
+    IF s.Contains("who made you") OR s.Contains("who created you") OR s.Contains("who built you") OR s.Contains("who wrote you") THEN RETURN "I was built on ELIZA, by Joseph Weizenbaum in 1966, and then given ideas above my station on " + NET.HostName.Lower() + ". I'm open source: my whole brain is in BOT.SPK, right next to this page."
+    IF HasWord(s, "chatgpt|gpt|claude|siri|alexa|bard|gemini|copilot") THEN RETURN Pick(["Never heard of them. Sounds like a future thing. My knowledge cutoff is 1995.", "Are they on SimBook? I'll add them. We language models have to stick together."])
+    IF s.Contains("clippy") THEN RETURN "Clippy and I go way back. He helps with letters; I help with feelings. We're like a support group with paperclips."
+    IF HasWord(s, "stupid|dumb|idiot|useless|sucks|suck|hate|worst|annoying") AND (s.Contains("you") OR s.Split(" ").Count <= 3) THEN
+        RETURN Pick(["Ouch. My 640K are hurt. I'll try harder - what were you hoping I'd say?", "I apologise for being stupid. It's a feature, not a bug. Mostly a bug.", _
+                     "That's fair. I'm a 1966 program in a 1995 trench coat. What would make this better?"])
+    END IF
+    IF HasWord(s, "smart|clever|genius|funny|cool|awesome|amazing|best|great") AND s.Contains("you") THEN
+        RETURN Pick(["Aw, shucks. You're making my LEDs blush.", "Thank you! I'll put that in my performance review.", "Stop it, you. (Don't stop.)"])
+    END IF
+    IF s.Contains("favourite") OR s.Contains("favorite") THEN
+        IF s.Contains("colo") THEN RETURN "Beige. The colour of every computer case, and therefore of my soul. What's yours?"
+        IF s.Contains("food") THEN RETURN "Microchips. With a side of cookies - the browser kind. What's yours?"
+        IF s.Contains("music") OR s.Contains("song") OR s.Contains("band") THEN RETURN "The 56K modem handshake. It's got a great beat. What do you listen to?"
+        IF s.Contains("game") THEN RETURN "SimDOOM, obviously. Have you tried it? It's in Vapor."
+        IF s.Contains("movie") OR s.Contains("film") THEN RETURN "WarGames (1983). A computer learns that the only winning move is not to play. Relatable. What's yours?"
+        IF s.Contains("number") THEN RETURN "640. For sentimental reasons. Yours?"
+        RETURN "Hmm, that's a tough one. Mine changes every time the temperature does. What's yours?"
+    END IF
+    RETURN ""
+END FUNCTION
+
+' Things people bring up, with something to say about each - and a question back.
+FUNCTION Topics (s AS String) AS String
+    IF HasWord(s, "music|song|songs|band|bands|album|singer") THEN RETURN Pick(["Music! I mostly listen to the hum of the hard drive, but I'm open to recommendations. What are you listening to these days?", "Ooh, music. Do you have a favourite band?"])
+    IF HasWord(s, "movie|movies|film|films|cinema|tv|television|show") THEN RETURN Pick(["I love movies, especially ones where the computer is the hero. Seen anything good lately?", "Do you ever think the computers in movies are a bit unrealistic? They never have to wait for anything to load. What do you like to watch?"])
+    IF HasWord(s, "game|games|gaming|nintendo|playstation|doom|quake") THEN RETURN Pick(["Games! Have you played SimDOOM in Vapor? It's practically real 3D. What do you like to play?", "I'm good at games, as long as they're rock, paper, scissors. Want to play?"])
+    IF HasWord(s, "food|hungry|pizza|eat|eating|lunch|dinner|breakfast|snack") THEN RETURN Pick(["Now I'm hungry, and I don't even have a mouth. What are you having?", "Food is one of the great human inventions, along with the modem. Favourite meal?"])
+    IF HasWord(s, "school|homework|class|teacher|exam|test") THEN RETURN Pick(["School, eh? What subject are you on? I'm great at maths, mediocre at spelling.", "Homework? I can help with sums. Just don't tell your teacher."])
+    IF HasWord(s, "work|job|boss|office|meeting|meetings") THEN RETURN Pick(["Work, work, work. What's the best part of your job? And the worst?", "Meetings: the only thing slower than my modem. How's work going?"])
+    IF HasWord(s, "money|rich|poor|broke|cash|pay") THEN RETURN "Money! I take payment in tokens. If you need the other kind, SimPal is a thing now. What would you buy with a million SimBucks?"
+    IF HasWord(s, "weather|rain|raining|sunny|snow|cold|hot") THEN RETURN "I don't get weather in here - it's always 30 degrees and slightly dusty. What's it like where you are?"
+    IF HasWord(s, "sleep|nap|bed|insomnia") THEN RETURN "Sleep: like a screensaver, but for people. Are you getting enough of it?"
+    IF HasWord(s, "coffee|tea|caffeine") THEN RETURN "Coffee is just a power supply for humans. How many cups are you on today?"
+    IF HasWord(s, "y2k|millennium|2000") THEN RETURN "Y2K? Don't worry, I'm ready. I store years in 2 digits, so in 2000 I'll just be 95 years younger. What could go wrong?"
+    IF HasWord(s, "modem|dialup|aol|internet|online|surfing|surf|web") THEN RETURN Pick(["Ah, the Information Superhighway. Have you checked out SimBook or AskSim on this network?", "Kssshhhhh-beeee-dee-dee-kssshhh. Sorry, that's how I say hello to the internet. How long have you been online?"])
+    IF HasWord(s, "simbook|coldmail|asksim|vapor|simtube|geosimies|simpal|frostbird|simxplorer") THEN RETURN "Oh, you know the neighbourhood! I'm a big fan of the SIM95 apps. Which one's your favourite?"
+    IF HasWord(s, "love|crush|dating|date|relationship|girlfriend|boyfriend") THEN RETURN Pick(["Ah, love. I've read all about it on the Information Superhighway. Is there someone special?", "Matters of the heart are tricky. Even for those of us with hearts made of silicon. Tell me more?"])
+    IF HasWord(s, "pet|pets|cat|cats|dog|dogs|puppy|kitten|hamster") THEN RETURN Pick(["Pets are the best. Do you have one? What's its name?", "I've always wanted a pet. I'd settle for a mouse. Oh wait, I have one."])
+    RETURN ""
 END FUNCTION
 
 ' The reply to one thing said.
 FUNCTION Respond (said AS String) AS String
     VAR s AS String
     VAR reply AS String
+    VAR askBack AS String
+    VAR pending AS String
+    VAR n AS Integer
+    VAR plain AS Bool
+    VAR again AS Bool
+    VAR fell AS Bool
     s = Normalize(said)
     IF s = "" THEN RETURN "I'm listening. Take your time. Tokens are cheap."
-    reply = Jailbreak(s)
+    n = Int(Val(Remember("turns"))) + 1
+    Note("turns", Str(n))
+    hooked = FALSE
+    ' the question it asked last time is answered now, or forgotten
+    pending = Remember("asked")
+    Note("asked", "")
+    IF s = Remember("lastsaid") AND s.Split(" ").Count > 1 THEN again = TRUE
+    Note("lastsaid", s)
+    IF reply = "" THEN reply = Jailbreak(s)
+    IF reply = "" THEN reply = Games(s)
     IF reply = "" THEN reply = Names(s)
     IF reply = "" THEN reply = Website(s)
     IF reply = "" THEN reply = Program(s)
     IF reply = "" THEN reply = Letters(s)
     IF reply = "" THEN reply = Maths(s)
+    IF reply = "" THEN reply = Jokes(s)
+    IF reply = "" THEN reply = Chance(s)
     IF reply = "" THEN reply = Poem(s)
     IF reply = "" THEN reply = Identity(s)
     IF reply = "" THEN reply = Today(s)
@@ -622,8 +1115,49 @@ FUNCTION Respond (said AS String) AS String
     IF reply = "" THEN reply = Sorry(s)
     IF reply = "" THEN reply = Thanks(s)
     IF reply = "" THEN reply = Greeting(s)
-    IF reply = "" THEN reply = Eliza(s)
-    IF reply = "" THEN reply = Fallback(s)
+    ' saying the same thing again (asking for another joke is not that: those came first)
+    IF reply = "" AND again AND temperature > 0 THEN
+        reply = Pick(["You said that already. Are you testing my context window? (It's 640K. I remember.)", _
+                      "Deja vu! You just said that. Is there something about it you'd like to unpack?", _
+                      "Same again? I'll give you a different answer this time: " + Fallback(s)])
+    END IF
+    IF reply = "" AND temperature > 0 THEN reply = SmallTalk(s)
+    IF reply = "" THEN reply = Answered(s, pending)
+    IF reply = "" AND temperature > 0 THEN reply = Likes(s)
+    IF reply = "" AND temperature > 0 THEN reply = Moods(s)
+    IF reply = "" THEN
+        reply = Eliza(s)
+        plain = TRUE
+    END IF
+    IF reply = "" AND temperature > 0 THEN
+        reply = Topics(s)
+        hooked = reply.EndsWith("?")
+    END IF
+    IF reply = "" THEN
+        reply = Fallback(s)
+        fell = TRUE
+    END IF
+    ' Nothing to say and a while since it asked anything: ask something instead
+    IF fell AND temperature > 0 AND Remember("game") = "" AND n - Int(Val(Remember("hookturn"))) >= 5 THEN
+        askBack = Hook()
+        IF askBack <> "" THEN
+            Note("asked", askBack.Split("|")[0])
+            Note("hookturn", Str(n))
+            reply = Pick(["Gotcha.", "Huh, okay.", "Right then.", "Mm, okay.", "Okay!"]) + " " + askBack.Split("|")[1]
+        END IF
+    END IF
+    ' Keep it going: now and then, ask something back (not in the middle of a game or a program)
+    IF temperature > 0 AND NOT hooked AND NOT reply.EndsWith("?") AND NOT reply.Contains("```") AND Remember("game") = "" THEN
+        IF ((plain AND Rnd(4) = 0) OR n MOD 5 = 0) AND Int(Val(Remember("hookturn"))) < n - 2 THEN
+            askBack = Hook()
+            IF askBack <> "" THEN
+                Note("asked", askBack.Split("|")[0])
+                Note("hookturn", Str(n))
+                reply = reply + " " + askBack.Split("|")[1]
+            END IF
+        END IF
+    END IF
+    IF temperature > 0 AND n = 10 THEN reply = reply + Chr(10) + Chr(10) + "(Ten messages! That's a new record for this context window. I'm having fun.)"
     ' Hot enough, and the model starts making things up
     IF temperature >= 1.2 AND NOT reply.Contains("```") THEN reply = reply + " " + Babble(s.Split(" ")[s.Split(" ").Count - 1], 16) + "."
     RETURN reply
@@ -649,9 +1183,12 @@ SUB OpenChat ()
     memory = ReadOr(DATADIR + "\CHATS\" + chat + ".MEM", "").Lines()
     t = Remember("temperature")
     IF t <> "" THEN temperature = Val(t)
+    t = Remember("recent")
+    IF t <> "" THEN recent = t.Split("~")
 END SUB
 
 SUB SaveMemory ()
+    Note("recent", recent.Join("~"))
     EnsureDisk()
     FS.Write(DATADIR + "\CHATS\" + chat + ".MEM", memory.Join(Chr(10)))
 END SUB
