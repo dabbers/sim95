@@ -35,9 +35,13 @@ A series of programs for the sim95 playground
 * [`simstats/`](simstats/) – SimStats, Hitbox-style web statistics for any
   site on the network: a tracking tag, unique visitors, top pages, referrers,
   browsers, live hits and LED hit counters.
-* [`simdns/`](simdns/) – SimDNS, domain names for SIM95: a BIND-style name
-  server, SimNIC (a 1996 InterNIC registrar), `DIG`, a resolver Simxplorer
-  uses, and a web server that hosts many sites on one machine.
+* [`simnic/`](simnic/) – SimNIC, the network's one domain registrar (a 1996
+  InterNIC) and its BIND-style name server, on the central host
+  STARTHERE.56k.net: register `coolsite.sim` and point it at your machine.
+* [`simweb/`](simweb/) – simweb, for every machine with a web site: a web
+  server that serves many sites by name, Personal Web Manager to say which
+  pages each name gets (`coolsite.sim`, `coolbook.sim` for SimBook...), `DIG`,
+  and the resolver every program uses to look names up.
 * [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
   scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
@@ -50,12 +54,19 @@ A series of programs for the sim95 playground
 Paste an app's `INSTALL.SPK` into SPARK and press F5. On its own, a web app
 becomes its machine's home page: one machine per app. Install
 [SimHost](simhost/) first and they all share one machine instead, at
-`/book/`, `/mail/`, `/ask/`, `/geo/`, `/wiki/`, `/eliza/`, `/pal/`, `/tube/`, `/stats/` and `/dns/`; that is one browser tab for the
+`/book/`, `/mail/`, `/ask/`, `/geo/`, `/wiki/`, `/eliza/`, `/pal/`, `/tube/` and `/stats/`; that is one browser tab for the
 lot. Simxplorer installs as a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any
 machine.
+
+Domain names: SimNIC runs on STARTHERE.56k.net, and every program on every
+machine asks it about names like `coolsite.sim` (no setting needed). To put
+a site at a name, register it and point it at your machine at
+`http://starthere.56k.net/nic/`, then add it in Personal Web Manager
+([simweb](simweb/), on every Vapor store's shelves). The central host is one
+line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simdns). `SIM95_HTTPD=simdns/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
-runs a suite with SimDNS's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.
+wikisim, simnic, simweb, dnsapps). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

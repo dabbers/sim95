@@ -126,7 +126,7 @@ await test("BRAVO's store shows apps and games; Half-Life 3 is coming soon", asy
   await wait(() => B.pid() && B.items().length > 0, "Vapor on bravo", 30000);
   B.menu("Refresh");
   await wait(() => B.items().includes("- APPS -") && B.items().includes("- GAMES -"), "the headings: " + B.items().join(" / "));
-  assert.deepEqual(B.items().map((i) => i.trim()), ["- APPS -", "Clippy", "ELIZA-95", "Frostbird", "SimPlayer", "- GAMES -", "SimDOOM", "Snake 95", "Half-Life 3"]);
+  assert.deepEqual(B.items().map((i) => i.trim()), ["- APPS -", "Clippy", "ELIZA-95", "Frostbird", "SimPlayer", "simweb", "- GAMES -", "SimDOOM", "Snake 95", "Half-Life 3"]);
   await B.select("Half-Life 3");
   await wait(() => B.button("Coming soon"), "Coming soon");
   assert.equal(B.button("Coming soon").get("Enabled"), false);

@@ -27,6 +27,12 @@
 ' Fetches go one at a time and start in a timer tick of their own, inside a
 ' TRY with an empty CATCH (see SIM95-NOTES.md); pages come in through the
 ' socket's events.
+'
+' A store can be at a SimDNS name (http://store.coolsite.sim/vapor/): the
+' builder joins the resolver (simweb/src/RESOLVE.SPK, the Rs... names) on the
+' end, and the name is asked about in a tick of its own before the fetch.
+' The connection goes to the machine the name server names; the request
+' still says Host: store.coolsite.sim, so a web server with sites finds it.
 
 CONST HOME = "C:\GAMES"
 CONST ME = "C:\PROGRAMS\VAPOR.SPK"
@@ -726,6 +732,8 @@ SUB Tick ()
         RETURN
     END IF
     IF wantCatalog AND store <> "" THEN
+        ' a SimDNS name: ask first, in a tick of its own
+        IF RsNext(StoreHost()) THEN RETURN
         wantCatalog = FALSE
         StartFetch("catalog", store + "catalog.txt")
         RETURN
@@ -740,6 +748,7 @@ SUB Tick ()
         dlStart = SYS.Ticks
     END IF
     IF dlId <> "" THEN
+        IF RsNext(StoreHost()) THEN RETURN
         dlPart = dlPart + 1
         ' (last thing in the tick: it may be spoiled)
         StartFetch("part", store + dlId.Lower() + "/" + Str(dlPart) + ".txt")
@@ -794,6 +803,15 @@ FUNCTION Percent () AS Integer
     RETURN Int((dlPart - 1) * 100 / dlParts)
 END FUNCTION
 
+' The store's machine as written in its address (alpha, store.coolsite.sim).
+FUNCTION StoreHost () AS String
+    VAR h AS String
+    IF NOT store.Lower().StartsWith("http://") THEN RETURN ""
+    h = store.Substring(7, store.Length - 7)
+    IF h.Contains("/") THEN h = h.Substring(0, h.IndexOf("/"))
+    RETURN h
+END FUNCTION
+
 SUB StartFetch (what AS String, url AS String)
     VAR conn AS NET_Connection
     VAR host AS String
@@ -809,7 +827,8 @@ SUB StartFetch (what AS String, url AS String)
     path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
     host = host.Substring(0, host.IndexOf("/"))
     TRY
-        conn = web.Connect(host, 80)
+        ' (to the machine SimDNS named, if it named one; Host: as written)
+        conn = web.Connect(RsTarget(host), 80)
         conn.Tag = Str(fNumber)
         conn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: Vapor/2.0 (SIM95)")
     CATCH err
@@ -1226,7 +1245,7 @@ SUB ChangeStore ()
     askWin = GUI_Window.New("Vapor Store", 360, 110)
     askWin.Modal = TRUE
     l = GUI_Label.New(askWin)
-    l.Text = "Which machine is your store? (Any machine with Vapor" + EOL + "installed is one: type its name, like alpha.)"
+    l.Text = "Which machine is your store? (Any machine with Vapor" + EOL + "installed is one: type its name, like alpha, or a domain.)"
     l.SetBounds(10, 8, 340, 30)
     askBox = GUI_TextBox.New(askWin)
     askBox.Text = store

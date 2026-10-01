@@ -32,3 +32,13 @@ and closing it closes just that window.
 
 Tests: `node tools/aspsim/simtube.test.mjs` (the player) and
 `node tools/aspsim/simxplorer.test.mjs` (built in).
+
+## Domain names
+
+A movie can be at a name, like `http://movies.coolsite.sim/dance.smv`.
+SimPlayer asks the central name server (STARTHERE.56k.net, see
+[simweb](../simweb/)) which machine that is, in a tick of its own, then
+fetches from that machine with `Host: movies.coolsite.sim`. The builder joins
+the resolver (`simweb/src/RESOLVE.SPK`) onto `PLAYER.SPK`; the SimPlayer built
+into Simxplorer uses the browser's copy instead, so the two share one answer.
+With no answer, the name is a machine name, as before.

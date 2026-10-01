@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { browser, MESSAGE_LIMIT } from "./sim.mjs";
 import { Network } from "./network.mjs";
+import { withResolver } from "../simxplorer-source.mjs";
 import { parse, calls, cut, samples, Movie, PART } from "../make-movies.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -69,7 +70,7 @@ await test("the installer makes SimTube ALPHA's home page; the first visit puts 
   // SimPlayer, installed on its own
   const playerSaid = await install(alpha, "simplayer");
   assert.match(playerSaid, /SimPlayer is installed \(1 files\)/);
-  assert.equal(alpha.read("C:\\PROGRAMS\\PLAYER.SPK"), fs.readFileSync(path.join(root, "simplayer/src/PLAYER.SPK"), "utf8").replace(/\n?$/, "\n"));
+  assert.equal(alpha.read("C:\\PROGRAMS\\PLAYER.SPK"), withResolver(fs.readFileSync(path.join(root, "simplayer/src/PLAYER.SPK"), "utf8")).replace(/\n?$/, "\n"), "with the SimDNS resolver joined on");
   assert.match(installer("simplayer"), /^' VAPOR\|id=SIMPLAYR\|name=SimPlayer\|kind=program\|version=[0-9a-f]{8}\|category=Multimedia\|run=C:\\PROGRAMS\\PLAYER.SPK\|files=C:\\PROGRAMS\\PLAYER.SPK\|tasks=PLAYER\|/);
   await wait(() => alpha.kernel.ps().some((x) => x.name === "PLAYER"), "SimPlayer to start");
   for (const x of alpha.kernel.ps().filter((x) => x.name === "PLAYER")) alpha.kernel.kill(x.pid);

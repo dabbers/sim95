@@ -9,7 +9,7 @@
 '   ShRun(line)           all of the above at once, for a headless caller
 '   shOut                 what has been printed so far (the caller empties it)
 '
-' A command that needs the network (ssh, scp, sim-get update/install/upgrade)
+' A command that needs the network (ssh, scp, sim-get update/install/upgrade, host)
 ' is not run here: it sets jobWant and the rest of its pipeline waits until
 ' the caller runs the job and calls ShResume with the job's output.
 '
@@ -49,7 +49,7 @@ VAR lexOps AS Array OF String   ' "" for a word, or > >> <
 
 ' a pipeline waiting for a job
 VAR jobWant AS Bool
-VAR jobKind AS String           ' ssh, sshi, scp, get
+VAR jobKind AS String           ' ssh, sshi, scp, get, host
 VAR jobArgs AS Array OF String
 VAR pendStages AS Array OF String
 VAR pendIdx AS Integer
@@ -732,7 +732,7 @@ FUNCTION RunStage (raw AS String, input AS String, last AS Bool) AS String
 END FUNCTION
 
 FUNCTION Builtins () AS Array OF String
-    RETURN ["alias", "basename", "cat", "cd", "clear", "cp", "date", "echo", "env", "exit", "export", "false", "grep", "head", "help", "history", "hostname", "kill", "ls", "mkdir", "mv", "ps", "pwd", "rm", "rmdir", "run", "scp", "seq", "set", "sh", "sim-get", "sleep", "sort", "source", "ssh", "tail", "tee", "touch", "true", "unalias", "uname", "uniq", "unset", "wc", "which", "whoami"]
+    RETURN ["alias", "basename", "cat", "cd", "clear", "cp", "date", "echo", "env", "exit", "export", "false", "grep", "head", "help", "history", "host", "hostname", "kill", "ls", "mkdir", "mv", "nslookup", "ps", "pwd", "rm", "rmdir", "run", "scp", "seq", "set", "sh", "sim-get", "sleep", "sort", "source", "ssh", "tail", "tee", "touch", "true", "unalias", "uname", "uniq", "unset", "wc", "which", "whoami"]
 END FUNCTION
 
 ' One command, with its arguments and its input. Returns what it printed.
@@ -861,6 +861,10 @@ FUNCTION Command (argv AS Array OF String, input AS String) AS String
             RETURN ""
         CASE "sim-get", "simget"
             RETURN CmdSimGet(args)
+        CASE "host", "nslookup"
+            IF args.Count = 0 THEN RETURN Usage(cmd + " name [A|CNAME|MX|TXT|NS|SOA|ANY] [@server]")
+            Defer("host", args)
+            RETURN ""
     END SELECT
     RETURN RunExternal(argv)
 END FUNCTION
@@ -1701,6 +1705,7 @@ FUNCTION CmdHelp (args AS Array OF String) AS String
     h.Add("            hostname  uname  which  sleep  true  false  help")
     h.Add("  network   ssh [user@]host [command]   scp src dest (host:path)")
     h.Add("            sim-get update|list|search|show|install|remove|upgrade|store")
+    h.Add("            host name [type] [@server]   (or nslookup: ask the SimDNS name server)")
     h.Add("")
     h.Add("  cmd1 ; cmd2   cmd1 && cmd2   cmd1 || cmd2   cmd1 | cmd2")
     h.Add("  cmd > file    cmd >> file    cmd < file     $VAR  ${VAR}  $?  'text'")
@@ -1949,7 +1954,7 @@ FUNCTION CmdSimGet (args AS Array OF String) AS String
             RETURN ""
         CASE "store"
             IF args.Count < 2 THEN
-                IF StoreUrl() = "" THEN RETURN "No store yet. Choose one with: sim-get store <machine>" + EOL
+                IF StoreUrl() = "" THEN RETURN "No store yet. Choose one with: sim-get store <machine or domain>" + EOL
                 RETURN StoreUrl() + EOL
             END IF
             ' the same tidying as Vapor's Change Store

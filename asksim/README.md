@@ -102,3 +102,14 @@ node tools/aspsim/asksim.test.mjs       # run the tests
 The tests boot three machines on a pretend network, run the real `HTTPD.SPK`
 on each, install AskSim on one, crawl, search, take a machine offline, and
 crawl again.
+
+## Domain names
+
+The crawler follows links to sites by name (`http://www.fun.sim/`): it asks
+the central name server (STARTHERE.56k.net, see [simweb](../simweb/)) where
+each is, in a tick of its own, fetches from that machine with `Host:` saying
+the name, keeps the pages under the name, and minds that site's own
+`robots.txt`. The same site by path (`http://alpha/www.fun.sim/`, as simweb
+serves it to Voyager) is crawled under its name instead, so it is never in
+the index twice. With the name server down, names are machine names and the
+crawl goes on. The builder joins the resolver onto `CRAWLER.SPK`.

@@ -1,0 +1,47 @@
+' SimNIC's setup, run by its installer. SimNIC is the network's one
+' registrar and name server, and belongs on the central host only (the
+' builder fills in NICHOST from CENTRAL in tools/simxplorer-source.mjs).
+
+CONST NICHOST = "starthere.56k.net"
+
+VAR nicWin AS GUI_Window       ' only made to ask, below; then the installer ends with SYS.Exit
+
+' Is this the central host? If not, say so, and let the owner decide.
+FUNCTION NicHere () AS Bool
+    VAR box AS GUI_MessageBox
+    IF NET.HostName.Lower() = NICHOST THEN RETURN TRUE
+    nicWin = GUI_Window.New("SimNIC Setup", 10, 10)
+    box = GUI_MessageBox.New(nicWin)
+    box.Title = "SimNIC Setup"
+    box.Kind = "warn"
+    box.Buttons = "yesno"
+    box.Text = "This machine is " + NET.HostName.Upper() + ", not " + NICHOST.Upper() + "." + NL + NL _
+        + "SimNIC is meant to run only on the central host. Every machine on the network asks " + NICHOST.Upper() _
+        + " about domain names, so a SimNIC anywhere else is one nobody asks." + NL + NL _
+        + "Install it here anyway (for testing, say)?"
+    IF box.Show() THEN
+        Print("  (not the central host, " + NICHOST + ": installing anyway)")
+        RETURN TRUE
+    END IF
+    Print("SimNIC was not installed: it belongs on " + NICHOST + ".")
+    SYS.Exit(0)
+    RETURN FALSE
+END FUNCTION
+
+SUB NicSetup ()
+    IF NOT FS.Exists("C:\DNS") THEN FS.MakeDir("C:\DNS")
+    IF NOT FS.Exists("C:\DNS\NAMED.CNF") THEN
+        FS.Write("C:\DNS\NAMED.CNF", "; NAMED.CNF - the zones this machine's name server (NAMED.SPK) answers for," + NL _
+            + "; one a line:   primary  <domain>  <zone file in C:\DNS>" + NL _
+            + "; SimNIC, the registrar, adds a line for every domain it registers. Names" + NL _
+            + "; that aren't in any zone here can be asked of another SimDNS:" + NL _
+            + ";   forwarders  dnsbox" + NL)
+        Print("  wrote C:\DNS\NAMED.CNF")
+    END IF
+END SUB
+
+' After the files: the window made to ask (if any) would keep the
+' installer running, so it ends here.
+SUB NicDone ()
+    IF NOT IsNothing(nicWin) THEN SYS.Exit(0)
+END SUB

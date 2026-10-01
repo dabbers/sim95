@@ -1,0 +1,47 @@
+' simweb's setup, run by its installer: before the files are written, the
+' folders, the list of sites and the stock web server's backup; after them,
+' the web server restarted so the new one (with sites by name) takes over.
+
+CONST STOCKHTTPD = "C:\PROGRAMS\HTTPD.ORG"
+
+SUB WebSetup ()
+    VAR old AS String
+    IF NOT FS.Exists("C:\WEB\SITES") THEN FS.MakeDir("C:\WEB\SITES")
+    IF NOT FS.Exists("C:\WEB\VHOSTS.TXT") THEN
+        FS.Write("C:\WEB\VHOSTS.TXT", "; VHOSTS.TXT - sites the web server serves by name, one a line: name|folder" + NL _
+            + "; (folders in C:\WEB). Personal Web Manager (C:\PROGRAMS\PWM.SPK) keeps it;" + NL _
+            + "; you may edit it by hand too. For example:" + NL _
+            + ";   www.coolsite.sim|C:\WEB\SITES\COOLSITE" + NL _
+            + ";   coolbook.sim|C:\WEB\BOOK" + NL _
+            + ";   *.dab.sim|C:\WEB\SITES\DAB" + NL)
+        Print("  wrote C:\WEB\VHOSTS.TXT")
+    END IF
+    ' the stock web server is kept, once, so uninstalling can put it back
+    ' (SimDNS, which came before simweb, kept it the same way)
+    IF FS.Exists("C:\PROGRAMS\HTTPD.SPK") AND NOT FS.Exists(STOCKHTTPD) THEN
+        old = FS.Read("C:\PROGRAMS\HTTPD.SPK")
+        IF NOT old.Contains("simweb edition") AND NOT old.Contains("SimDNS edition") THEN
+            FS.Write(STOCKHTTPD, old)
+            Print("  kept the old web server as " + STOCKHTTPD)
+        END IF
+    END IF
+END SUB
+
+' Stops the running web server and starts the new one. If the web server is
+' off (Settings), it stays off: the new one starts when it is turned on.
+SUB RestartWeb ()
+    VAR task AS String
+    VAR was AS Bool
+    FOR EACH task IN SYS.Tasks()
+        IF task.Split("|")[1].Upper() = "HTTPD" THEN
+            SYS.Kill(Int(Val(task.Split("|")[0])))
+            was = TRUE
+        END IF
+    NEXT
+    IF was THEN
+        SYS.Run("C:\PROGRAMS\HTTPD.SPK")
+        Print("  restarted the web server: it serves the sites in C:\WEB\VHOSTS.TXT by name")
+    ELSE
+        Print("  the web server is off (Settings); the new one starts when it is turned on")
+    END IF
+END SUB

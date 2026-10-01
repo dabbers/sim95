@@ -35,6 +35,18 @@
 '
 ' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>.
 '
+' Domain names (SimDNS). The builder joins the resolver (simweb/src/RESOLVE.SPK,
+' the Rs... names) on the end, and C:\SYSTEM\RESOLV.INI says which name server
+' to ask. Mail for ann@coolsite.sim goes where the domain's MX record says
+' (the lowest preference), or failing that to the domain's own machine, or
+' failing that to a SIM95 machine called coolsite.sim, as before. Each
+' question takes a tick of its own, like a delivery.
+' And this server takes mail for a domain as its own when the domain's MX (or
+' the domain itself) points at this machine, or when the domain is listed in
+' C:\MAILDATA\DOMAINS.TXT, one a line: dab@coolsite.sim goes to the mailbox dab.
+' For a domain it hasn't looked up yet it answers 451 (try again shortly) and
+' asks in its next tick; the sending server tries again, as servers do.
+'
 ' One SIM95 quirk shapes the sending loop: a failed wait (a Connect nobody
 ' answers, a Receive that times out) can be caught with TRY, but the handler it
 ' happened in is spoiled: the error comes back at its next wait, and at the
@@ -66,6 +78,9 @@ VAR retry AS Integer = 30
 VAR tries AS Integer = 5
 VAR received AS Integer
 VAR sent AS Integer
+VAR checkDomains AS Array OF String  ' domains a RCPT TO was about, to look up
+VAR mineDom AS Array OF String       ' domains found to be ours, and when
+VAR mineAt AS Array OF Integer
 
 SUB Main ()
     win = GUI_Window.New("ColdMail Server", 460, 240)
@@ -166,6 +181,41 @@ FUNCTION IsLocal (host AS String) AS Bool
     RETURN h = "" OR h = "LOCALHOST" OR h = NET.HostName.Upper() OR h = NET.HostName.Upper().Split(".")[0]
 END FUNCTION
 
+' This machine, or a domain whose mail comes here: listed in DOMAINS.TXT, or
+' its MX (or the domain itself, with no MX) points at this machine.
+FUNCTION IsMine (host AS String) AS Bool
+    VAR h AS String
+    VAR line AS String
+    VAR i AS Integer
+    VAR target AS String
+    h = host.Trim().Lower()
+    IF IsLocal(h) THEN RETURN TRUE
+    IF NOT h.Contains(".") THEN RETURN FALSE
+    IF FS.Exists(DATA + "\DOMAINS.TXT") THEN
+        FOR EACH line IN FS.Read(DATA + "\DOMAINS.TXT").Lines()
+            IF line.Trim().Lower() = h THEN RETURN TRUE
+        NEXT
+    END IF
+    i = mineDom.IndexOf(h)
+    IF i >= 0 THEN
+        IF TIME.Now - mineAt[i] < 3600 THEN RETURN TRUE
+        mineDom.RemoveAt(i)
+        mineAt.RemoveAt(i)
+    END IF
+    IF NOT RsMailKnown(h) THEN RETURN FALSE
+    target = RsMailTarget(h).Lower()
+    IF NOT (IsLocal(target) OR target = NET.LocalAddress) THEN RETURN FALSE
+    mineDom.Add(h)
+    mineAt.Add(TIME.Now)
+    RETURN TRUE
+END FUNCTION
+
+' Must the name server be asked about this domain before we know whose it is?
+FUNCTION NeedsLookup (host AS String) AS Bool
+    IF RsWantsMx(host) THEN RETURN TRUE
+    RETURN RsWants(RsMailHost(host))
+END FUNCTION
+
 FUNCTION ValidUser (u AS String) AS Bool
     VAR i AS Integer
     IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
@@ -216,7 +266,7 @@ SUB Bounce (sender AS String, recipient AS String, reason AS String, message AS 
     VAR text AS String
     u = UserPart(sender)
     Note("Bounced to " + sender + ": " + reason)
-    IF NOT IsLocal(HostPart(sender)) OR NOT HasMailbox(u) THEN RETURN
+    IF NOT IsMine(HostPart(sender)) OR NOT HasMailbox(u) THEN RETURN
     IF Header(message, "From").Lower().Contains("mailer-daemon") THEN RETURN
     text = "From: Mail Delivery Subsystem <mailer-daemon@" + NET.HostName.Lower() + ">" + Chr(10) _
          + "To: " + sender + Chr(10) _
@@ -275,7 +325,11 @@ SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
         who = Bare(arg)
         IF state[1] = "" THEN
             Reply(conn, "503 MAIL FROM first")
-        ELSEIF NOT IsLocal(HostPart(who)) THEN
+        ELSEIF NOT IsMine(HostPart(who)) AND NeedsLookup(HostPart(who)) THEN
+            ' (no lookups here: the timer asks, and the sender tries again)
+            IF NOT checkDomains.Contains(HostPart(who)) THEN checkDomains.Add(HostPart(who))
+            Reply(conn, "451 Looking up " + HostPart(who) + "; try again shortly")
+        ELSEIF NOT IsMine(HostPart(who)) THEN
             Reply(conn, "551 I only take mail for " + NET.HostName.Lower())
         ELSEIF NOT HasMailbox(UserPart(who)) THEN
             Reply(conn, "550 No such user here: " + UserPart(who))
@@ -551,6 +605,15 @@ SUB Tick ()
     FS.Write(DATA + "\ALIVE.TXT", Str(TIME.Now))
     failed = FALSE
     IF pendingPath <> "" THEN Settle()
+    ' domains other servers sent mail for: are they ours? (one question a tick)
+    WHILE checkDomains.Count > 0
+        IF RsNextMail(checkDomains[0]) THEN
+            busy = FALSE
+            RETURN
+        END IF
+        IF IsMine(checkDomains[0]) THEN Note(checkDomains[0] + "'s mail comes here")
+        checkDomains.RemoveAt(0)
+    END WHILE
     TRY
         FOR EACH f IN Spooled()
             Attempt(DATA + "\SPOOL\" + f)
@@ -603,7 +666,16 @@ SUB Attempt (path AS String)
     n = Int(Val(Header(head, "X-Tries")))
     IF Int(Val(Header(head, "X-Next"))) > TIME.Now THEN RETURN
 
-    IF IsLocal(HostPart(recipient)) THEN
+    ' a domain: where its mail goes, asked first in ticks of their own
+    IF NOT IsMine(HostPart(recipient)) THEN
+        IF RsNextMail(HostPart(recipient)) THEN
+            failed = TRUE
+            busy = FALSE
+            RETURN
+        END IF
+    END IF
+
+    IF IsMine(HostPart(recipient)) THEN
         IF HasMailbox(UserPart(recipient)) THEN
             Deliver(UserPart(recipient), "Received: by " + NET.HostName.Lower() + "; " + TIME.Date + " " + TIME.Clock + Chr(10) + letter)
             Note("Delivered " + sender + " -> " + recipient)
@@ -648,7 +720,8 @@ FUNCTION Transfer (sender AS String, recipient AS String, letter AS String) AS S
     VAR answer AS String
     outSock = NET_Socket.New()
     TRY
-        conn = outSock.Connect(HostPart(recipient), PORT)
+        ' the machine the domain's MX names, or the domain's, or the name itself
+        conn = outSock.Connect(RsMailTarget(HostPart(recipient)), PORT)
     CATCH err
         failed = TRUE
         pendingAnswer = "421 " + err

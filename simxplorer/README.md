@@ -43,9 +43,10 @@ other web apps to use (see *Best viewed in Simxplorer* below).
   (`cache.asp?url=...`).
 * **Built-in pages:** `about:history`, `about:favorites`, `about:options`,
   `about:search` and `about:keys` (Help > Keyboard Shortcuts, F1).
-* **Domain names:** with a [SimDNS](../simdns/) name server set in Options
-  (it's `C:\SYSTEM\RESOLV.INI`, shared with every program), names like
-  `www.coolsite.sim` work. The status bar says *Looking up
+* **Domain names:** names like `www.coolsite.sim` are asked of the central
+  name server on STARTHERE.56k.net, where [SimNIC](../simnic/) registers them
+  (another, or none, can be set in Options: it's `C:\SYSTEM\RESOLV.INI`,
+  shared with every program). The status bar says *Looking up
   www.coolsite.sim...*, then *Connecting to alpha...*: the name server said
   that name is on ALPHA. The Address bar, the `Host:` header and the cookies
   keep the name you typed, for pages, pictures and scripts' requests alike.
@@ -235,7 +236,7 @@ for 30 seconds, because two lookups of one name at once lose the first
 A name the SimDNS name server may know is asked about first, in a tick of
 its own (the question is a Connect, so it ends the tick), and nothing else
 starts until the answer is in or 2 seconds pass. The resolver is
-`simdns/src/RESOLVE.SPK`, which the builder adds to `SIMXPLOR.SPK` (its
+`simweb/src/RESOLVE.SPK`, which the builder adds to `SIMXPLOR.SPK` (its
 names all start with `Rs`).
 
 Tests:

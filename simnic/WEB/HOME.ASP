@@ -11,10 +11,10 @@ mine = DomainsOf(viewer)
 FOR EACH d IN mine
     rec = DomainRec(d)
     rows = rows + "<tr><td><a href=""domain.asp?d=" + UrlEnc(d) + """><b>" + H(d) + "</b></a></td><td>" + H(rec[2]) + "</td><td>" + H(rec[3]) + "</td><td>"
-    IF SiteFolder(d) <> "" THEN
-        rows = rows + "hosted here"
+    IF PointsTo(d) <> "" THEN
+        rows = rows + "<tt>" + H(PointsTo(d)) + "</tt>"
     ELSE
-        rows = rows + "&nbsp;"
+        rows = rows + "<i>nowhere yet</i>"
     END IF
     rows = rows + "</td></tr>"
 NEXT
@@ -28,7 +28,7 @@ IF REQUEST.Query("new") = "1" THEN why = "Welcome to SimNIC! Search for a name b
 <p>You haven't registered any domains yet.</p>
 <% ELSE %>
 <table cellpadding="5" border="1" cellspacing="0">
-<tr bgcolor="#CCCCFF"><th>Domain</th><th>Registered</th><th>Expires</th><th>Web site</th></tr>
+<tr bgcolor="#CCCCFF"><th>Domain</th><th>Registered</th><th>Expires</th><th>Points to</th></tr>
 <%= rows %>
 </table>
 <% END IF %>

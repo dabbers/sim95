@@ -318,6 +318,8 @@ SUB Pump ()
             AskPassword()
             RETURN
         END IF
+        ' its machine's name asked about first (SimDNS), in ticks of their own
+        IF JobLookup() THEN RETURN
         goJob = FALSE
         busy = TRUE
         jobRunning = TRUE
@@ -347,6 +349,8 @@ SUB StepQueue ()
 END SUB
 
 SUB AskPassword ()
+    ' asked once: a tick that came while it was being typed must not clear it
+    IF passMode THEN RETURN
     passMode = TRUE
     promptLbl.Text = JobTarget() + "'s password:"
     Layout()

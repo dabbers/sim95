@@ -113,3 +113,15 @@ Tests: `node tools/aspsim/vapor.test.mjs`. It covers:
 * publishing apps, installing a program and a web app;
 * updates, and Vapor updating itself;
 * both games, and uninstalling.
+
+## Domain names
+
+A store can be at a name: **Change Store...** `fun.sim` (that is
+`http://fun.sim/vapor/`) or `http://shop.fun.sim/vapor/`. Vapor asks the
+central name server (STARTHERE.56k.net, see [simweb](../simweb/)) where it
+is, in a tick of its own, then fetches the catalog, the parts and its own
+updates from that machine with `Host:` saying the name, so a web server with
+sites by name finds the store. The builder joins the resolver onto the Vapor
+program. Every store stocks [simweb](../simweb/), the way it stocks
+SimPlayer. GETVAPOR (getting Vapor itself with Voyager) still goes by
+machine name.

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import { simxplorerSource } from "./simxplorer-source.mjs";
+import { simxplorerSource, withResolver, resolverSource, CENTRAL } from "./simxplorer-source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lit = (s) => '"' + s.replace(/"/g, '""') + '"';
@@ -87,9 +87,10 @@ function catalogLine(text, parts) {
   return [m.id, m.name, parts, text.length, "ok", m.category, m.about, m.kind, m.version, m.run, m.files, m.tasks, m.startup, m.folder ?? ""].join("|");
 }
 const withHeader = (meta, body) => header({ ...meta, version: version(body) }) + "\n" + body;
-const vaporClient = () => withHeader({ id: "VAPOR", name: "Vapor", kind: "client", category: "Vapor", run: "C:\\PROGRAMS\\VAPOR.SPK", files: "C:\\PROGRAMS\\VAPOR.SPK", tasks: "VAPOR", about: "The Vapor program itself." }, read("vapor/PROGRAMS/VAPOR.SPK"));
+const vaporClient = () => withHeader({ id: "VAPOR", name: "Vapor", kind: "client", category: "Vapor", run: "C:\\PROGRAMS\\VAPOR.SPK", files: "C:\\PROGRAMS\\VAPOR.SPK", tasks: "VAPOR", about: "The Vapor program itself." }, withResolver(read("vapor/PROGRAMS/VAPOR.SPK")));
 const gameText = (g) => withHeader({ id: g.id, name: g.name, kind: "game", category: g.genre, run: `C:\\GAMES\\${g.id}\\${g.id}.SPK`, files: `C:\\GAMES\\${g.id}\\${g.id}.SPK`, tasks: g.id, about: g.about }, read(`vapor/GAMES/${g.id}.SPK`));
-const stocked = ["simplayer"];
+// programs every store has on its shelves from the start
+const stocked = ["simplayer", "simweb"];
 function vaporStore() {
   const files = [];
   const catalog = [];
@@ -100,7 +101,6 @@ function vaporStore() {
     parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\${g.id}\\${i + 1}.TXT`, text: () => p }));
     catalog.push(catalogLine(text, parts.length));
   }
-  // programs every store has on its shelves from the start
   for (const key of stocked) {
     const text = makeInstaller(key).text;
     const id = /\|id=([^|]*)/.exec(text)[1];
@@ -131,7 +131,7 @@ const portal = {
   TUBE: ["Movies: watch them, put yours up, give them stars. They play in SimPlayer.", "#CC0000"],
   WIKI: ["The encyclopedia: hundreds of articles from Wikipedia, as of 1996.", "#000040"],
   STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
-  DNS: ["Register your own domain name (.sim, .com, .net, .org), point it at any machine, and host your site here.", "#000066"],
+  NIC: ["Register your own domain name (.sim, .com, .net, .org) and point it at your machine.", "#000066"],
 };
 const appInf = (app) => {
   const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
@@ -223,7 +223,8 @@ const apps = {
 ' a SimTube movie's. Simxplorer has SimPlayer built in; this is the same
 ' player on its own, for Voyager users and for movies on the disk.`,
     copy: [],
-    generated: [{ dest: "C:\\PROGRAMS\\PLAYER.SPK", text: () => read("simplayer/src/PLAYER.SPK") }],
+    // (with the resolver: in Simxplorer the player uses the browser's)
+    generated: [{ dest: "C:\\PROGRAMS\\PLAYER.SPK", text: () => withResolver(read("simplayer/src/PLAYER.SPK")) }],
     dirs: [],
     first: [],
     last: [`SYS.Start("C:\\PROGRAMS\\PLAYER.SPK", "")`],
@@ -271,7 +272,8 @@ const apps = {
 ' store's page, and download games from it. Your home page is not touched.`,
     copy: [["vapor/WEB", "C:\\WEB\\VAPOR"]],
     generated: () => vaporStore(),
-    dirs: ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\VAPOR", "C:\\WEB\\VAPOR\\SIMPLAYR", ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)],
+    // (a folder for each program the store stocks, by its Vapor id)
+    get dirs() { return ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\VAPOR", ...stocked.map((k) => "C:\\WEB\\VAPOR\\" + apps[k].vapor.id), ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)]; },
     first: [],
     last: [`SYS.Start("C:\\PROGRAMS\\VAPOR.SPK", "")`],
     done: `Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")`,
@@ -422,7 +424,7 @@ END SUB
     copy: [],
     // the shell engine (CORE.SPK) is built into both programs by the builder
     generated: [
-      { dest: "C:\\PROGRAMS\\SIMSH.SPK", text: () => read("simsh/src/CORE.SPK") + "\n" + read("simsh/src/NETJOB.SPK") + "\n" + read("simsh/src/WINDOW.SPK") },
+      { dest: "C:\\PROGRAMS\\SIMSH.SPK", text: () => withResolver(read("simsh/src/CORE.SPK") + "\n" + read("simsh/src/NETJOB.SPK") + "\n" + read("simsh/src/WINDOW.SPK")) },
       { dest: "C:\\PROGRAMS\\SSHD.SPK", text: () => read("simsh/src/CORE.SPK") + "\n" + read("simsh/src/SSHD.SPK") },
     ],
     dirs: [],
@@ -460,35 +462,62 @@ SUB WikiDirs ()
 END SUB
 `,
   },
-  simdns: {
-    folder: "DNS",
-    vapor: { folder: "DNS", id: "SIMDNS", name: "SimDNS", kind: "web", category: "Internet", run: "/", tasks: "NAMED", startup: "NAMED.RUN", about: "Domain names for the SIM95 network: a name server (NAMED), SimNIC the registrar, DIG, and a web server that hosts many sites on one machine. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
-    title: "SimDNS",
-    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It makes this
-' machine a name server and a registrar. The name server, C:\\PROGRAMS\\NAMED.SPK,
+  // SimNIC: the network's one registrar and name server, for the central host
+  // (CENTRAL) only. No vapor header, so no store stocks it: its INSTALL.SPK is
+  // run once, by hand, on STARTHERE.56k.net. It always goes in C:\WEB\NIC
+  // (http://starthere.56k.net/nic/, the address every Personal Web Manager gives).
+  simnic: {
+    folder: "NIC",
+    into: "NIC",
+    title: "SimNIC",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5 - on the central
+' host, ${CENTRAL.toUpperCase()}, only: it is the network's one registrar and name
+' server, and every machine asks it about names like coolsite.sim. (On any
+' other machine it warns you first.) The name server, C:\\PROGRAMS\\NAMED.SPK,
 ' answers for the zones in C:\\DNS (listed in C:\\DNS\\NAMED.CNF); it starts now
 ' and with the machine (C:\\SYSTEM\\STARTUP\\NAMED.RUN). SimNIC, the registrar,
-' becomes the home page (the stock INDEX.HTM moves to WELCOME.HTM), or goes in
-' C:\\WEB\\DNS on a SimHost machine. It also writes DIG.SPK (ask a name server)
-' and RESOLVE.SPK (the resolver, for your own programs), and replaces the web
-' server with one that serves several sites by name (C:\\WEB\\VHOSTS.TXT). The
-' old web server is kept as C:\\PROGRAMS\\HTTPD.ORG and comes back if SimDNS is
-' uninstalled. Accounts and domains in C:\\NICDATA and zones in C:\\DNS are left
-' alone, so running this again upgrades SimDNS.`,
-    copy: [["simdns/WEB", "C:\\WEB"]],
+' goes in C:\\WEB\\NIC: http://${CENTRAL}/nic/. Accounts and domains in
+' C:\\NICDATA and zones in C:\\DNS are left alone, so running this again
+' upgrades SimNIC. The web servers are every other machine's business (simweb).`,
+    copy: [["simnic/WEB", "C:\\WEB"]],
+    generated: [{ dest: "C:\\PROGRAMS\\NAMED.SPK", text: () => read("simnic/src/NAMED.SPK") }],
+    dirs: [],
+    first: ["IF NOT NicHere() THEN RETURN", "NicSetup()"],
+    last: [`StartService("NAMED", "C:\\PROGRAMS\\NAMED.SPK", "NAMED.RUN")`],
+    done: `Print("Open http://" + NET.HostName.Lower() + "/nic/ in Voyager.")
+    NicDone()`,
+    code: () => startService + "\n" + read("simnic/SETUP.SPK").replace(/^CONST NICHOST = "[^"]*"/m, `CONST NICHOST = "${CENTRAL}"`),
+  },
+  // simweb: for every machine with a web site. The web server with sites by
+  // name (it replaces HTTPD.SPK, keeping the stock one as HTTPD.ORG, and puts
+  // it back when PWM.SPK is uninstalled), Personal Web Manager, DIG and the
+  // resolver. Every Vapor store stocks it.
+  simweb: {
+    vapor: { id: "SIMWEB", name: "simweb", kind: "program", category: "Internet", run: "C:\\PROGRAMS\\PWM.SPK", tasks: "PWM", startup: "", about: "Personal Web Manager and a web server that serves many sites by name: coolsite.sim for your own pages, coolbook.sim for SimBook. Register and point the names at SimNIC; then add them here. With DIG, to ask the name server." },
+    title: "simweb",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It replaces the web
+' server with one that serves several sites by name (C:\\WEB\\VHOSTS.TXT), and
+' writes Personal Web Manager (C:\\PROGRAMS\\PWM.SPK), which keeps that list:
+' coolsite.sim for your own pages in C:\\WEB\\SITES, coolbook.sim for SimBook,
+' book.coolsite.sim... It also writes DIG.SPK (ask the name server) and
+' RESOLVE.SPK (the resolver, for your own programs). The old web server is kept
+' as C:\\PROGRAMS\\HTTPD.ORG and comes back when simweb is uninstalled. Names
+' themselves are registered, and pointed at this machine, at SimNIC:
+' http://${CENTRAL}/nic/`,
+    copy: [],
     generated: [
-      { dest: "C:\\PROGRAMS\\NAMED.SPK", text: () => read("simdns/src/NAMED.SPK") },
-      { dest: "C:\\PROGRAMS\\DIG.SPK", text: () => read("simdns/src/DIG.SPK") + "\n" + read("simdns/src/RESOLVE.SPK") },
-      { dest: "C:\\PROGRAMS\\RESOLVE.SPK", text: () => read("simdns/src/RESOLVE.SPK") },
+      { dest: "C:\\PROGRAMS\\PWM.SPK", text: () => withResolver(read("simweb/src/PWM.SPK")) },
+      { dest: "C:\\PROGRAMS\\DIG.SPK", text: () => withResolver(read("simweb/src/DIG.SPK")) },
+      { dest: "C:\\PROGRAMS\\RESOLVE.SPK", text: () => resolverSource() },
       // the web server is the machine's own: Vapor must never delete it (it
-      // goes back to HTTPD.ORG by itself when NAMED.SPK is gone)
-      { dest: "C:\\PROGRAMS\\HTTPD.SPK", text: () => read("simdns/src/HTTPD.SPK"), keep: true },
+      // goes back to HTTPD.ORG by itself when PWM.SPK is gone)
+      { dest: "C:\\PROGRAMS\\HTTPD.SPK", text: () => read("simweb/src/HTTPD.SPK"), keep: true },
     ],
     dirs: [],
-    first: ["MoveHomePage()", "DnsSetup()"],
-    last: [`StartService("NAMED", "C:\\PROGRAMS\\NAMED.SPK", "NAMED.RUN")`, "RestartWeb()"],
-    url: "/",
-    code: () => startService + moveHomePage + "\n" + read("simdns/SETUP.SPK"),
+    first: ["WebSetup()"],
+    last: ["RestartWeb()", `SYS.Start("C:\\PROGRAMS\\PWM.SPK", "")`],
+    done: `Print("Personal Web Manager is open. Next time, start C:\\PROGRAMS\\PWM.SPK from Files.")`,
+    code: () => read("simweb/SETUP.SPK"),
   },
   eliza: {
     folder: "ELIZA",
@@ -512,10 +541,11 @@ END SUB
 // folders. It knows what each one wrote in C:\WEB from the lists above.
 function relocateCode() {
   const web = (key) => apps[key].copy.filter(([, to]) => to === "C:\\WEB").flatMap(([from]) => fs.readdirSync(path.join(root, from)).map((f) => f.toUpperCase()));
-  const keys = Object.keys(apps).filter((k) => apps[k].folder);
+  // (an app that always has its folder, such as SimNIC, never needs moving)
+  const keys = Object.keys(apps).filter((k) => apps[k].folder && !apps[k].into);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", wikisim: "WIKI.SPK", simdns: "NIC.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", wikisim: "WIKI.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);
@@ -531,10 +561,14 @@ function build(key) {
   console.log(`${key}/INSTALL.SPK: ${out.files} files, ${out.text.length} bytes`);
 }
 
+// Programs that look up SimDNS names get the resolver (simweb/src/RESOLVE.SPK,
+// every name in it starts with Rs) joined on the end, as Simxplorer does.
+const resolving = new Set(["frostbird/PROGRAMS/FROSTBRD.SPK", "coldmail/PROGRAMS/MAILD.SPK", "asksim/PROGRAMS/CRAWLER.SPK"]);
+
 function makeInstaller(key) {
   const app = apps[key];
   const files = [];
-  for (const [from, to] of app.copy) for (const f of fs.readdirSync(path.join(root, from)).sort()) files.push({ text: () => read(path.join(from, f)), dest: to + "\\" + f.toUpperCase() });
+  for (const [from, to] of app.copy) for (const f of fs.readdirSync(path.join(root, from)).sort()) files.push({ text: () => (resolving.has(from + "/" + f) ? withResolver : (x) => x)(read(path.join(from, f))), dest: to + "\\" + f.toUpperCase() });
   for (const g of (typeof app.generated === "function" ? app.generated() : app.generated) || []) files.push(g);
   let out = `' INSTALL.SPK - puts ${app.title} on this machine. Generated by tools/build-installer.mjs;
 ' edit the files in ${key}/ and rebuild rather than editing this.
@@ -547,7 +581,9 @@ VAR intoDir AS String   ' "" for the web root, or the folder this web app goes i
 
 SUB Main ()
     NL = Chr(10)
-${app.folder ? `    ' On a machine set up for several web apps (SimHost: C:\\SYSTEM\\WEBAPPS.INI
+${app.into ? `    ' Always in a folder of its own, whatever the machine.
+    intoDir = "${app.into}"
+    IF NOT FS.Exists("C:\\WEB\\" + intoDir) THEN FS.MakeDir("C:\\WEB\\" + intoDir)` : app.folder ? `    ' On a machine set up for several web apps (SimHost: C:\\SYSTEM\\WEBAPPS.INI
     ' says mode=folders), this one goes in C:\\WEB\\${app.folder} and leaves the home page alone.
     IF FS.Exists("C:\\SYSTEM\\WEBAPPS.INI") THEN
         IF FS.Read("C:\\SYSTEM\\WEBAPPS.INI").Contains("mode=folders") THEN intoDir = "${app.folder}"

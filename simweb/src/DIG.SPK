@@ -5,10 +5,12 @@
 '     DIG www.coolsite.sim ANY @bravo    ask BRAVO instead of the usual server
 '     DIG SET dnsbox                     use DNSBOX's SimDNS from now on
 '     DIG SET NONE                       stop using SimDNS (machine names only)
-'     DIG SET                            which name server is set?
-' The name server is kept in C:\SYSTEM\RESOLV.INI, which Simxplorer's
-' Options and every program that uses RESOLVE.SPK read. The builder joins
-' RESOLVE.SPK onto the end of this file.
+'     DIG SET DEFAULT                    the central name server again
+'     DIG SET                            which name server is it?
+' The usual name server is the central one (STARTHERE.56k.net), unless
+' C:\SYSTEM\RESOLV.INI says otherwise; Simxplorer's Options and every
+' program that uses RESOLVE.SPK read it. The builder joins RESOLVE.SPK onto
+' the end of this file.
 
 VAR digReply AS String
 VAR digSock AS NET_Socket
@@ -29,6 +31,7 @@ SUB Main ()
     IF args.Count = 0 THEN
         Print("Usage: DIG name [type] [@server]      types: A CNAME MX TXT NS SOA ANY")
         Print("       DIG SET machine                  make machine this computer's name server")
+        Print("       DIG SET DEFAULT                  the central one, " + RSCENTRAL)
         RETURN
     END IF
     IF args[0].Upper() = "SET" THEN
@@ -51,7 +54,7 @@ SUB Main ()
     END IF
     IF server = "" THEN server = RsNameServer()
     IF server = "" THEN
-        Print(";; No name server is set. Say which machine runs SimDNS:  DIG SET machine")
+        Print(";; SimDNS is off (nameserver=none in C:\SYSTEM\RESOLV.INI). DIG SET DEFAULT turns it on.")
         RETURN
     END IF
     Print("")
@@ -154,15 +157,22 @@ END FUNCTION
 SUB SetServer (args AS Array OF String)
     IF args.Count < 2 THEN
         IF RsNameServer() = "" THEN
-            Print("No name server is set: names are SIM95 machine names only.")
+            Print("SimDNS is off: names are SIM95 machine names only.")
+        ELSEIF RsIsCentral() THEN
+            Print("The name server is " + RsNameServer() + ", the central one.")
         ELSE
             Print("The name server is " + RsNameServer() + " (C:\SYSTEM\RESOLV.INI).")
         END IF
         RETURN
     END IF
     IF args[1].Upper() = "NONE" THEN
-        RsSave("")
+        RsSave("none")
         Print("No name server now: names are SIM95 machine names only.")
+        RETURN
+    END IF
+    IF args[1].Upper() = "DEFAULT" THEN
+        RsSave("default")
+        Print("The name server is the central one again: " + RSCENTRAL + ".")
         RETURN
     END IF
     RsSave(args[1])

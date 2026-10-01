@@ -11,7 +11,14 @@
 '
 ' ssh speaks to SSHD.SPK on port 22 (see SSHD.SPK for the protocol); scp to
 ' the Files service on port 139 (FILESVC.SPK); sim-get to a Vapor store on
-' port 80, exactly as VAPOR.SPK does.
+' port 80, exactly as VAPOR.SPK does; host (nslookup) to a SimDNS name
+' server on port 53, printing what DIG.SPK prints.
+'
+' Domain names: the builder joins the SimDNS resolver (simweb/src/RESOLVE.SPK,
+' the Rs... names) on the end of SIMSH.SPK. Before a job starts, the window
+' asks the name server about its machine (JobLookup), in ticks of their own;
+' the job then connects to the machine SimDNS named (RsTarget), and sim-get
+' still sends Host: with the store's name as written.
 
 CONST SSHPORT = 22
 CONST FILEPORT = 139
@@ -85,6 +92,39 @@ FUNCTION JobTarget () AS String
     RETURN t
 END FUNCTION
 
+' The machine a job will connect to, as typed ("" for none).
+FUNCTION JobHost () AS String
+    VAR t AS String
+    VAR a AS String
+    SELECT CASE jobKind
+        CASE "ssh", "sshi", "scp"
+            t = JobTarget()
+            IF jobKind = "scp" THEN
+                FOR EACH a IN jobArgs
+                    IF NOT a.StartsWith("-") AND IsRemote(a) THEN t = a.Substring(0, a.IndexOf(":"))
+                NEXT
+            END IF
+            IF t.Contains("@") THEN t = t.Substring(t.IndexOf("@") + 1, t.Length - t.IndexOf("@") - 1)
+            RETURN t
+        CASE "get"
+            t = StoreUrl()
+            IF NOT t.Lower().StartsWith("http://") THEN RETURN ""
+            t = t.Substring(7, t.Length - 7)
+            IF t.Contains("/") THEN t = t.Substring(0, t.IndexOf("/"))
+            RETURN t
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+' Called from the window's tick before the job: TRUE while its machine's
+' name is being asked about (the tick must end, see RsNext).
+FUNCTION JobLookup () AS Bool
+    VAR h AS String
+    h = JobHost()
+    IF h = "" THEN RETURN FALSE
+    RETURN RsNext(h)
+END FUNCTION
+
 ' Called from the window's tick, inside its TRY.
 SUB RunJob ()
     jobRunning = TRUE
@@ -103,6 +143,8 @@ SUB RunJob ()
                 ScpJob()
             CASE "get"
                 GetJob()
+            CASE "host"
+                HostJob()
         END SELECT
     CATCH err
         IF NOT jobBroken THEN
@@ -213,7 +255,7 @@ SUB SshJob (interactive AS Bool)
         user = host.Substring(0, host.IndexOf("@"))
         host = host.Substring(host.IndexOf("@") + 1, host.Length - host.IndexOf("@") - 1)
     END IF
-    IF NOT JobConnect(host, SSHPORT) THEN
+    IF NOT JobConnect(RsTarget(host), SSHPORT) THEN
         JobSay("ssh: connect to host " + host + " port 22: " + jobError)
         JobEnd(255)
         RETURN
@@ -349,7 +391,7 @@ SUB ScpJob ()
             RETURN
         END IF
     END IF
-    IF NOT JobConnect(host, FILEPORT) THEN
+    IF NOT JobConnect(RsTarget(host), FILEPORT) THEN
         JobSay("scp: connect to host " + host + " port 139: " + jobError)
         JobEnd(1)
         RETURN
@@ -403,7 +445,8 @@ FUNCTION JobFetch (url AS String) AS String
     path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
     host = host.Substring(0, host.IndexOf("/"))
     jobError = ""
-    IF NOT JobConnect(host, 80) THEN RETURN ""
+    ' (to the machine SimDNS named; Host: as written, for a site by name)
+    IF NOT JobConnect(RsTarget(host), 80) THEN RETURN ""
     jobConn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: sim-get/1.0 (SIM95)")
     since = SYS.Ticks
     WHILE NOT jobClosed AND SYS.Ticks - since < JOBPATIENCE
@@ -636,3 +679,122 @@ FUNCTION TaskAlive (pid AS Integer) AS Bool
     NEXT
     RETURN FALSE
 END FUNCTION
+
+' ================================================================ host, dig, nslookup
+
+' Asks a SimDNS name server about a name and prints the answer the way
+' DIG.SPK does:  host name [A|CNAME|MX|TXT|NS|SOA|ANY] [@server]
+SUB HostJob ()
+    VAR a AS String
+    VAR name AS String
+    VAR qtype AS String = "A"
+    VAR server AS String
+    VAR addr AS String
+    VAR started AS Integer
+    VAR reply AS String
+    FOR EACH a IN jobArgs
+        IF a.StartsWith("@") THEN
+            server = a.Substring(1, a.Length - 1).Lower()
+        ELSEIF "|A|CNAME|MX|TXT|NS|SOA|ANY|".Contains("|" + a.Upper() + "|") AND name <> "" THEN
+            qtype = a.Upper()
+        ELSEIF a.StartsWith("-") THEN
+            ' (nslookup's and dig's switches: none needed)
+        ELSE
+            name = a.Lower()
+        END IF
+    NEXT
+    IF name = "" THEN
+        JobSay("Which name? For example:  host www.coolsite.sim")
+        JobEnd(1)
+        RETURN
+    END IF
+    IF server = "" THEN server = RsNameServer()
+    IF server = "" THEN
+        JobSay(";; SimDNS is off (nameserver=none in C:\SYSTEM\RESOLV.INI). DIG SET DEFAULT turns it on.")
+        JobEnd(1)
+        RETURN
+    END IF
+    JobSay("")
+    JobSay("; <<>> DiG 2.1 for SIM95 (SimDNS) <<>> " + name + " " + qtype)
+    addr = NET.Resolve(server)
+    IF addr = "" THEN
+        JobSay(";; connection failed: there is no machine called " + server)
+        JobEnd(9)
+        RETURN
+    END IF
+    started = SYS.Ticks
+    IF NOT JobConnect(addr, RSPORT) THEN
+        ' (the handler is spoiled: no more waiting)
+        JobSay(";; connection to " + server + " (" + addr + ") port 53 failed: " + jobError.Split(":")[0] + ". Is NAMED.SPK running there?")
+        JobEnd(9)
+        RETURN
+    END IF
+    jobAnswered = FALSE
+    jobConn.Send("QUERY " + RsFull(name) + " " + qtype)
+    WHILE NOT jobAnswered AND NOT jobClosed AND SYS.Ticks - started < 3000
+        jobBeat = SYS.Ticks
+        SYS.Sleep(20)
+    END WHILE
+    JobHangUp()
+    IF NOT jobAnswered THEN
+        JobSay(";; connection timed out; no answer from " + server)
+        JobEnd(9)
+        RETURN
+    END IF
+    reply = jobAnswer
+    HostShow(reply, name, qtype, server, addr, SYS.Ticks - started)
+    IF NOT reply.StartsWith("OK") THEN jobResultStatus = 1
+END SUB
+
+' The answer, as DIG.SPK's Show prints it, and where a machine name leads.
+SUB HostShow (reply AS String, name AS String, qtype AS String, server AS String, addr AS String, ms AS Integer)
+    VAR lines AS Array OF String
+    VAR w AS Array OF String
+    VAR i AS Integer
+    VAR k AS Integer
+    VAR status AS String
+    VAR last AS String
+    VAR machine AS String
+    VAR rest AS Array OF String
+    VAR found AS String
+    lines = reply.Lines()
+    status = lines[0].Split(" ")[0]
+    IF status = "OK" THEN status = "NOERROR"
+    JobSay(";; ->>HEADER<<- status: " + status + ", answers: " + Str(lines.Count - 1))
+    IF lines[0].Contains(" ") THEN JobSay(";; " + lines[0].Substring(lines[0].IndexOf(" ") + 1, lines[0].Length - lines[0].IndexOf(" ") - 1))
+    JobSay("")
+    JobSay(";; QUESTION SECTION:")
+    JobSay(";" + (RsFull(name) + ".").PadRight(31) + " IN  " + qtype)
+    IF lines.Count > 1 THEN
+        JobSay("")
+        JobSay(";; ANSWER SECTION:")
+        FOR i = 1 TO lines.Count - 1
+            w = lines[i].Split(" ")
+            IF w.Count < 4 THEN CONTINUE
+            rest.Clear()
+            FOR k = 3 TO w.Count - 1
+                rest.Add(w[k])
+            NEXT
+            JobSay((w[0] + ".").PadRight(24) + " " + w[1].PadRight(6) + " IN  " + w[2].PadRight(6) + " " + rest.Join(" "))
+            IF w[2] = "CNAME" THEN last = w[3]
+            IF w[2] = "A" THEN last = ""
+        NEXT
+    END IF
+    ' a CNAME chain that ends at a name SimDNS doesn't know ends at a machine
+    IF last <> "" THEN
+        machine = last
+        FOR i = 1 TO lines.Count - 1
+            IF lines[i].StartsWith(last + " ") THEN machine = ""
+        NEXT
+        IF machine <> "" THEN
+            found = NET.Resolve(machine)
+            IF found = "" THEN found = "not on the network now"
+            JobSay("")
+            JobSay(";; " + machine + " is a SIM95 machine name: " + found + " (asked SIM95, not SimDNS)")
+        END IF
+    END IF
+    JobSay("")
+    JobSay(";; Query time: " + Str(ms) + " msec")
+    JobSay(";; SERVER: " + server + " (" + addr + ") port 53")
+    JobSay(";; WHEN: " + TIME.Date + " " + TIME.Clock)
+END SUB
