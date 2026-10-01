@@ -920,6 +920,8 @@ SUB Arrived ()
     ELSEIF fBodyText.StartsWith("SIM95PIC") THEN
         KeepImage(fUrl, fBodyText)
         ShowPage(fUrl, "<html><head><title>" + Esc(fUrl) + "</title></head><body><img src=""" + Esc(fUrl) + """></body></html>", pHist)
+    ELSEIF Header("content-type").StartsWith("video/x-simmovie") OR fBodyText.StartsWith("SIMMOVIE") THEN
+        PlayMovie(fUrl)
     ELSEIF Header("content-type").StartsWith("text/plain") THEN
         ShowPage(fUrl, "<html><body><pre>" + Esc(fBodyText) + "</pre></body></html>", pHist)
         ' Save As keeps the text itself, not the page made to show it
@@ -927,6 +929,23 @@ SUB Arrived ()
     ELSE
         ShowPage(fUrl, fBodyText, pHist)
     END IF
+END SUB
+
+' A SimMovie (SimTube's video/x-simmovie) plays in SimPlayer, the way a
+' RealVideo link opened RealPlayer: the browser stays on the page it was on.
+CONST PLAYER = "C:\PROGRAMS\PLAYER.SPK"
+
+SUB PlayMovie (url AS String)
+    progress.Value = 0
+    Buttons()
+    DrawThrob()
+    IF FS.Exists(PLAYER) THEN
+        SYS.Start(PLAYER, url)
+        SetStatus("Opened " + url + " in SimPlayer")
+        RETURN
+    END IF
+    ShowPage(url, "<html><head><title>SimPlayer required</title></head><body><h2>This is a SimMovie</h2><p>To watch it you need <b>SimPlayer</b>, which comes with SimTube. " _
+        + "Ask the site for it: SimTube sites hand it out at <tt>getplay.asp</tt>. Save it as C:\PROGRAMS\PLAYER.SPK, then click the movie again.</p></body></html>", pHist)
 END SUB
 
 ' Browsers of 1996 said so in a box, and stayed where they were. This one

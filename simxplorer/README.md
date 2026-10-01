@@ -230,3 +230,10 @@ Tests:
   `test/HOSTSTUB.SPK`.
 * `node tools/aspsim/simxplorer.test.mjs` tests the whole browser against
   real web servers on a pretend network, including SimBook and ELIZA-95.
+
+## Movies
+
+A SimMovie link (SimTube's `movie.asp?v=N`, served as `video/x-simmovie`, or
+any file starting `SIMMOVIE`) opens in SimPlayer (`C:\PROGRAMS\PLAYER.SPK`),
+the way RealVideo links opened RealPlayer, and the browser stays on the page
+it was on. Without SimPlayer, it says where to get it.

@@ -557,6 +557,27 @@ await test("ELIZA-95 in Simxplorer: the answer types itself out in JavaScript", 
   assert.deepEqual(dialogs(), []);
 });
 
+await test("a SimMovie opens in SimPlayer, and the browser stays where it was", async () => {
+  page("smoke.smv", "SIMMOVIE 1\ntitle=Smoke\nwidth=40\nheight=30\nfps=5\nframes=1\n.\n*X0\n");
+  page("movies.htm", '<html><head><title>Movies</title></head><body><a href="smoke.smv">Smoke</a></body></html>');
+  if (alpha.exists("C:\\PROGRAMS\\PLAYER.SPK")) alpha.remove("C:\\PROGRAMS\\PLAYER.SPK");
+  await go("http://bravo/movies.htm");
+  await loaded("Movies");
+  // no player: say where to get one
+  await go("http://bravo/smoke.smv");
+  await loaded("SimPlayer required");
+  assert.match(html(), /This is a SimMovie/);
+  // with a player: it gets the address, and the page stays
+  alpha.write("C:\\PROGRAMS\\PLAYER.SPK", 'SUB Main ()\n    FS.Write("C:\\MYFILES\\PLAYED.TXT", SYS.Args[0])\nEND SUB\n');
+  await go("http://bravo/movies.htm");
+  await loaded("Movies");
+  await go("http://bravo/smoke.smv");
+  await wait(() => alpha.exists("C:\\MYFILES\\PLAYED.TXT"), "SimPlayer to start");
+  assert.equal(alpha.read("C:\\MYFILES\\PLAYED.TXT"), "http://bravo/smoke.smv");
+  await wait(() => /Opened http:\/\/bravo\/smoke.smv in SimPlayer/.test(status()), "the status: " + status());
+  assert.equal(title(), "Movies - Simxplorer");
+});
+
 net.shutdown();
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);
