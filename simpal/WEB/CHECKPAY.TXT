@@ -1,0 +1,80 @@
+' CHECKPAY.SPK - asks SimPal on %HOST% whether a receipt is good, the way a
+' program (a game shop, Vapor...) checks a payment before handing anything
+' over. Run it with the receipt:   SPARK C:\MYFILES\CHECKPAY.SPK R12-1A2B3C4D
+' Add the merchant, amount and order to have SimPal check those too:
+'   SPARK C:\MYFILES\CHECKPAY.SPK R12-1A2B3C4D myshop 4.99 ORDER17
+' A good receipt answers VALID once; after that it is USED.
+CONST PALHOST = "%HOST%"
+CONST PALPATH = "%BASE%verify.asp"
+
+VAR win AS GUI_Window
+VAR tick AS GUI_Timer
+VAR sock AS NET_Socket
+VAR conn AS NET_Connection
+VAR watch AS GUI_Timer
+VAR reply AS String
+VAR ask AS String
+VAR failed AS String
+
+SUB Main ()
+    VAR a AS Array OF String
+    a = SYS.Args
+    IF a.Count < 1 THEN
+        Print("Which receipt? SPARK CHECKPAY.SPK R12-1A2B3C4D [merchant amount order]")
+        RETURN
+    END IF
+    ask = PALPATH + "?r=" + a[0]
+    IF a.Count >= 4 THEN ask = ask + "&m=" + a[1] + "&a=" + a[2] + "&o=" + a[3]
+    win = GUI_Window.New("Checking a SimPal receipt", 320, 40)
+    win.Status = "Asking " + PALHOST + "..."
+    ' Connect from a timer tick, with nothing after the TRY: a refused
+    ' connection spoils the rest of the handler that made it (SIM95-NOTES.md).
+    tick = GUI_Timer.New(win)
+    tick.Interval = 50
+    tick.onTick = Tick_OnTick
+    tick.Start()
+    watch = GUI_Timer.New(win)
+    watch.Interval = 8000
+    watch.onTick = Watch_OnTick
+    watch.Start()
+END SUB
+
+SUB Tick_OnTick ()
+    tick.Stop()
+    sock = NET_Socket.New()
+    sock.onMessage = Sock_OnMessage
+    sock.onClose = Sock_OnClose
+    TRY
+        conn = sock.Connect(PALHOST, 80)
+        conn.Send("GET " + ask + " HTTP/1.0" + Chr(10) + "Host: " + PALHOST.Lower() + Chr(10) + "User-Agent: CHECKPAY.SPK (SIM95)")
+    CATCH err
+        failed = err
+    END TRY
+END SUB
+
+' No answer in time, or no connection at all.
+SUB Watch_OnTick ()
+    IF failed = "" THEN failed = "no answer"
+    Print("SimPal on " + PALHOST + " did not answer (" + failed + "). Don't hand anything over.")
+    SYS.Exit(0)
+END SUB
+
+SUB Sock_OnMessage (c AS NET_Connection, message AS String)
+    reply = reply + message + Chr(10)
+END SUB
+
+' The answer is the last line of the page: VALID|merchant|amount|order|buyer|date
+SUB Sock_OnClose (c AS NET_Connection)
+    VAR line AS String
+    VAR answer AS String
+    FOR EACH line IN reply.Lines()
+        IF line.Trim() <> "" THEN answer = line.Trim()
+    NEXT
+    Print(answer)
+    IF answer.StartsWith("VALID|") THEN
+        Print("Paid: " + answer.Split("|")[4] + " paid " + answer.Split("|")[1] + " " + answer.Split("|")[2] + " for order " + answer.Split("|")[3] + ".")
+    ELSE
+        Print("Not paid. Don't hand anything over.")
+    END IF
+    SYS.Exit(0)
+END SUB

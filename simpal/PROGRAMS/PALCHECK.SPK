@@ -1,0 +1,195 @@
+' PALCHECK.SPK - check a SimPal receipt from a page on the same machine.
+'
+' A shop's .ASP page on the machine SimPal runs on (a SimHost machine, say)
+' pulls this in with
+'     <%@ import file="C:\PROGRAMS\PALCHECK.SPK" %>
+' and, when a buyer comes back from SimPal with ?receipt=...&order=..., asks
+'     IF VerifyReceipt(REQUEST.Query("receipt"), "myshop", "4.99", REQUEST.Query("order")) THEN
+' which is TRUE only if that receipt is real, paid myshop exactly 4.99 for
+' that order, and has not been verified before. The second time it is FALSE:
+' a receipt pays for one order, once. PalWhy then says why not.
+'
+' It reads SimPal's books in C:\PALDATA directly, so it needs no connection,
+' and uses no names from PAL.SPK: everything here starts with Pal or Receipt.
+' Pages on other machines can't do this; they ask verify.asp instead.
+
+VAR PalWhy AS String          ' after a FALSE: unknown, merchant, amount, order, used or busy
+
+' The receipt's line in SimPal's ledger, or "" when it is not a real receipt.
+' A receipt is R<transaction>-<secret>, so it can't be guessed from another.
+FUNCTION PalReceiptLine (receipt AS String) AS String
+    VAR p AS Array OF String
+    VAR id AS String
+    VAR text AS String
+    VAR at AS Integer
+    receipt = receipt.Trim()
+    p = receipt.Split("-")
+    IF p.Count <> 2 OR receipt.Length > 20 OR NOT p[0].StartsWith("R") THEN RETURN ""
+    id = p[0].Substring(1, p[0].Length - 1)
+    IF id = "" OR id.Length > 8 OR NOT PalOnly(id, "0123456789") THEN RETURN ""
+    text = Chr(10) + PalRead("C:\PALDATA\LEDGER\" + Str(Int((Int(Val(id)) - 1) / 500)) + ".TXT")
+    at = text.IndexOf(Chr(10) + id + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    IF text.IndexOf(Chr(10)) >= 0 THEN text = text.Substring(0, text.IndexOf(Chr(10)))
+    p = text.Split("|")
+    IF p.Count < 9 THEN RETURN ""
+    IF p[2] <> "pay" OR p[7] <> receipt THEN RETURN ""
+    RETURN text
+END FUNCTION
+
+' merchant|amount|order|buyer|date for a real receipt, or "". Uses nothing up.
+FUNCTION ReceiptInfo (receipt AS String) AS String
+    VAR p AS Array OF String
+    VAR line AS String
+    line = PalReceiptLine(receipt)
+    IF line = "" THEN RETURN ""
+    p = line.Split("|")
+    RETURN p[4] + "|" + PalAmt(Int(Val(p[5]))) + "|" + PalUnesc(p[8]) + "|" + p[3] + "|" + p[1]
+END FUNCTION
+
+' TRUE once: the receipt is real, matches all three, and is now used up.
+FUNCTION VerifyReceipt (receipt AS String, merchant AS String, amount AS String, order AS String) AS Bool
+    IF merchant.Trim() = "" OR amount.Trim() = "" OR order.Trim() = "" THEN
+        PalWhy = "merchant, amount and order are all needed"
+        RETURN FALSE
+    END IF
+    RETURN PalAnswer(receipt, merchant, amount, order).StartsWith("VALID|")
+END FUNCTION
+
+' What verify.asp says about a receipt; merchant, amount and order may be ""
+' (not checked). One line:
+'   VALID|merchant|amount|order|buyer|date   the first time: now it is used
+'   USED|merchant|amount|order|buyer|date    it was verified before
+'   INVALID|why                               not a receipt, or not this one
+'   BUSY|try again                            SimPal was busy; nothing changed
+FUNCTION PalAnswer (receipt AS String, merchant AS String, amount AS String, order AS String) AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR info AS String
+    VAR answer AS String
+    VAR used AS String
+    PalWhy = ""
+    line = PalReceiptLine(receipt)
+    IF line = "" THEN
+        PalWhy = "unknown"
+        RETURN "INVALID|no such receipt"
+    END IF
+    p = line.Split("|")
+    IF merchant.Trim() <> "" AND merchant.Trim().Lower() <> p[4] THEN PalWhy = "merchant"
+    IF amount.Trim() <> "" AND PalCents(amount) <> Int(Val(p[5])) THEN PalWhy = "amount"
+    IF order.Trim() <> "" AND order.Trim() <> PalUnesc(p[8]) THEN PalWhy = "order"
+    IF PalWhy <> "" THEN RETURN "INVALID|wrong " + PalWhy
+    info = p[4] + "|" + PalAmt(Int(Val(p[5]))) + "|" + PalUnesc(p[8]) + "|" + p[3] + "|" + p[1]
+    used = "C:\PALDATA\USED\" + p[0] + ".TXT"
+    IF NOT PalLock() THEN
+        PalWhy = "busy"
+        RETURN "BUSY|try again"
+    END IF
+    IF FS.Exists(used) THEN
+        PalWhy = "used"
+        answer = "USED|" + info
+    ELSE
+        IF NOT FS.Exists("C:\PALDATA\USED") THEN FS.MakeDir("C:\PALDATA\USED")
+        FS.Write(used, TIME.Date + " " + TIME.Clock)
+        answer = "VALID|" + info
+    END IF
+    PalUnlock()
+    RETURN answer
+END FUNCTION
+
+' Where buyers pay on this machine: http://host/pal/pay.asp or http://host/pay.asp
+FUNCTION PalPayUrl () AS String
+    IF FS.Exists("C:\WEB\PAL\PAL.SPK") THEN RETURN "http://" + SERVER.Name.Lower() + "/pal/pay.asp"
+    RETURN "http://" + SERVER.Name.Lower() + "/pay.asp"
+END FUNCTION
+
+' Is there a SimPal account by this name?
+FUNCTION PalMember (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 8 OR NOT PalOnly(u, "abcdefghijklmnopqrstuvwxyz0123456789") THEN RETURN FALSE
+    RETURN FS.Exists("C:\PALDATA\USERS\" + u + ".TXT")
+END FUNCTION
+
+' ---------------------------------------------------------------- helpers
+
+' SimPal's lock (see PAL.SPK): a folder only one page at a time can make.
+FUNCTION PalLock () AS Bool
+    VAR tries AS Integer
+    VAR got AS Bool
+    VAR at AS String
+    WHILE NOT got AND tries < 150
+        tries = tries + 1
+        TRY
+            FS.MakeDir("C:\PALDATA\LOCK")
+            got = TRUE
+        CATCH err
+            got = FALSE
+        END TRY
+        IF NOT got THEN
+            at = PalRead("C:\PALDATA\LOCK\AT.TXT")
+            IF (at <> "" AND TIME.Now - Int(Val(at)) > 10) OR (at = "" AND tries MOD 50 = 0) THEN
+                PalUnlock()
+            ELSE
+                SYS.Sleep(20)
+            END IF
+        END IF
+    END WHILE
+    IF got THEN FS.Write("C:\PALDATA\LOCK\AT.TXT", Str(TIME.Now))
+    RETURN got
+END FUNCTION
+
+SUB PalUnlock ()
+    TRY
+        IF FS.Exists("C:\PALDATA\LOCK\AT.TXT") THEN FS.Delete("C:\PALDATA\LOCK\AT.TXT")
+        IF FS.Exists("C:\PALDATA\LOCK") THEN FS.Delete("C:\PALDATA\LOCK")
+    CATCH err
+    END TRY
+END SUB
+
+FUNCTION PalRead (path AS String) AS String
+    VAR text AS String
+    TRY
+        IF FS.Exists(path) THEN text = FS.Read(path)
+    CATCH err
+        text = ""
+    END TRY
+    RETURN text
+END FUNCTION
+
+FUNCTION PalOnly (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION PalUnesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+' "4.99", "4.9", "§4.99" -> 499; -1 when it is not an amount.
+FUNCTION PalCents (s AS String) AS Integer
+    VAR whole AS String
+    VAR frac AS String
+    VAR dot AS Integer
+    s = s.Trim().Replace(",", "")
+    IF s.StartsWith("§") OR s.StartsWith("$") THEN s = s.Substring(1, s.Length - 1).Trim()
+    dot = s.IndexOf(".")
+    whole = s
+    IF dot >= 0 THEN
+        whole = s.Substring(0, dot)
+        frac = s.Substring(dot + 1, s.Length - dot - 1)
+    END IF
+    IF whole = "" THEN whole = "0"
+    IF whole.Length > 7 OR frac.Length > 2 OR NOT PalOnly(whole + frac, "0123456789") THEN RETURN -1
+    frac = (frac + "00").Substring(0, 2)
+    RETURN Int(Val(whole)) * 100 + Int(Val(frac))
+END FUNCTION
+
+FUNCTION PalAmt (c AS Integer) AS String
+    VAR frac AS String
+    frac = Str(c MOD 100)
+    IF frac.Length < 2 THEN frac = "0" + frac
+    RETURN Str(Int(c / 100)) + "." + frac
+END FUNCTION

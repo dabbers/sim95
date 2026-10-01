@@ -1,0 +1,19 @@
+<%@ import file="C:\PROGRAMS\PALCHECK.SPK" %>
+<%
+' THANKS.ASP - where SimPal sends buyers back to (the button's return=).
+' It must be on the same machine as SimPal to use PALCHECK.SPK.
+VAR receipt AS String
+VAR order AS String
+receipt = REQUEST.Query("receipt")
+order = REQUEST.Query("order")
+%>
+<html><body>
+<% IF VerifyReceipt(receipt, "%MERCHANT%", "4.99", order) THEN %>
+<h2>Thank you!</h2>
+<p>Order <%= SERVER.HtmlEncode(order) %> is paid. Your widget ships in 6 to 8 weeks.</p>
+<% ELSEIF PalWhy = "used" THEN %>
+<p>That receipt has been used already.</p>
+<% ELSE %>
+<p>Sorry, SimPal says that receipt is no good (<%= PalWhy %>).</p>
+<% END IF %>
+</body></html>

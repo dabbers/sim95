@@ -14,11 +14,12 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | AskSim   | `http://HOST/ask/`   | `C:\WEB\ASK`   |
 | GeoSimies | `http://HOST/geo/` | `C:\WEB\GEO`  |
 | ELIZA-95 | `http://HOST/eliza/` | `C:\WEB\ELIZA` |
+| SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
 `http://HOST/` becomes a front page that lists them. Each app keeps its data
 where it always has (`C:\BOOKDATA`, `C:\MAILDATA`, `C:\ASKDATA`,
-`C:\GEODATA`, `C:\BOTDATA`), and each has its own cookie, so they don't get in each other's
+`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`), and each has its own cookie, so they don't get in each other's
 way. The mail server and the crawler run side by side.
 
 ## Setting up
