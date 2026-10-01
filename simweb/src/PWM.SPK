@@ -1,0 +1,1034 @@
+' PWM.SPK - Personal Web Manager: this machine's web sites, the way Windows 98's
+' Personal Web Server had them. For the machine's owner, so no password.
+'
+' The web server (simweb's HTTPD.SPK) serves a site for each name listed in
+' C:\WEB\VHOSTS.TXT, one a line, name|folder:
+'     coolsite.sim|C:\WEB\SITES\COOLSITE        your own pages
+'     www.coolsite.sim|C:\WEB\SITES\COOLSITE    (the same, with www.)
+'     coolbook.sim|C:\WEB\BOOK                  one of this machine's web apps
+'     book.coolsite.sim|C:\WEB\BOOK
+' This program keeps that list: Add, Edit and Remove a site, and give the
+' machine's apps names under a domain (book.coolsite.sim, mail...). Lines it
+' doesn't know (comments, *.dab.sim) are kept as they are.
+'
+' A name works in Simxplorer only once it points at this machine at SimNIC
+' (http://starthere.56k.net/nic/), so each site's name is asked about: the
+' resolver (simweb/src/RESOLVE.SPK, the Rs... names, joined on by the builder)
+' asks the name server, one name a timer tick, the question the last thing the
+' tick does (SIM95-NOTES.md), and the DNS column says what it said.
+'
+' It also starts and stops the web server, as PWS's Main page did.
+
+CONST VHOSTS = "C:\WEB\VHOSTS.TXT"
+CONST SITES = "C:\WEB\SITES"
+CONST HTTPD = "C:\PROGRAMS\HTTPD.SPK"
+CONST BROWSER = "C:\PROGRAMS\SIMXPLOR.SPK"
+CONST APPTITLE = "Personal Web Manager"
+
+VAR EOL AS String
+VAR here AS String                  ' this machine's name, lower case
+VAR nicUrl AS String
+VAR win AS GUI_Window
+VAR menu AS GUI_Menu
+VAR side AS GUI_Canvas
+VAR clock AS GUI_Timer
+VAR page AS String = "main"
+
+' the sidebar
+VAR bMain AS GUI_Button
+VAR bSites AS GUI_Button
+VAR bApps AS GUI_Button
+
+' Main
+VAR mHead AS GUI_Label
+VAR mPub AS GUI_Label
+VAR mUrl AS GUI_Label
+VAR mStart AS GUI_Button
+VAR mRestart AS GUI_Button
+VAR mSitesHead AS GUI_Label
+VAR mSites AS GUI_Label
+VAR mNicHead AS GUI_Label
+VAR mNic AS GUI_Label
+VAR mNicGo AS GUI_Button
+
+' Web Sites
+VAR sHead AS GUI_Label
+VAR sCols AS GUI_Label
+VAR sList AS GUI_ListBox
+VAR sAdd AS GUI_Button
+VAR sEdit AS GUI_Button
+VAR sRemove AS GUI_Button
+VAR sCheck AS GUI_Button
+VAR sAddr AS GUI_Label
+VAR sHint AS GUI_Label
+
+' Domain Apps
+VAR aHead AS GUI_Label
+VAR aDomLbl AS GUI_Label
+VAR aDomain AS GUI_TextBox
+VAR aSave AS GUI_Button
+VAR aHint AS GUI_Label
+VAR aChk AS Array OF GUI_CheckBox
+VAR aLbl AS Array OF GUI_TextBox
+VAR aTail AS Array OF GUI_Label
+
+' the site dialog
+VAR dWin AS GUI_Window
+VAR dName AS GUI_TextBox
+VAR dWww AS GUI_CheckBox
+VAR dOwn AS GUI_RadioButton
+VAR dApp AS GUI_RadioButton
+VAR dHome AS GUI_RadioButton
+VAR dApps AS GUI_DropDown
+VAR dOwnLbl AS GUI_Label
+VAR dOk AS GUI_Button
+VAR dCancel AS GUI_Button
+VAR dOld AS String                  ' the site being edited ("" for a new one)
+
+' VHOSTS.TXT: the lines it doesn't know, and the sites
+VAR vOther AS Array OF String
+VAR vName AS Array OF String
+VAR vDir AS Array OF String
+VAR rowName AS Array OF String      ' the site on each row of the list
+
+' this machine's web apps: folder and name
+VAR appDir AS Array OF String
+VAR appName AS Array OF String
+
+' what the name server said about each name, and the names still to ask
+VAR dnsName AS Array OF String
+VAR dnsSays AS Array OF String
+VAR dnsWant AS Array OF String
+VAR ticking AS Bool
+
+SUB Main ()
+    EOL = Chr(10)
+    here = NET.HostName.Lower()
+    nicUrl = "http://" + RSCENTRAL + "/nic/"
+    win = GUI_Window.New(APPTITLE, 580, 400)
+    win.Icon = "network"
+    win.onClose = Win_OnClose
+    menu = GUI_Menu.New(win)
+    menu.AddMenu("&Properties")
+    menu.AddItem("&Properties", "&Start Service")
+    menu.AddItem("&Properties", "S&top Service")
+    menu.AddSeparator("&Properties")
+    menu.AddItem("&Properties", "E&xit")
+    menu.AddMenu("&View")
+    menu.AddItem("&View", "&Main")
+    menu.AddItem("&View", "&Web Sites")
+    menu.AddItem("&View", "&Domain Apps")
+    menu.AddMenu("&Help")
+    menu.AddItem("&Help", "&About Personal Web Manager")
+    menu.onSelect = Menu_OnSelect
+
+    ' the sidebar, as PWS had it
+    side = GUI_Canvas.New(win)
+    side.SetBounds(0, 0, 100, 400)
+    side.onDraw = Side_OnDraw
+    bMain = SideButton("&Main", 40)
+    bSites = SideButton("&Web Sites", 80)
+    bApps = SideButton("&Domain Apps", 120)
+
+    ' Main
+    mHead = Heading("Publishing", 16)
+    mPub = Para("", 40, 40)
+    mUrl = Para("", 82, 20)
+    mUrl.Bold = TRUE
+    mStart = GUI_Button.New(win)
+    mStart.SetBounds(460, 44, 100, 26)
+    mStart.onClick = StartStop_Click
+    mStart.Tag = "startstop"
+    mRestart = GUI_Button.New(win)
+    mRestart.SetBounds(460, 76, 100, 26)
+    mRestart.Text = "&Restart"
+    mRestart.onClick = Restart_Click
+    mSitesHead = Heading("Web sites", 120)
+    mSites = Para("", 144, 40)
+    mNicHead = Heading("Domain names", 200)
+    mNic = Para("To give a site here a name like coolsite.sim, register it at SimNIC" + EOL _
+        + "(" + nicUrl + ") and point it at this machine, " + here.Upper() + "." + EOL _
+        + "Simxplorer users reach it only once its name points here at SimNIC." + EOL _
+        + "Then add it under Web Sites, so the web server knows which pages it gets.", 224, 70)
+    mNicGo = GUI_Button.New(win)
+    mNicGo.SetBounds(116, 300, 260, 26)
+    mNicGo.Text = "Register / point it at Sim&NIC"
+    mNicGo.onClick = Nic_Click
+
+    ' Web Sites
+    sHead = Heading("Web sites on " + here.Upper(), 16)
+    sCols = Para(Cols("Site", "Serves", "DNS (SimNIC)"), 40, 18)
+    sList = GUI_ListBox.New(win)
+    sList.Mono = TRUE
+    sList.SetBounds(116, 58, 444, 150)
+    sList.onSelect = List_OnSelect
+    sList.onDblClick = Edit_Click
+    sAdd = SiteButton("&Add...", 116, Add_Click)
+    sEdit = SiteButton("&Edit...", 206, Edit_Click)
+    sRemove = SiteButton("&Remove", 296, Remove_Click)
+    sCheck = SiteButton("&Check DNS", 386, Check_Click)
+    sAddr = Para("", 252, 36)
+    sHint = Para("A site's name must point at " + here.Upper() + " at SimNIC (" + nicUrl + ")" + EOL _
+        + "for Simxplorer users to reach it. Voyager users can always use the second address.", 296, 36)
+
+    ' Domain Apps
+    aHead = Heading("Name my apps under a domain", 16)
+    aDomLbl = Para("Domain:", 44, 20)
+    aDomLbl.Width = 60
+    aDomain = GUI_TextBox.New(win)
+    aDomain.SetBounds(176, 42, 200, 22)
+    aDomain.Tag = "domain"
+    aDomain.onChange = Domain_OnChange
+    aSave = GUI_Button.New(win)
+    aSave.SetBounds(460, 40, 100, 26)
+    aSave.Text = "&Save"
+    aSave.onClick = SaveApps_Click
+    aHint = Para("", 300, 60)
+    FindApps()
+    MakeAppRows()
+
+    clock = GUI_Timer.New(win)
+    clock.Interval = 100
+    clock.onTick = Clock_OnTick
+    clock.Start()
+
+    ReadSites()
+    FillList()
+    CheckAll()
+    ShowPage("main")
+    IF SYS.Args.Count > 0 THEN
+        IF SYS.Args[0].Lower() = "sites" THEN ShowPage("sites")
+        IF SYS.Args[0].Lower() = "apps" THEN ShowPage("apps")
+    END IF
+    win.Show()
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+' ---------------------------------------------------------------- the look
+
+FUNCTION SideButton (text AS String, y AS Integer) AS GUI_Button
+    VAR b AS GUI_Button
+    b = GUI_Button.New(win)
+    b.SetBounds(8, y, 84, 30)
+    b.Text = text
+    b.onClick = Side_Click
+    RETURN b
+END FUNCTION
+
+FUNCTION SiteButton (text AS String, x AS Integer, h AS Handler) AS GUI_Button
+    VAR b AS GUI_Button
+    b = GUI_Button.New(win)
+    b.SetBounds(x, 216, 84, 26)
+    b.Text = text
+    b.onClick = h
+    RETURN b
+END FUNCTION
+
+FUNCTION Heading (text AS String, y AS Integer) AS GUI_Label
+    VAR l AS GUI_Label
+    l = GUI_Label.New(win)
+    l.SetBounds(116, y, 330, 20)
+    l.Text = text
+    l.Bold = TRUE
+    RETURN l
+END FUNCTION
+
+FUNCTION Para (words AS String, y AS Integer, h AS Integer) AS GUI_Label
+    VAR l AS GUI_Label
+    l = GUI_Label.New(win)
+    l.SetBounds(116, y, 444, h)
+    l.Text = words
+    RETURN l
+END FUNCTION
+
+FUNCTION Cols (a AS String, b AS String, c AS String) AS String
+    IF a.Length > 25 THEN a = a.Substring(0, 24) + "~"
+    IF b.Length > 21 THEN b = b.Substring(0, 20) + "~"
+    RETURN a.PadRight(26) + b.PadRight(22) + c
+END FUNCTION
+
+SUB Side_OnDraw (canvas AS Any)
+    side.SetColor(6)
+    side.FillRect(0, 0, 100, 400)
+    side.SetColor(15)
+    side.Text(10, 12, "View")
+    side.SetColor(7)
+    side.Line(8, 30, 92, 30)
+END SUB
+
+SUB Side_Click ()
+    IF bMain.Focused THEN ShowPage("main")
+    IF bSites.Focused THEN ShowPage("sites")
+    IF bApps.Focused THEN ShowPage("apps")
+END SUB
+
+SUB Menu_OnSelect (item AS String)
+    SELECT CASE item
+        CASE "Start Service"
+            IF WebPid() = 0 THEN StartStop_Click()
+        CASE "Stop Service"
+            IF WebPid() <> 0 THEN StartStop_Click()
+        CASE "Exit"
+            SYS.Exit(0)
+        CASE "Main"
+            ShowPage("main")
+        CASE "Web Sites"
+            ShowPage("sites")
+        CASE "Domain Apps"
+            ShowPage("apps")
+        CASE "About Personal Web Manager"
+            Say("info", "Personal Web Manager 1.0 for SIM95 (simweb)" + EOL + EOL + "Publishes your pages, and this machine's apps, at names of their own." + EOL + "Names are registered at SimNIC: " + nicUrl)
+    END SELECT
+END SUB
+
+SUB ShowPage (p AS String)
+    VAR i AS Integer
+    VAR m AS Bool
+    VAR s AS Bool
+    VAR a AS Bool
+    page = p
+    m = (p = "main")
+    s = (p = "sites")
+    a = (p = "apps")
+    mHead.Visible = m
+    mPub.Visible = m
+    mUrl.Visible = m
+    mStart.Visible = m
+    mRestart.Visible = m
+    mSitesHead.Visible = m
+    mSites.Visible = m
+    mNicHead.Visible = m
+    mNic.Visible = m
+    mNicGo.Visible = m
+    sHead.Visible = s
+    sCols.Visible = s
+    sList.Visible = s
+    sAdd.Visible = s
+    sEdit.Visible = s
+    sRemove.Visible = s
+    sCheck.Visible = s
+    sAddr.Visible = s
+    sHint.Visible = s
+    aHead.Visible = a
+    aDomLbl.Visible = a
+    aDomain.Visible = a
+    aSave.Visible = a
+    aHint.Visible = a
+    FOR i = 0 TO aChk.Count - 1
+        aChk[i].Visible = a
+        aLbl[i].Visible = a
+        aTail[i].Visible = a
+    NEXT
+    IF m THEN
+        win.Title = APPTITLE + " - Main"
+        ShowMain()
+    ELSEIF s THEN
+        win.Title = APPTITLE + " - Web Sites"
+    ELSE
+        win.Title = APPTITLE + " - Domain Apps"
+        IF aDomain.Text = "" THEN aDomain.Text = FirstDomain()
+        FillApps()
+    END IF
+END SUB
+
+FUNCTION Say (kind AS String, text AS String) AS Bool
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = APPTITLE
+    box.Kind = kind
+    IF kind = "confirm" THEN box.Buttons = "yesno"
+    box.Text = text
+    RETURN box.Show()
+END FUNCTION
+
+' ---------------------------------------------------------------- the web server
+
+' The web server's process, or 0 when it isn't running.
+FUNCTION WebPid () AS Integer
+    VAR t AS String
+    FOR EACH t IN SYS.Tasks()
+        IF t.Split("|")[1].Upper() = "HTTPD" THEN RETURN Int(Val(t.Split("|")[0]))
+    NEXT
+    RETURN 0
+END FUNCTION
+
+SUB ShowMain ()
+    VAR n AS Integer
+    IF WebPid() <> 0 THEN
+        mPub.Text = "Web publishing is on. Your home page is available at:"
+        mUrl.Text = "http://" + here + "/"
+        mStart.Text = "&Stop"
+        mRestart.Enabled = TRUE
+    ELSE
+        mPub.Text = "Web publishing is off. Your pages can't be seen from" + EOL + "the network. Click Start to make them available."
+        mUrl.Text = ""
+        mStart.Text = "&Start"
+        mRestart.Enabled = FALSE
+    END IF
+    n = rowName.Count
+    IF n = 0 THEN
+        mSites.Text = "No sites by name yet. Add one under Web Sites."
+    ELSEIF n = 1 THEN
+        mSites.Text = "1 site by name: " + rowName[0] + "." + EOL + "See Web Sites for what it serves and whether its name points here."
+    ELSE
+        mSites.Text = Str(n) + " sites by name. See Web Sites for what each serves" + EOL + "and whether its name points here."
+    END IF
+END SUB
+
+SUB StartStop_Click ()
+    VAR pid AS Integer
+    pid = WebPid()
+    IF pid <> 0 THEN
+        SYS.Kill(pid)
+        win.Status = "The web server is stopped."
+    ELSE
+        SYS.Run(HTTPD)
+        win.Status = "The web server is running."
+    END IF
+    ShowMain()
+END SUB
+
+SUB Restart_Click ()
+    VAR pid AS Integer
+    pid = WebPid()
+    IF pid <> 0 THEN SYS.Kill(pid)
+    SYS.Run(HTTPD)
+    win.Status = "The web server was restarted."
+    ShowMain()
+END SUB
+
+SUB Nic_Click ()
+    OpenPage(nicUrl)
+END SUB
+
+SUB OpenPage (url AS String)
+    IF FS.Exists(BROWSER) THEN
+        SYS.Start(BROWSER, url)
+    ELSE
+        SYS.Start("C:\SYSTEM\VOYAGER.EXE", url)
+    END IF
+    win.Status = "Opened " + url
+END SUB
+
+' ---------------------------------------------------------------- VHOSTS.TXT
+
+SUB ReadSites ()
+    VAR line AS String
+    VAR t AS String
+    VAR n AS String
+    VAR d AS String
+    vOther.Clear()
+    vName.Clear()
+    vDir.Clear()
+    IF NOT FS.Exists(VHOSTS) THEN RETURN
+    FOR EACH line IN FS.Read(VHOSTS).Lines()
+        t = line.Trim()
+        IF t = "" THEN CONTINUE
+        IF t.StartsWith(";") OR t.StartsWith("'") OR t.StartsWith("#") OR NOT t.Contains("|") THEN
+            vOther.Add(line)
+            CONTINUE
+        END IF
+        n = t.Substring(0, t.IndexOf("|")).Trim().Lower()
+        d = t.Substring(t.IndexOf("|") + 1, t.Length - t.IndexOf("|") - 1).Trim().Upper()
+        IF d.EndsWith("\") THEN d = d.Substring(0, d.Length - 1)
+        IF n = "" OR vName.Contains(n) THEN
+            vOther.Add(line)
+            CONTINUE
+        END IF
+        vName.Add(n)
+        vDir.Add(d)
+    NEXT
+END SUB
+
+SUB SaveSites ()
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR i AS Integer
+    FOR EACH line IN vOther
+        out.Add(line)
+    NEXT
+    FOR i = 0 TO vName.Count - 1
+        out.Add(vName[i] + "|" + vDir[i])
+    NEXT
+    FS.Write(VHOSTS, out.Join(EOL) + EOL)
+END SUB
+
+FUNCTION DirOf (name AS String) AS String
+    VAR i AS Integer
+    i = vName.IndexOf(name)
+    IF i < 0 THEN RETURN ""
+    RETURN vDir[i]
+END FUNCTION
+
+SUB SetSite (name AS String, dir AS String)
+    VAR i AS Integer
+    i = vName.IndexOf(name)
+    IF i >= 0 THEN
+        vDir[i] = dir
+    ELSE
+        vName.Add(name)
+        vDir.Add(dir)
+    END IF
+END SUB
+
+SUB DropSite (name AS String)
+    VAR i AS Integer
+    i = vName.IndexOf(name)
+    IF i < 0 THEN RETURN
+    vName.RemoveAt(i)
+    vDir.RemoveAt(i)
+END SUB
+
+' Does name have a www. twin serving the same folder?
+FUNCTION HasWww (name AS String) AS Bool
+    IF name.StartsWith("www.") OR name.StartsWith("*.") THEN RETURN FALSE
+    IF DirOf(name) = "" THEN RETURN FALSE
+    RETURN DirOf("www." + name) = DirOf(name)
+END FUNCTION
+
+' What a folder is, in words.
+FUNCTION Serves (dir AS String) AS String
+    VAR i AS Integer
+    IF dir = "C:\WEB" THEN RETURN "home page"
+    i = appDir.IndexOf(dir)
+    IF i >= 0 THEN RETURN appName[i] + " (" + dir.Substring(7, dir.Length - 7) + ")"
+    IF dir.StartsWith(SITES + "\") THEN RETURN "own pages (" + dir.Substring(7, dir.Length - 7) + ")"
+    RETURN dir
+END FUNCTION
+
+' The list: one row a site, a www. twin shown with the site.
+SUB FillList ()
+    VAR i AS Integer
+    VAR n AS String
+    VAR shown AS String
+    VAR keep AS Integer
+    keep = sList.Selected
+    sList.Clear()
+    rowName.Clear()
+    FOR i = 0 TO vName.Count - 1
+        n = vName[i]
+        IF n.StartsWith("www.") THEN
+            IF HasWww(n.Substring(4, n.Length - 4)) THEN CONTINUE
+        END IF
+        shown = n
+        IF HasWww(n) THEN shown = n + " +www"
+        sList.Add(Cols(shown, Serves(vDir[i]), DnsOf(n)))
+        rowName.Add(n)
+    NEXT
+    IF keep >= 0 AND keep < sList.Count THEN sList.Selected = keep
+    List_OnSelect()
+    IF page = "main" THEN ShowMain()
+END SUB
+
+FUNCTION Chosen () AS String
+    IF sList.Selected < 0 OR sList.Selected >= rowName.Count THEN RETURN ""
+    RETURN rowName[sList.Selected]
+END FUNCTION
+
+SUB List_OnSelect ()
+    VAR n AS String
+    n = Chosen()
+    sEdit.Enabled = n <> ""
+    sRemove.Enabled = n <> ""
+    IF n = "" OR n.StartsWith("*.") THEN
+        sAddr.Text = ""
+        RETURN
+    END IF
+    sAddr.Text = "In Simxplorer: http://" + n + "/" + EOL + "In Voyager:    http://" + here + "/" + n + "/"
+END SUB
+
+' ---------------------------------------------------------------- the apps
+
+' This machine's web apps, each in a folder of its own (as SimHost puts them):
+' those with an APP.INF, and the known ones from before there was one.
+SUB FindApps ()
+    VAR known AS Array OF String
+    VAR f AS String
+    VAR k AS String
+    VAR p AS Array OF String
+    appDir.Clear()
+    appName.Clear()
+    known = ["BOOK|BOOK.SPK|SimBook", "MAIL|MAIL.SPK|ColdMail", "ASK|ASK.SPK|AskSim", "GEO|GEO.SPK|GeoSimies", "WIKI|WIKI.SPK|WikiSim", "ELIZA|BOT.SPK|ELIZA-95", "PAL|PAL.SPK|SimPal", "TUBE|TUBE.SPK|SimTube", "STATS|STATS.SPK|SimStats", "VAPOR|CATALOG.TXT|Vapor", "NIC|NIC.SPK|SimNIC"]
+    IF NOT FS.Exists("C:\WEB") THEN RETURN
+    FOR EACH f IN FS.List("C:\WEB")
+        IF NOT f.EndsWith("\") THEN CONTINUE
+        f = f.Substring(0, f.Length - 1).Upper()
+        IF f = "SITES" THEN CONTINUE
+        IF FS.Exists("C:\WEB\" + f + "\APP.INF") THEN
+            p = FS.Read("C:\WEB\" + f + "\APP.INF").Split("|")
+            appDir.Add("C:\WEB\" + f)
+            appName.Add(p[0].Trim())
+            CONTINUE
+        END IF
+        FOR EACH k IN known
+            p = k.Split("|")
+            IF p[0] = f AND FS.Exists("C:\WEB\" + f + "\" + p[1]) THEN
+                appDir.Add("C:\WEB\" + f)
+                appName.Add(p[2])
+            END IF
+        NEXT
+    NEXT
+END SUB
+
+' A row a app: [x] SimBook  [book    ] .coolsite.sim
+SUB MakeAppRows ()
+    VAR i AS Integer
+    VAR c AS GUI_CheckBox
+    VAR t AS GUI_TextBox
+    VAR l AS GUI_Label
+    VAR y AS Integer
+    FOR i = 0 TO appDir.Count - 1
+        IF i >= 10 THEN BREAK
+        y = 76 + i * 22
+        c = GUI_CheckBox.New(win)
+        c.SetBounds(116, y, 120, 20)
+        c.Text = appName[i]
+        c.Tag = "app:" + appDir[i]
+        aChk.Add(c)
+        t = GUI_TextBox.New(win)
+        t.SetBounds(240, y, 80, 20)
+        t.Tag = "label:" + appDir[i]
+        t.MaxLength = 20
+        aLbl.Add(t)
+        l = GUI_Label.New(win)
+        l.SetBounds(324, y + 2, 240, 18)
+        aTail.Add(l)
+    NEXT
+END SUB
+
+' The first domain the sites are under, to start the apps page with.
+FUNCTION FirstDomain () AS String
+    VAR n AS String
+    FOR EACH n IN rowName
+        IF NOT n.StartsWith("*.") AND n.Split(".").Count = 2 THEN RETURN n
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION AppDomain () AS String
+    VAR d AS String
+    d = aDomain.Text.Trim().Lower()
+    IF d.StartsWith("www.") THEN d = d.Substring(4, d.Length - 4)
+    IF d.EndsWith(".") THEN d = d.Substring(0, d.Length - 1)
+    RETURN d
+END FUNCTION
+
+' The name under domain that app folder dir has now, or "".
+FUNCTION AppLabel (dir AS String, domain AS String) AS String
+    VAR i AS Integer
+    VAR n AS String
+    FOR i = 0 TO vName.Count - 1
+        n = vName[i]
+        IF vDir[i] = dir AND n.EndsWith("." + domain) THEN
+            n = n.Substring(0, n.Length - domain.Length - 1)
+            IF NOT n.Contains(".") AND n <> "*" AND n <> "www" THEN RETURN n
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB Domain_OnChange ()
+    FillApps()
+END SUB
+
+SUB FillApps ()
+    VAR i AS Integer
+    VAR d AS String
+    VAR has AS String
+    d = AppDomain()
+    FOR i = 0 TO aChk.Count - 1
+        has = ""
+        IF CleanName(d) <> "" THEN has = AppLabel(appDir[i], d)
+        aChk[i].Checked = has <> ""
+        IF has <> "" THEN
+            aLbl[i].Text = has
+        ELSEIF aLbl[i].Text = "" THEN
+            aLbl[i].Text = appDir[i].Substring(7, appDir[i].Length - 7).Lower()
+        END IF
+        IF d = "" THEN
+            aTail[i].Text = ".yourdomain.sim"
+        ELSE
+            aTail[i].Text = "." + d
+        END IF
+    NEXT
+    IF aChk.Count = 0 THEN
+        aHint.Text = "This machine has no web apps in folders of their own (SimHost puts" + EOL + "them there). Give the home page a name under Web Sites instead."
+    ELSE
+        aHint.Text = "Tick the apps that should have a name under the domain, and Save." + EOL _
+            + "Each name must point here at SimNIC too: in Advanced DNS, a CNAME" + EOL _
+            + "for each (book CNAME " + here + "), or one * CNAME " + here + " for them all."
+    END IF
+END SUB
+
+SUB SaveApps_Click ()
+    VAR d AS String
+    VAR i AS Integer
+    VAR lbl AS String
+    VAR old AS String
+    VAR added AS Integer
+    VAR removed AS Integer
+    d = CleanName(AppDomain())
+    IF d = "" OR d.StartsWith("*.") THEN
+        Say("warn", "Type the domain the apps' names go under, like coolsite.sim.")
+        RETURN
+    END IF
+    ReadSites()
+    ' first every label, so a bad one changes nothing
+    FOR i = 0 TO aChk.Count - 1
+        IF aChk[i].Checked THEN
+            lbl = aLbl[i].Text.Trim().Lower()
+            IF lbl = "" OR lbl.Contains(".") OR CleanName(lbl + "." + d) = "" OR lbl = "www" THEN
+                Say("warn", aLbl[i].Text + " can't be a name under " + d + ". Use letters, digits and hyphens, like book.")
+                RETURN
+            END IF
+        END IF
+    NEXT
+    FOR i = 0 TO aChk.Count - 1
+        old = AppLabel(appDir[i], d)
+        lbl = aLbl[i].Text.Trim().Lower()
+        IF aChk[i].Checked THEN
+            IF old <> lbl THEN
+                IF old <> "" THEN DropSite(old + "." + d)
+                SetSite(lbl + "." + d, appDir[i])
+                Want(lbl + "." + d)
+                added = added + 1
+            END IF
+        ELSEIF old <> "" THEN
+            DropSite(old + "." + d)
+            removed = removed + 1
+        END IF
+    NEXT
+    SaveSites()
+    FillList()
+    FillApps()
+    win.Status = "Saved: " + Str(added) + " names added under " + d + ", " + Str(removed) + " taken away."
+END SUB
+
+' ---------------------------------------------------------------- adding and editing
+
+' A site's name as typed, lower case, or "" when it can't be one: letters,
+' digits and hyphens, with at least one dot (a *. in front for every name
+' under a domain).
+FUNCTION CleanName (n AS String) AS String
+    VAR i AS Integer
+    VAR rest AS String
+    n = n.Trim().Lower()
+    IF n.StartsWith("http://") THEN n = n.Substring(7, n.Length - 7)
+    IF n.EndsWith("/") THEN n = n.Substring(0, n.Length - 1)
+    IF n.EndsWith(".") THEN n = n.Substring(0, n.Length - 1)
+    rest = n
+    IF rest.StartsWith("*.") THEN rest = rest.Substring(2, rest.Length - 2)
+    IF rest = "" OR rest.Length > 60 OR NOT rest.Contains(".") THEN RETURN ""
+    IF rest.StartsWith(".") OR rest.StartsWith("-") OR rest.Contains("..") THEN RETURN ""
+    FOR i = 0 TO rest.Length - 1
+        IF NOT "abcdefghijklmnopqrstuvwxyz0123456789-.".Contains(rest.CharAt(i)) THEN RETURN ""
+    NEXT
+    RETURN n
+END FUNCTION
+
+' Where a site's own pages go: C:\WEB\SITES\COOLSITE for coolsite.sim.
+FUNCTION OwnFolder (name AS String) AS String
+    VAR label AS String
+    VAR i AS Integer
+    VAR c AS String
+    VAR n AS Integer
+    VAR folder AS String
+    label = ""
+    FOR i = 0 TO name.Length - 1
+        c = name.CharAt(i)
+        IF c = "." AND label <> "" AND label <> "WWW" THEN BREAK
+        IF c = "." THEN
+            label = ""
+        ELSEIF "abcdefghijklmnopqrstuvwxyz0123456789".Contains(c) THEN
+            label = label + c.Upper()
+        END IF
+    NEXT
+    IF label = "" THEN label = "SITE"
+    IF label.Length > 8 THEN label = label.Substring(0, 8)
+    folder = SITES + "\" + label
+    ' a folder another site already has is that site's
+    WHILE FolderTaken(folder, name) AND n < 99
+        n = n + 1
+        IF label.Length > 6 THEN label = label.Substring(0, 6)
+        folder = SITES + "\" + label + Str(n).PadLeft(2).Replace(" ", "0")
+    END WHILE
+    RETURN folder
+END FUNCTION
+
+FUNCTION FolderTaken (folder AS String, name AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO vName.Count - 1
+        IF vDir[i] = folder AND vName[i] <> name AND vName[i] <> "www." + name AND vName[i] <> dOld AND vName[i] <> "www." + dOld THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' Makes the folder, with an "Under construction" page, if it isn't there.
+SUB MakeFolder (folder AS String, name AS String)
+    IF NOT FS.Exists(SITES) THEN FS.MakeDir(SITES)
+    IF NOT FS.Exists(folder) THEN FS.MakeDir(folder)
+    IF FS.Exists(folder + "\INDEX.HTM") OR FS.Exists(folder + "\INDEX.ASP") THEN RETURN
+    FS.Write(folder + "\INDEX.HTM", "<html><head><title>" + name + "</title></head>" + EOL _
+        + "<body bgcolor=""#FFFFFF"">" + EOL + "<center><h1>" + name + "</h1>" + EOL _
+        + "<p><font size=""5"" color=""#CC0000""><b>Under construction</b></font></p>" + EOL _
+        + "<p>This site is being built. Please come back soon!</p>" + EOL _
+        + "<hr width=""50%""><p><font size=""2"">Published with Personal Web Manager on " + here + ".<br>" + EOL _
+        + "(Its owner puts pages in " + folder + ".)</font></p></center>" + EOL _
+        + "</body></html>" + EOL)
+END SUB
+
+SUB Add_Click ()
+    SiteDialog("")
+END SUB
+
+SUB Edit_Click ()
+    IF Chosen() = "" THEN RETURN
+    SiteDialog(Chosen())
+END SUB
+
+SUB SiteDialog (old AS String)
+    VAR l AS GUI_Label
+    VAR i AS Integer
+    VAR dir AS String
+    IF NOT IsNothing(dWin) THEN
+        dWin.Focus()
+        RETURN
+    END IF
+    dOld = old
+    dWin = GUI_Window.New("Add Web Site", 400, 250)
+    IF old <> "" THEN dWin.Title = "Edit Web Site"
+    dWin.Icon = "network"
+    dWin.Modal = TRUE
+    dWin.onClose = Dialog_OnClose
+    l = GUI_Label.New(dWin)
+    l.SetBounds(10, 12, 80, 20)
+    l.Text = "Site &name:"
+    dName = GUI_TextBox.New(dWin)
+    dName.SetBounds(96, 10, 290, 22)
+    dName.Tag = "sitename"
+    dName.onChange = DName_OnChange
+    dWww = GUI_CheckBox.New(dWin)
+    dWww.SetBounds(96, 36, 290, 20)
+    dWww.Tag = "www"
+    dWww.Checked = TRUE
+    l = GUI_Label.New(dWin)
+    l.SetBounds(10, 66, 380, 20)
+    l.Text = "It serves:"
+    dOwn = Radio("&My own pages", 88, "own")
+    dOwnLbl = GUI_Label.New(dWin)
+    dOwnLbl.SetBounds(30, 108, 360, 18)
+    dApp = Radio("A web &app on this machine:", 130, "app")
+    dApps = GUI_DropDown.New(dWin)
+    dApps.SetBounds(220, 128, 166, 22)
+    FOR i = 0 TO appDir.Count - 1
+        dApps.Add(appName[i] + " (" + appDir[i].Substring(7, appDir[i].Length - 7) + ")")
+    NEXT
+    IF appDir.Count > 0 THEN dApps.Selected = 0
+    dApp.Enabled = appDir.Count > 0
+    dApps.Enabled = appDir.Count > 0
+    dHome = Radio("This machine's &home page (C:\WEB)", 156, "home")
+    dOk = GUI_Button.New(dWin)
+    dOk.SetBounds(206, 210, 86, 28)
+    dOk.Text = "OK"
+    dOk.Default = TRUE
+    dOk.onClick = DialogOk_Click
+    dCancel = GUI_Button.New(dWin)
+    dCancel.SetBounds(300, 210, 86, 28)
+    dCancel.Text = "Cancel"
+    dCancel.Cancel = TRUE
+    dCancel.onClick = DialogCancel_Click
+    dOwn.Checked = TRUE
+    IF old <> "" THEN
+        dName.Text = old
+        dWww.Checked = HasWww(old)
+        dir = DirOf(old)
+        IF dir = "C:\WEB" THEN
+            dHome.Checked = TRUE
+        ELSEIF appDir.IndexOf(dir) >= 0 THEN
+            dApp.Checked = TRUE
+            dApps.Selected = appDir.IndexOf(dir)
+        END IF
+    END IF
+    DName_OnChange()
+    dWin.Show()
+    dName.Focus()
+END SUB
+
+FUNCTION Radio (text AS String, y AS Integer, tag AS String) AS GUI_RadioButton
+    VAR r AS GUI_RadioButton
+    r = GUI_RadioButton.New(dWin)
+    r.SetBounds(14, y, 300, 20)
+    r.Text = text
+    r.Group = "serves"
+    r.Tag = tag
+    RETURN r
+END FUNCTION
+
+SUB DName_OnChange ()
+    VAR n AS String
+    n = CleanName(dName.Text)
+    IF n.StartsWith("www.") THEN n = n.Substring(4, n.Length - 4)
+    IF n = "" THEN
+        dWww.Text = "Also www. in front"
+        dOwnLbl.Text = "(a folder of its own in " + SITES + ")"
+    ELSE
+        dWww.Text = "Also www." + n
+        dOwnLbl.Text = "(in " + OwnFolder(n) + ")"
+    END IF
+    dWww.Enabled = NOT n.StartsWith("*.")
+END SUB
+
+SUB Dialog_OnClose ()
+    dWin = NOTHING
+END SUB
+
+SUB DialogCancel_Click ()
+    dWin.Close()
+END SUB
+
+SUB DialogOk_Click ()
+    VAR n AS String
+    VAR www AS Bool
+    VAR dir AS String
+    n = CleanName(dName.Text)
+    IF n = "" THEN
+        Say("warn", "Type the site's name, like coolsite.sim: letters, digits and hyphens, with a dot.")
+        RETURN
+    END IF
+    www = dWww.Checked AND NOT n.StartsWith("*.")
+    IF n.StartsWith("www.") THEN
+        n = n.Substring(4, n.Length - 4)
+        www = TRUE
+    END IF
+    ReadSites()
+    IF n <> dOld AND DirOf(n) <> "" THEN
+        Say("warn", n + " is already one of this machine's sites. Choose it in the list and press Edit.")
+        RETURN
+    END IF
+    IF dHome.Checked THEN
+        dir = "C:\WEB"
+    ELSEIF dApp.Checked AND dApps.Selected >= 0 AND dApps.Selected < appDir.Count THEN
+        dir = appDir[dApps.Selected]
+    ELSE
+        dir = OwnFolder(n)
+        MakeFolder(dir, n)
+    END IF
+    IF dOld <> "" THEN
+        IF HasWww(dOld) THEN DropSite("www." + dOld)
+        DropSite(dOld)
+    END IF
+    DropSite("www." + n)
+    SetSite(n, dir)
+    IF www THEN SetSite("www." + n, dir)
+    SaveSites()
+    Want(n)
+    dWin.Close()
+    FillList()
+    sList.Selected = rowName.IndexOf(n)
+    List_OnSelect()
+    win.Status = n + " serves " + Serves(dir) + ". Point it at " + here.Upper() + " at SimNIC if you haven't."
+END SUB
+
+SUB Remove_Click ()
+    VAR n AS String
+    n = Chosen()
+    IF n = "" THEN RETURN
+    IF NOT Say("confirm", "Take " + n + " off this web server?" + EOL + EOL + "Its folder and pages are left where they are, and its name stays yours at SimNIC.") THEN RETURN
+    ReadSites()
+    IF HasWww(n) THEN DropSite("www." + n)
+    DropSite(n)
+    SaveSites()
+    FillList()
+    win.Status = n + " is no longer served here."
+END SUB
+
+' ---------------------------------------------------------------- DNS
+' What the name server says about each site's name, asked one a tick.
+
+FUNCTION DnsOf (name AS String) AS String
+    VAR i AS Integer
+    IF name.StartsWith("*.") THEN RETURN "-"
+    i = dnsName.IndexOf(name)
+    IF i < 0 THEN RETURN "checking..."
+    RETURN dnsSays[i]
+END FUNCTION
+
+SUB Want (name AS String)
+    VAR i AS Integer
+    IF name.StartsWith("*.") THEN RETURN
+    i = dnsName.IndexOf(name)
+    IF i >= 0 THEN
+        dnsName.RemoveAt(i)
+        dnsSays.RemoveAt(i)
+    END IF
+    IF NOT dnsWant.Contains(name) THEN dnsWant.Add(name)
+END SUB
+
+SUB CheckAll ()
+    VAR n AS String
+    FOR EACH n IN rowName
+        Want(n)
+    NEXT
+END SUB
+
+SUB Check_Click ()
+    ' asked again from scratch, and a silent name server is tried again too
+    RsForget()
+    dnsName.Clear()
+    dnsSays.Clear()
+    CheckAll()
+    FillList()
+    win.Status = "Asking the name server, " + RsNameServer() + "..."
+END SUB
+
+' Is this machine the one a name leads to?
+FUNCTION IsHere (target AS String) AS Bool
+    VAR t AS String
+    t = target.Lower()
+    IF t.EndsWith(".") THEN t = t.Substring(0, t.Length - 1)
+    RETURN t = here OR t = here.Split(".")[0] OR t = NET.LocalAddress OR t = "localhost"
+END FUNCTION
+
+' What the resolver knows about name, in words.
+FUNCTION DnsWords (name AS String) AS String
+    IF RsNameServer() = "" THEN RETURN "no name server"
+    IF RsKnown(name) THEN
+        IF IsHere(RsTarget(name)) THEN RETURN Chr(10003) + " points here"
+        RETURN "points at " + RsTarget(name)
+    END IF
+    IF RsNoSuchName(name) THEN RETURN "not registered"
+    IF RsSilent() THEN RETURN "name server not answering"
+    RETURN "points nowhere"
+END FUNCTION
+
+SUB Clock_OnTick ()
+    ' nothing may come after this TRY: a tick whose question was refused is spoiled
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
+    VAR n AS String
+    IF ticking THEN RETURN
+    IF page = "main" AND SYS.Ticks MOD 1000 < 100 THEN ShowMain()
+    IF dnsWant.Count = 0 THEN RETURN
+    n = dnsWant[0]
+    ticking = TRUE
+    ' asked now (a Connect: the last thing this tick does), or on its way
+    IF RsNext(n) THEN
+        ticking = FALSE
+        win.Status = "Asking the name server about " + n + "..."
+        RETURN
+    END IF
+    ticking = FALSE
+    dnsWant.RemoveAt(0)
+    dnsName.Add(n)
+    dnsSays.Add(DnsWords(n))
+    FillList()
+    IF dnsWant.Count = 0 THEN win.Status = "The name server has answered for every site."
+END SUB

@@ -25,14 +25,15 @@ pages live: point it at any machine on the network, and change it any time.</p>
 <p><font size="2">.sim, .com, .net and .org. Registration is <%= cost %>.</font></p>
 <h3>What's New</h3>
 <ul>
-<li><b>Host it here!</b> Register a name and have your site on <%= H(SERVER.Name.Lower()) %> in one step.</li>
+<li><b>One box, and you're on the Web.</b> Register a name, type the name of the machine your site is on,
+press Save. That's it.</li>
 <li><b>Point names at machines.</b> SIM95 addresses change every time a machine starts, but its name doesn't:
-SimNIC records are CNAMEs to machine names, so your domain always finds you.</li>
+SimNIC points your domain at your machine's name, so it always finds you.</li>
 <li><%= taken %> domain<% IF taken <> 1 THEN %>s<% END IF %> registered so far. Don't wait - the good ones are going fast!</li>
 </ul>
-<p><font size="2">To use names like these, set your browser's <b>name server</b> to <b><%= H(SERVER.Name.Lower()) %></b>
-(Simxplorer: View, Options). Voyager users can still visit any site hosted here at
-<tt>http://<%= H(SERVER.Name.Lower()) %>/www.<i>yourname</i>.sim/</tt>. <a href="help.asp">More help</a>.</font></p>
+<p><font size="2">Every Simxplorer on the network asks <b><%= H(SERVER.Name.Lower()) %></b> about names like these,
+so a name registered here works everywhere at once. Voyager doesn't know names, but it can visit any site
+by its machine: <tt>http://<i>machine</i>/www.<i>yourname</i>.sim/</tt>. <a href="help.asp">More help</a>.</font></p>
 </td><td valign="top" width="230" bgcolor="#EEEEFF">
 <% IF viewer <> "" THEN %>
 <p>Welcome back, <b><%= H(NameOf(viewer)) %></b>.</p>

@@ -4,7 +4,7 @@
 ' Files ending in .ASP are ActiveSparkPages: SPARK runs on this machine
 ' and the result is sent. See section 12 of C:\DOCS\SPARK.TXT.
 '
-' SimDNS edition: the stock web server, plus virtual hosts. One machine can
+' simweb edition: the stock web server, plus virtual hosts. One machine can
 ' serve several sites, each from a folder of its own, listed in
 ' C:\WEB\VHOSTS.TXT, one a line:
 '     www.coolsite.sim|C:\WEB\SITES\COOLSITE
@@ -28,13 +28,14 @@
 ' A RESPONSE.Redirect to "/x.asp" is put back inside the site by path. Links
 ' that start with / can't be: in a site, use relative links.
 '
-' The stock web server is kept as C:\PROGRAMS\HTTPD.ORG. When SimDNS is
-' uninstalled (C:\PROGRAMS\NAMED.SPK is gone), this one puts it back.
+' The stock web server is kept as C:\PROGRAMS\HTTPD.ORG. When simweb is
+' uninstalled (C:\PROGRAMS\PWM.SPK, Personal Web Manager, is gone), this one
+' puts it back.
 
 CONST VHOSTS = "C:\WEB\VHOSTS.TXT"
 CONST ME = "C:\PROGRAMS\HTTPD.SPK"
 CONST ORIGINAL = "C:\PROGRAMS\HTTPD.ORG"
-CONST SIMDNS = "C:\PROGRAMS\NAMED.SPK"
+CONST SIMWEB = "C:\PROGRAMS\PWM.SPK"
 
 VAR win AS GUI_Window
 VAR log AS GUI_ListBox
@@ -74,8 +75,8 @@ END SUB
 
 SUB Timer_OnTick ()
     VAR sites AS String
-    ' SimDNS uninstalled: the stock web server comes back
-    IF FS.Exists(ORIGINAL) AND NOT FS.Exists(SIMDNS) THEN
+    ' simweb uninstalled (by Vapor, say): the stock web server comes back
+    IF FS.Exists(ORIGINAL) AND NOT FS.Exists(SIMWEB) THEN
         PutBack()
         RETURN
     END IF
@@ -89,7 +90,7 @@ SUB Timer_OnTick ()
 END SUB
 
 SUB PutBack ()
-    log.Add("SimDNS is gone: the stock web server takes over again")
+    log.Add("simweb is gone: the stock web server takes over again")
     timer.Stop()
     sock.Close()
     TRY
@@ -198,7 +199,7 @@ SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
     END IF
 
     conn.Send("HTTP/1.0 200 OK")
-    conn.Send("Server: HTTPD.SPK/1.1 (SIM95; SimDNS)")
+    conn.Send("Server: HTTPD.SPK/1.1 (SIM95; simweb)")
     conn.Send("Content-Type: " + ContentType(file))
     conn.Send("")
     conn.Send(FS.Read(file))

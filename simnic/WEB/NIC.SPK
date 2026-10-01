@@ -1,20 +1,25 @@
 ' NIC.SPK - SimNIC, the domain name registrar (InterNIC, 1996). Every page
 ' pulls this in with <%@ import file="NIC.SPK" %>.
 '
-' A domain registered here is a zone this machine's name server (NAMED.SPK)
-' answers for. SimNIC writes the zone file and lists it in NAMED.CNF; NAMED
-' sees the change within a few seconds. Records point names at machines
-' with CNAMEs ("www CNAME alpha"), since addresses change and names don't.
+' SimNIC runs on one machine only: the central host, STARTHERE.56k.net, which
+' every SIM95 machine asks about names by default. A domain registered here
+' is a zone this machine's name server (NAMED.SPK) answers for. SimNIC writes
+' the zone file and lists it in NAMED.CNF; NAMED sees the change within a few
+' seconds. Domains point at machines with CNAMEs ("www CNAME alpha"), since
+' addresses change and names don't.
 '
-'   C:\NICDATA\USERS\<user>.TXT     an account, key=value (password salted + hashed)
+' SimNIC does names and nothing else. Serving the site is the job of the
+' machine the domain points at: its web server (simweb's HTTPD.SPK) and
+' Personal Web Manager, which say which folder each name gets.
+'
+'   C:\NICDATA\USERS\<user>.TXT     an account, key=value (password salted + hashed,
+'                                   and the machine its domains last pointed at)
 '   C:\NICDATA\SESSIONS\<id>.TXT    who a sign-in cookie belongs to, and its form token
 '   C:\NICDATA\DOMAINS.TXT          domain|owner|registered|expires|zone file|status
 '   C:\NICDATA\ORDERS\<order>.TXT   a registration waiting to be paid for with SimPal
 '   C:\NICDATA\LOCK\                exists while a page is handing out a domain
 '   C:\DNS\NAMED.CNF                "primary coolsite.sim COOLSITE.SIM", one a zone
 '   C:\DNS\<file>                   the zone files
-'   C:\WEB\VHOSTS.TXT               sites this machine's web server serves by name
-'   C:\WEB\SITES\<NAME>             the pages of a site hosted here
 '
 ' Status is "active", or "unpaid" while its owner is off paying at SimPal
 ' (it is held for HOLDMINUTES, then anyone may have it).
@@ -22,8 +27,6 @@
 CONST DATADIR = "C:\NICDATA"
 CONST DNSDIR = "C:\DNS"
 CONST NAMEDCNF = "C:\DNS\NAMED.CNF"
-CONST VHOSTFILE = "C:\WEB\VHOSTS.TXT"
-CONST SITESDIR = "C:\WEB\SITES"
 CONST COOKIE = "simnic"
 CONST TLDS = "|sim|com|net|org|"
 CONST NICPRICE = "70.00"            ' two years, as InterNIC charged in 1996
@@ -39,14 +42,14 @@ VAR whyNot AS String             ' what a failed action said
 
 ' ---------------------------------------------------------------- the disk
 
-' Where these pages are: C:\WEB, or C:\WEB\DNS on a SimHost machine.
+' Where these pages are: C:\WEB\NIC.
 FUNCTION AppDir () AS String
     VAR page AS String
     page = SERVER.ScriptName
     RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
 END FUNCTION
 
-' Where SimNIC is on the web, by this machine's name: http://host/ or http://host/dns/
+' Where SimNIC is on the web, by this machine's name: http://starthere.56k.net/nic/
 FUNCTION SiteUrl () AS String
     IF AppDir().Upper() = "C:\WEB" THEN RETURN "http://" + SERVER.Name.Lower() + "/"
     RETURN "http://" + SERVER.Name.Lower() + "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
@@ -55,7 +58,7 @@ END FUNCTION
 SUB EnsureDisk ()
     VAR dir AS String
     VAR dirs AS Array OF String
-    dirs = [DATADIR, DATADIR + "\USERS", DATADIR + "\SESSIONS", DATADIR + "\ORDERS", DNSDIR, SITESDIR]
+    dirs = [DATADIR, DATADIR + "\USERS", DATADIR + "\SESSIONS", DATADIR + "\ORDERS", DNSDIR]
     FOR EACH dir IN dirs
         IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
     NEXT
@@ -631,108 +634,92 @@ SUB DeleteRecord (d AS String, n AS Integer)
     SaveRecords(d, recs)
 END SUB
 
-' ---------------------------------------------------------------- hosting
-' "Host it here": the domain (and www.) become a site on this machine's web
-' server, in a folder of its own, and point here with CNAMEs.
+' ---------------------------------------------------------------- pointing
+' What most people need: the domain (and its www) pointing at the machine
+' their site is on, with CNAMEs. The site itself is that machine's business.
 
-' The site's folder, if it is hosted here, from VHOSTS.TXT; else "".
-FUNCTION SiteFolder (d AS String) AS String
+' A SIM95 machine name as typed, lower case, or "" when it can't be one.
+FUNCTION CleanMachine (m AS String) AS String
+    m = m.Trim().Lower()
+    IF m.StartsWith("http://") THEN m = m.Substring(7, m.Length - 7)
+    IF m.Contains("/") THEN m = m.Substring(0, m.IndexOf("/"))
+    IF m.EndsWith(".") THEN m = m.Substring(0, m.Length - 1)
+    IF m = "" OR m.Length > 60 THEN RETURN ""
+    IF NOT OnlyFrom(m, "abcdefghijklmnopqrstuvwxyz0123456789-.") THEN RETURN ""
+    IF m.StartsWith(".") OR m.StartsWith("-") OR m.Contains("..") THEN RETURN ""
+    RETURN m
+END FUNCTION
+
+' The machine d points at (the target of its @ CNAME), or "".
+FUNCTION PointsTo (d AS String) AS String
     VAR line AS String
-    FOR EACH line IN ReadOr(VHOSTFILE, "").Lines()
-        IF line.Lower().StartsWith(d + "|") THEN RETURN line.Substring(d.Length + 1, line.Length - d.Length - 1).Trim()
+    VAR w AS Array OF String
+    FOR EACH line IN Records(d)
+        w = Words(line)
+        IF w.Count >= 3 THEN
+            IF w[0] = "@" AND RecTypeOf(w) = "CNAME" THEN RETURN RecValueOf(line, w)
+        END IF
     NEXT
     RETURN ""
 END FUNCTION
 
-' Adds name|folder to VHOSTS.TXT (or moves name to folder).
-SUB SetVhost (name AS String, folder AS String)
+' The machine a user's domains last pointed at, for the next one.
+FUNCTION LastMachine (u AS String) AS String
+    IF NOT UserExists(u) THEN RETURN ""
+    RETURN Field(FS.Read(UserPath(u)).Lines(), "machine")
+END FUNCTION
+
+SUB SetUserField (u AS String, key AS String, value AS String)
     VAR out AS Array OF String
     VAR line AS String
-    FOR EACH line IN ReadOr(VHOSTFILE, "").Lines()
-        IF line.Trim() = "" OR line.Lower().StartsWith(name + "|") THEN CONTINUE
-        out.Add(line)
+    IF NOT UserExists(u) THEN RETURN
+    FOR EACH line IN FS.Read(UserPath(u)).Lines()
+        IF line.Trim() <> "" AND NOT line.StartsWith(key + "=") THEN out.Add(line)
     NEXT
-    out.Add(name + "|" + folder)
-    FS.Write(VHOSTFILE, out.Join(Chr(10)) + Chr(10))
+    out.Add(key + "=" + Esc(value))
+    FS.Write(UserPath(u), out.Join(Chr(10)) + Chr(10))
 END SUB
 
-FUNCTION HostHere (d AS String) AS String
-    VAR folder AS String
-    VAR label AS String
-    VAR n AS Integer
-    VAR here AS String
-    EnsureDisk()
-    here = SERVER.Name.Lower()
-    folder = SiteFolder(d)
-    IF folder = "" THEN
-        label = d.Split(".")[0].Replace("-", "").Upper()
-        IF label.Length > 8 THEN label = label.Substring(0, 8)
-        folder = SITESDIR + "\" + label
-        WHILE FS.Exists(folder) AND n < 99
-            n = n + 1
-            IF label.Length > 6 THEN label = label.Substring(0, 6)
-            folder = SITESDIR + "\" + label + Str(n).PadLeft(2).Replace(" ", "0")
-        END WHILE
-        IF FS.Exists(folder) THEN RETURN "There is no room for another site in " + SITESDIR + "."
-        FS.MakeDir(folder)
-    ELSEIF NOT FS.Exists(folder) THEN
-        FS.MakeDir(folder)
+' Points d and www.d at machine, and remembers the machine for next time;
+' "" takes both CNAMEs away. Returns "" or what is wrong.
+FUNCTION PointAt (u AS String, d AS String, machine AS String) AS String
+    VAR m AS String
+    VAR why AS String
+    IF machine.Trim() = "" THEN
+        RemoveCname(d, "@")
+        RemoveCname(d, "www")
+        RETURN ""
     END IF
-    IF NOT FS.Exists(folder + "\INDEX.HTM") AND NOT FS.Exists(folder + "\INDEX.ASP") THEN
-        FS.Write(folder + "\INDEX.HTM", "<html><head><title>" + d + "</title></head>" + Chr(10) _
-            + "<body bgcolor=""#FFFFFF"">" + Chr(10) + "<center><h1>" + d + "</h1>" + Chr(10) _
-            + "<p><font size=""4"">Coming soon!</font></p>" + Chr(10) _
-            + "<p><b>This site is under construction.</b> Please come back soon.</p>" + Chr(10) _
-            + "<hr width=""50%""><p><font size=""2"">Registered at SimNIC. Hosted on " + here + ".</font></p></center>" + Chr(10) _
-            + "</body></html>" + Chr(10))
-    END IF
-    SetVhost(d, folder)
-    SetVhost("www." + d, folder)
-    AddRecord(d, "@", "CNAME", here)
-    AddRecord(d, "www", "CNAME", here)
+    m = CleanMachine(machine)
+    IF m = "" THEN RETURN "That doesn't look like a machine name. Type the name of the SIM95 machine your site is on, like alpha."
+    IF IsAddress(m) THEN RETURN "That is an address, and addresses change when a machine restarts. Type the machine's name instead, like alpha."
+    IF m = d OR m.EndsWith("." + d) THEN RETURN "A domain can't point at itself: type the name of the machine your site is on."
+    why = AddRecord(d, "@", "CNAME", m)
+    IF why <> "" THEN RETURN why
+    why = AddRecord(d, "www", "CNAME", m)
+    IF why <> "" THEN RETURN why
+    SetUserField(u, "machine", m)
     RETURN ""
 END FUNCTION
 
-' The web apps on this machine, each in a folder of its own (SimHost):
-' folder|name, for those with an APP.INF or a known app in them.
-FUNCTION AppFolders () AS Array OF String
+' Takes away the CNAME at owner, if there is one.
+SUB RemoveCname (d AS String, owner AS String)
     VAR out AS Array OF String
-    VAR f AS String
-    VAR known AS Array OF String
-    VAR k AS String
-    VAR p AS Array OF String
-    known = ["BOOK|BOOK.SPK|SimBook", "MAIL|MAIL.SPK|ColdMail", "ASK|ASK.SPK|AskSim", "GEO|GEO.SPK|GeoSimies", "ELIZA|BOT.SPK|ELIZA-95", "PAL|PAL.SPK|SimPal", "TUBE|TUBE.SPK|SimTube", "STATS|STATS.SPK|SimStats", "VAPOR|CATALOG.TXT|Vapor"]
-    FOR EACH f IN FS.List("C:\WEB")
-        IF NOT f.EndsWith("\") THEN CONTINUE
-        f = f.Substring(0, f.Length - 1).Upper()
-        IF f = "SITES" THEN CONTINUE
-        IF FS.Exists("C:\WEB\" + f + "\APP.INF") THEN
-            p = FS.Read("C:\WEB\" + f + "\APP.INF").Split("|")
-            out.Add(f + "|" + p[0].Trim())
-            CONTINUE
+    VAR line AS String
+    VAR w AS Array OF String
+    VAR gone AS Bool
+    FOR EACH line IN Records(d)
+        w = Words(line)
+        IF w.Count >= 3 THEN
+            IF w[0].Lower() = owner AND RecTypeOf(w) = "CNAME" THEN
+                gone = TRUE
+                CONTINUE
+            END IF
         END IF
-        FOR EACH k IN known
-            p = k.Split("|")
-            IF p[0] = f AND FS.Exists("C:\WEB\" + f + "\" + p[1]) THEN out.Add(f + "|" + p[2])
-        NEXT
+        out.Add(line)
     NEXT
-    RETURN out
-END FUNCTION
-
-' book.coolsite.sim for C:\WEB\BOOK, and so on: a site each, and a CNAME each.
-FUNCTION PointApps (d AS String) AS Integer
-    VAR a AS String
-    VAR n AS Integer
-    VAR prefix AS String
-    FOR EACH a IN AppFolders()
-        prefix = a.Split("|")[0].Lower()
-        IF AddRecord(d, prefix, "CNAME", SERVER.Name.Lower()) = "" THEN
-            SetVhost(prefix + "." + d, "C:\WEB\" + a.Split("|")[0])
-            n = n + 1
-        END IF
-    NEXT
-    RETURN n
-END FUNCTION
+    IF gone THEN SaveRecords(d, out)
+END SUB
 
 ' ---------------------------------------------------------------- the look
 
@@ -758,15 +745,13 @@ FUNCTION IfText (yes AS Bool, text AS String) AS String
     RETURN ""
 END FUNCTION
 
+FUNCTION Either (yes AS Bool, text AS String, otherwise AS String) AS String
+    IF yes THEN RETURN text
+    RETURN otherwise
+END FUNCTION
+
 FUNCTION Notice (text AS String, good AS Bool) AS String
     IF text = "" THEN RETURN ""
     IF good THEN RETURN "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#E0FFE0""><b>" + H(text) + "</b></td></tr></table>"
     RETURN "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#FFF0C0""><b>" + H(text) + "</b></td></tr></table>"
-END FUNCTION
-
-' The addresses a site hosted here has: by name (Simxplorer with SimDNS)
-' and by path (Voyager, or anyone): http://www.coolsite.sim/ and http://alpha/www.coolsite.sim/
-FUNCTION Addresses (d AS String) AS String
-    RETURN "<a href=""http://www." + d + "/"">http://www." + d + "/</a> <font size=""2"">(Simxplorer, with a SimDNS name server)</font><br>" _
-        + "<a href=""http://" + SERVER.Name.Lower() + "/www." + d + "/"">http://" + SERVER.Name.Lower() + "/www." + d + "/</a> <font size=""2"">(Voyager, or any browser)</font>"
 END FUNCTION

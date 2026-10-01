@@ -17,6 +17,7 @@ IF d <> "" THEN
             + "   Domain Name: " + d.Upper() + Chr(10) + Chr(10) _
             + "   Record created on " + rec[2] + "." + Chr(10) _
             + "   Record expires on " + rec[3] + "." + Chr(10) + Chr(10) _
+            + "   Points to machine: " + Either(PointsTo(d) <> "", PointsTo(d).Upper(), "(none yet)") + Chr(10) + Chr(10) _
             + "   Domain servers in listed order:" + Chr(10) + Chr(10) _
             + "   " + SERVER.Name.Upper()
     END IF

@@ -1,5 +1,5 @@
 // What C:\PROGRAMS\SIMXPLOR.SPK is: the JavaScript engine, the browser, the
-// SimDNS resolver (simdns/src/RESOLVE.SPK, whose names all start with Rs), and
+// SimDNS resolver (simweb/src/RESOLVE.SPK, whose names all start with Rs), and
 // a copy of SimPlayer (simplayer/src/PLAYER.SPK) built in, so movies play in a
 // window of the browser's own without a separate download.
 //
@@ -15,13 +15,24 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f) => fs.readFileSync(path.join(root, f), "utf8");
 
-// The SimDNS resolver's names (Rs...) are never renamed: the player in the
-// browser uses the browser's own copy of the resolver (one cache, one
-// question at a time), so the resolver is joined on once, and only the
-// player on its own (withResolver, below) gets a copy of it.
+// The central host: STARTHERE.56k.net runs SimNIC (the registrar) and the name
+// server every machine asks by default. To move the network to another central
+// host, change this line and rebuild: it becomes RSCENTRAL in the resolver
+// joined onto every program, and the address SimNIC's installer and Personal
+// Web Manager give.
+export const CENTRAL = "starthere.56k.net";
+
+// The resolver, with the central host filled in.
+export const resolverSource = () => read("simweb/src/RESOLVE.SPK").replace(/^CONST RSCENTRAL = "[^"]*"/m, `CONST RSCENTRAL = "${CENTRAL}"`);
+
+// The SimDNS resolver's names (Rs...) are not the player's own (PLAYER.SPK
+// only calls them), so they are never renamed: the player in the browser
+// uses the browser's copy of the resolver (one cache, one question at a
+// time). The resolver is joined on once, and only the player on its own
+// (withResolver, below) gets a copy of it.
 export function embedPlayer(src = read("simplayer/src/PLAYER.SPK")) {
   const names = new Set();
-  for (const m of src.matchAll(/^(?:VAR|CONST|SUB|FUNCTION)\s+([A-Za-z_]\w*)/gim)) if (!/^rs/i.test(m[1])) names.add(m[1].toLowerCase());
+  for (const m of src.matchAll(/^(?:VAR|CONST|SUB|FUNCTION)\s+([A-Za-z_]\w*)/gim)) names.add(m[1].toLowerCase());
   let out = "";
   let i = 0;
   while (i < src.length) {
@@ -54,7 +65,7 @@ export function embedPlayer(src = read("simplayer/src/PLAYER.SPK")) {
 
 // A program with the SimDNS resolver joined on the end, as every program that
 // looks names up gets it (SimPlayer, Vapor, Frostbird, MAILD, the Sim Shell,
-// AskSim's crawler, DIG).
-export const withResolver = (text) => text + "\n" + read("simdns/src/RESOLVE.SPK");
+// AskSim's crawler, DIG, Personal Web Manager).
+export const withResolver = (text) => text + "\n" + resolverSource();
 
-export const simxplorerSource = () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") + "\n" + read("simdns/src/RESOLVE.SPK") + "\n" + embedPlayer();
+export const simxplorerSource = () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") + "\n" + resolverSource() + "\n" + embedPlayer();

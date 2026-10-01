@@ -1,36 +1,27 @@
-' SimDNS's setup, run by its installer: before the files are written, the
-' folders and the stock web server's backup; after them, the web server
-' restarted so the new one (with virtual hosts) takes over.
+' simweb's setup, run by its installer: before the files are written, the
+' folders, the list of sites and the stock web server's backup; after them,
+' the web server restarted so the new one (with sites by name) takes over.
 
 CONST STOCKHTTPD = "C:\PROGRAMS\HTTPD.ORG"
 
-SUB DnsSetup ()
-    IF NOT FS.Exists("C:\DNS") THEN FS.MakeDir("C:\DNS")
-    IF NOT FS.Exists("C:\DNS\NAMED.CNF") THEN
-        FS.Write("C:\DNS\NAMED.CNF", "; NAMED.CNF - the zones this machine's name server (NAMED.SPK) answers for," + NL _
-            + "; one a line:   primary  <domain>  <zone file in C:\DNS>" + NL _
-            + "; SimNIC, the registrar, adds a line for every domain it registers. Names" + NL _
-            + "; that aren't in any zone here can be asked of another SimDNS:" + NL _
-            + ";   forwarders  dnsbox" + NL)
-        Print("  wrote C:\DNS\NAMED.CNF")
-    END IF
+SUB WebSetup ()
+    VAR old AS String
     IF NOT FS.Exists("C:\WEB\SITES") THEN FS.MakeDir("C:\WEB\SITES")
     IF NOT FS.Exists("C:\WEB\VHOSTS.TXT") THEN
-        FS.Write("C:\WEB\VHOSTS.TXT", "; VHOSTS.TXT - sites the web server serves by name, one a line: domain|folder" + NL _
-            + "; (folders in C:\WEB). SimNIC's Host it here adds lines here. For example:" + NL _
+        FS.Write("C:\WEB\VHOSTS.TXT", "; VHOSTS.TXT - sites the web server serves by name, one a line: name|folder" + NL _
+            + "; (folders in C:\WEB). Personal Web Manager (C:\PROGRAMS\PWM.SPK) keeps it;" + NL _
+            + "; you may edit it by hand too. For example:" + NL _
             + ";   www.coolsite.sim|C:\WEB\SITES\COOLSITE" + NL _
+            + ";   coolbook.sim|C:\WEB\BOOK" + NL _
             + ";   *.dab.sim|C:\WEB\SITES\DAB" + NL)
         Print("  wrote C:\WEB\VHOSTS.TXT")
     END IF
-    ' this machine looks names up with its own name server, unless it has one
-    IF NOT FS.Exists("C:\SYSTEM\RESOLV.INI") THEN
-        FS.Write("C:\SYSTEM\RESOLV.INI", "nameserver=" + NET.HostName.Lower() + NL)
-        Print("  this machine's name server is itself (C:\SYSTEM\RESOLV.INI)")
-    END IF
     ' the stock web server is kept, once, so uninstalling can put it back
+    ' (SimDNS, which came before simweb, kept it the same way)
     IF FS.Exists("C:\PROGRAMS\HTTPD.SPK") AND NOT FS.Exists(STOCKHTTPD) THEN
-        IF NOT FS.Read("C:\PROGRAMS\HTTPD.SPK").Contains("SimDNS edition") THEN
-            FS.Write(STOCKHTTPD, FS.Read("C:\PROGRAMS\HTTPD.SPK"))
+        old = FS.Read("C:\PROGRAMS\HTTPD.SPK")
+        IF NOT old.Contains("simweb edition") AND NOT old.Contains("SimDNS edition") THEN
+            FS.Write(STOCKHTTPD, old)
             Print("  kept the old web server as " + STOCKHTTPD)
         END IF
     END IF
