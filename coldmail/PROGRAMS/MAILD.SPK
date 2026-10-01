@@ -1,0 +1,389 @@
+' MAILD.SPK - the ColdMail mail server. Listens on port 25 and delivers mail.
+'
+' Two jobs:
+'   1. Receive. Other machines' mail servers connect to port 25 and speak a small
+'      SMTP: one command per message, one answer per command.
+'          S: 220 ALPHA ColdMail ready
+'          C: HELO BRAVO                      S: 250 Hello BRAVO
+'          C: MAIL FROM:<bob@bravo>           S: 250 OK
+'          C: RCPT TO:<ann@alpha>             S: 250 OK   (or 550 No such user here)
+'          C: DATA + line break + the message S: 250 OK delivered
+'          C: QUIT                            S: 221 Bye
+'      SMTP sends DATA line by line; here the whole message is one network
+'      message, so a letter must fit in 64K like everything else.
+'   2. Send. The webmail pages cannot open sockets, so they leave each letter in
+'      C:\MAILDATA\SPOOL. Every few seconds this program delivers what is there:
+'      into a mailbox on this machine, or over port 25 to the recipient's machine.
+'      A machine that does not answer is tried again later; a letter that cannot
+'      be delivered comes back to its sender from MAILER-DAEMON.
+'
+' Mailboxes: C:\MAILDATA\BOX\<user>\<n>.MSG, listed in INBOX.TXT (and SENT.TXT)
+' as  n|date|from|to|subject|size|flags  - flags holds N while a letter is unread.
+' The webmail (C:\WEB\MAIL\MAIL.SPK) reads and writes the same files.
+'
+' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>.
+
+CONST DATA = "C:\MAILDATA"
+CONST PORT = 25
+
+VAR win AS GUI_Window
+VAR log AS GUI_ListBox
+VAR sock AS NET_Socket
+VAR timer AS GUI_Timer
+VAR busy AS Bool
+VAR retry AS Integer = 30
+VAR tries AS Integer = 5
+VAR received AS Integer
+VAR sent AS Integer
+
+SUB Main ()
+    win = GUI_Window.New("ColdMail Server", 460, 240)
+    win.Icon = "network"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    log = GUI_ListBox.New(win)
+    log.Mono = TRUE
+    Win_OnResize()
+    EnsureDirs()
+    ReadSettings()
+
+    sock = NET_Socket.New()
+    sock.onConnect = Sock_OnConnect
+    sock.onMessage = Sock_OnMessage
+    sock.onError = Sock_OnError
+    sock.Listen(PORT)
+    Note("Listening on port " + Str(PORT) + " as " + NET.HostName)
+
+    timer = GUI_Timer.New(win)
+    timer.Interval = 2000
+    timer.onTick = Timer_OnTick
+    timer.Start()
+    Status()
+    win.Show()
+END SUB
+
+SUB Win_OnResize ()
+    log.SetBounds(0, 0, win.Width, win.Height)
+END SUB
+
+SUB Win_OnClose ()
+    sock.Close()
+    SYS.Exit(0)
+END SUB
+
+SUB Sock_OnError (message AS String)
+    Note("ERROR " + message)
+    IF message.Contains("in use") THEN Note("Is another mail server already running? See Tasks.")
+END SUB
+
+SUB Note (text AS String)
+    log.Add(TIME.Clock + "  " + text)
+    IF log.Count > 300 THEN log.RemoveAt(0)
+    log.ScrollToEnd()
+END SUB
+
+SUB Status ()
+    win.Status = NET.HostName.Lower() + " port " + Str(PORT) + " - " + Str(received) + " received, " + Str(sent) + " sent, " + Str(Spooled().Count) + " waiting"
+END SUB
+
+SUB EnsureDirs ()
+    IF NOT FS.Exists(DATA) THEN FS.MakeDir(DATA)
+    IF NOT FS.Exists(DATA + "\BOX") THEN FS.MakeDir(DATA + "\BOX")
+    IF NOT FS.Exists(DATA + "\SPOOL") THEN FS.MakeDir(DATA + "\SPOOL")
+    IF NOT FS.Exists(DATA + "\USERS") THEN FS.MakeDir(DATA + "\USERS")
+END SUB
+
+SUB ReadSettings ()
+    VAR line AS String
+    IF NOT FS.Exists(DATA + "\MAILD.INI") THEN RETURN
+    FOR EACH line IN FS.Read(DATA + "\MAILD.INI").Lines()
+        IF line.StartsWith("retry=") THEN retry = Int(Val(line.Substring(6, line.Length - 6)))
+        IF line.StartsWith("tries=") THEN tries = Int(Val(line.Substring(6, line.Length - 6)))
+    NEXT
+END SUB
+
+' ---------------------------------------------------------------- addresses
+
+' "Ann <ann@alpha>" or "ann@alpha" -> "ann@alpha"
+FUNCTION Bare (address AS String) AS String
+    VAR a AS String
+    a = address.Trim()
+    IF a.Contains("<") AND a.Contains(">") THEN a = a.Substring(a.IndexOf("<") + 1, a.IndexOf(">") - a.IndexOf("<") - 1)
+    RETURN a.Trim().Lower()
+END FUNCTION
+
+FUNCTION UserPart (address AS String) AS String
+    IF NOT address.Contains("@") THEN RETURN address
+    RETURN address.Substring(0, address.IndexOf("@"))
+END FUNCTION
+
+FUNCTION HostPart (address AS String) AS String
+    IF NOT address.Contains("@") THEN RETURN ""
+    RETURN address.Substring(address.IndexOf("@") + 1, address.Length - address.IndexOf("@") - 1)
+END FUNCTION
+
+' This machine by its full name, its computer name, or localhost.
+FUNCTION IsLocal (host AS String) AS Bool
+    VAR h AS String
+    h = host.Upper()
+    RETURN h = "" OR h = "LOCALHOST" OR h = NET.HostName.Upper() OR h = NET.HostName.Upper().Split(".")[0]
+END FUNCTION
+
+FUNCTION ValidUser (u AS String) AS Bool
+    VAR i AS Integer
+    IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
+    FOR i = 0 TO u.Length - 1
+        IF NOT "abcdefghijklmnopqrstuvwxyz0123456789".Contains(u.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION HasMailbox (u AS String) AS Bool
+    IF NOT ValidUser(u) THEN RETURN FALSE
+    RETURN FS.Exists(DATA + "\USERS\" + u + ".TXT")
+END FUNCTION
+
+' ---------------------------------------------------------------- mailboxes
+
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+' The value of one header line of a letter, or "".
+FUNCTION Header (message AS String, name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN message.Lines()
+        IF line = "" THEN RETURN ""
+        IF line.Lower().StartsWith(name.Lower() + ":") THEN RETURN line.Substring(name.Length + 1, line.Length - name.Length - 1).Trim()
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' Puts a letter in a user's Inbox, unread. The webmail's SaveLetter does the same.
+SUB Deliver (u AS String, message AS String)
+    VAR dir AS String
+    VAR n AS Integer
+    dir = DATA + "\BOX\" + u
+    IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    n = 1
+    IF FS.Exists(dir + "\NEXT.TXT") THEN n = Int(Val(FS.Read(dir + "\NEXT.TXT"))) + 1
+    FS.Write(dir + "\NEXT.TXT", Str(n))
+    FS.Write(dir + "\" + Str(n) + ".MSG", message)
+    FS.Append(dir + "\INBOX.TXT", Str(n) + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|" + Esc(Header(message, "From")) + "|" + Esc(Header(message, "To")) + "|" + Esc(Header(message, "Subject")) + "|" + Str(message.Length) + "|N" + Chr(10))
+    received = received + 1
+END SUB
+
+' Sends a letter that could not be delivered back to its (local) sender.
+SUB Bounce (sender AS String, recipient AS String, reason AS String, message AS String)
+    VAR u AS String
+    VAR text AS String
+    u = UserPart(sender)
+    Note("Bounced to " + sender + ": " + reason)
+    IF NOT IsLocal(HostPart(sender)) OR NOT HasMailbox(u) THEN RETURN
+    IF Header(message, "From").Lower().Contains("mailer-daemon") THEN RETURN
+    text = "From: Mail Delivery Subsystem <mailer-daemon@" + NET.HostName.Lower() + ">" + Chr(10) _
+         + "To: " + sender + Chr(10) _
+         + "Subject: Undeliverable: " + Header(message, "Subject") + Chr(10) _
+         + "Date: " + TIME.Date + " " + TIME.Clock + Chr(10) + Chr(10) _
+         + "This is the mail server on " + NET.HostName.Lower() + "." + Chr(10) + Chr(10) _
+         + "I'm afraid I wasn't able to deliver your message to:" + Chr(10) + Chr(10) _
+         + "    " + recipient + Chr(10) + "    " + reason + Chr(10) + Chr(10) _
+         + "This is a permanent error. I've given up. Sorry it didn't work out." + Chr(10) + Chr(10) _
+         + "------ This is a copy of your message ------" + Chr(10) + Chr(10) + message
+    IF text.Length > 60000 THEN text = text.Substring(0, 60000)
+    Deliver(u, text)
+END SUB
+
+' ---------------------------------------------------------------- receiving
+
+' Each connection's state lives in its Tag: helo|from|rcpt1,rcpt2
+SUB Sock_OnConnect (conn AS NET_Connection)
+    conn.Accept()
+    conn.Tag = "||"
+    conn.Send("220 " + NET.HostName + " ColdMail ready")
+END SUB
+
+SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+    VAR state AS Array OF String
+    VAR cmd AS String
+    VAR arg AS String
+    VAR who AS String
+    VAR r AS String
+    VAR body AS String
+    state = conn.Tag.Split("|")
+    cmd = message.Lines()[0].Trim()
+    arg = ""
+    IF cmd.Contains(":") THEN arg = cmd.Substring(cmd.IndexOf(":") + 1, cmd.Length - cmd.IndexOf(":") - 1)
+    IF cmd.Contains(" ") AND arg = "" THEN arg = cmd.Substring(cmd.IndexOf(" ") + 1, cmd.Length - cmd.IndexOf(" ") - 1)
+    cmd = cmd.Upper()
+
+    IF cmd.StartsWith("HELO") OR cmd.StartsWith("EHLO") THEN
+        state[0] = arg.Trim()
+        conn.Send("250 Hello " + arg.Trim() + ", pleased to meet you")
+    ELSEIF cmd.StartsWith("MAIL FROM") THEN
+        state[1] = Bare(arg)
+        state[2] = ""
+        conn.Send("250 OK")
+    ELSEIF cmd.StartsWith("RCPT TO") THEN
+        who = Bare(arg)
+        IF state[1] = "" THEN
+            conn.Send("503 MAIL FROM first")
+        ELSEIF NOT IsLocal(HostPart(who)) THEN
+            conn.Send("551 I only take mail for " + NET.HostName.Lower())
+        ELSEIF NOT HasMailbox(UserPart(who)) THEN
+            conn.Send("550 No such user here: " + UserPart(who))
+        ELSE
+            IF state[2] <> "" THEN state[2] = state[2] + ","
+            state[2] = state[2] + UserPart(who)
+            conn.Send("250 OK")
+        END IF
+    ELSEIF cmd.StartsWith("DATA") THEN
+        IF state[2] = "" THEN
+            conn.Send("503 RCPT TO first")
+        ELSE
+            body = ""
+            IF message.Contains(Chr(10)) THEN body = message.Substring(message.IndexOf(Chr(10)) + 1, message.Length - message.IndexOf(Chr(10)) - 1)
+            body = "Received: from " + state[0] + " (" + conn.FromAddress + ") by " + NET.HostName.Lower() + "; " + TIME.Date + " " + TIME.Clock + Chr(10) + body
+            FOR EACH r IN state[2].Split(",")
+                Deliver(r, body)
+            NEXT
+            Note("Received mail from " + state[1] + " (" + conn.FromAddress + ") for " + state[2])
+            state[1] = ""
+            state[2] = ""
+            conn.Send("250 OK delivered")
+            Status()
+        END IF
+    ELSEIF cmd = "RSET" THEN
+        state[1] = ""
+        state[2] = ""
+        conn.Send("250 OK")
+    ELSEIF cmd = "NOOP" THEN
+        conn.Send("250 OK")
+    ELSEIF cmd = "QUIT" THEN
+        conn.Send("221 Bye")
+        conn.Close()
+        RETURN
+    ELSE
+        conn.Send("500 What? I know HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP and QUIT")
+    END IF
+    conn.Tag = state.Join("|")
+END SUB
+
+' ---------------------------------------------------------------- sending
+
+' A spooled letter is C:\MAILDATA\SPOOL\<n>.MSG:
+'   X-Sender: ann@alpha
+'   X-Recipient: bob@bravo
+'   X-Tries: 0
+'   X-Next: 0            (TIME.Now when it may be tried again)
+'   (blank line, then the letter itself)
+
+FUNCTION Spooled () AS Array OF String
+    VAR out AS Array OF String
+    VAR f AS String
+    FOR EACH f IN FS.List(DATA + "\SPOOL")
+        IF f.EndsWith(".MSG") THEN out.Add(f)
+    NEXT
+    RETURN out
+END FUNCTION
+
+SUB Timer_OnTick ()
+    VAR f AS String
+    IF busy THEN RETURN
+    busy = TRUE
+    FS.Write(DATA + "\ALIVE.TXT", Str(TIME.Now))
+    TRY
+        FOR EACH f IN Spooled()
+            Attempt(DATA + "\SPOOL\" + f)
+        NEXT
+    CATCH err
+        Note("ERROR " + err)
+    END TRY
+    busy = FALSE
+    Status()
+END SUB
+
+SUB Attempt (path AS String)
+    VAR text AS String
+    VAR head AS String
+    VAR letter AS String
+    VAR sender AS String
+    VAR recipient AS String
+    VAR n AS Integer
+    VAR answer AS String
+    IF NOT FS.Exists(path) THEN RETURN
+    text = FS.Read(path)
+    IF NOT text.Contains(Chr(10) + Chr(10)) THEN
+        FS.Delete(path)
+        RETURN
+    END IF
+    head = text.Substring(0, text.IndexOf(Chr(10) + Chr(10)))
+    letter = text.Substring(head.Length + 2, text.Length - head.Length - 2)
+    sender = Header(head, "X-Sender")
+    recipient = Header(head, "X-Recipient")
+    n = Int(Val(Header(head, "X-Tries")))
+    IF Int(Val(Header(head, "X-Next"))) > TIME.Now THEN RETURN
+
+    IF IsLocal(HostPart(recipient)) THEN
+        IF HasMailbox(UserPart(recipient)) THEN
+            Deliver(UserPart(recipient), "Received: by " + NET.HostName.Lower() + "; " + TIME.Date + " " + TIME.Clock + Chr(10) + letter)
+            Note("Delivered " + sender + " -> " + recipient)
+            sent = sent + 1
+        ELSE
+            Bounce(sender, recipient, "550 No such user here: " + UserPart(recipient), letter)
+        END IF
+        FS.Delete(path)
+        RETURN
+    END IF
+
+    answer = Transfer(sender, recipient, letter)
+    IF answer.StartsWith("250") THEN
+        Note("Sent " + sender + " -> " + recipient)
+        sent = sent + 1
+        FS.Delete(path)
+    ELSEIF answer.StartsWith("5") THEN
+        Bounce(sender, recipient, answer, letter)
+        FS.Delete(path)
+    ELSEIF n + 1 >= tries THEN
+        Bounce(sender, recipient, "Gave up after " + Str(n + 1) + " tries: " + answer, letter)
+        FS.Delete(path)
+    ELSE
+        Note("Will try " + recipient + " again: " + answer)
+        FS.Write(path, "X-Sender: " + sender + Chr(10) + "X-Recipient: " + recipient + Chr(10) + "X-Tries: " + Str(n + 1) + Chr(10) + "X-Next: " + Str(TIME.Now + retry) + Chr(10) + Chr(10) + letter)
+    END IF
+END SUB
+
+' Hands one letter to the recipient's mail server. Returns its final answer:
+' "250 ..." delivered, "5xx ..." refused for good, anything else: try later.
+FUNCTION Transfer (sender AS String, recipient AS String, letter AS String) AS String
+    VAR out AS NET_Socket
+    VAR conn AS NET_Connection
+    VAR answer AS String
+    out = NET_Socket.New()
+    TRY
+        conn = out.Connect(HostPart(recipient), PORT)
+    CATCH err
+        RETURN "421 " + err
+    END TRY
+    TRY
+        answer = conn.Receive(5000)
+        IF NOT answer.StartsWith("220") THEN THROW answer
+        conn.Send("HELO " + NET.HostName)
+        answer = conn.Receive(5000)
+        conn.Send("MAIL FROM:<" + sender + ">")
+        answer = conn.Receive(5000)
+        IF NOT answer.StartsWith("250") THEN THROW answer
+        conn.Send("RCPT TO:<" + recipient + ">")
+        answer = conn.Receive(5000)
+        IF NOT answer.StartsWith("250") THEN THROW answer
+        conn.Send("DATA" + Chr(10) + letter)
+        answer = conn.Receive(10000)
+        IF NOT answer.StartsWith("250") THEN THROW answer
+        conn.Send("QUIT")
+    CATCH err
+        answer = err
+        IF NOT (answer.StartsWith("5") OR answer.StartsWith("4")) THEN answer = "421 " + answer
+    END TRY
+    out.Close()
+    RETURN answer
+END FUNCTION

@@ -18,7 +18,7 @@ export const MESSAGE_LIMIT = 65536;
 
 async function bundlePath() {
   // Bump when the exports below change, so an old cache is rebuilt.
-  const out = path.join(cacheDir, "sim95-v2.mjs");
+  const out = path.join(cacheDir, "sim95-v4.mjs");
   if (fs.existsSync(out) && !process.env.SIM95_REFRESH) return out;
   fs.mkdirSync(cacheDir, { recursive: true });
   const html = await (await fetch(SITE + "/")).text();
@@ -44,14 +44,23 @@ async function bundlePath() {
   const builtins = name(/function ([\w$]+)\([\w$]+,[\w$]+\)\{const [\w$]+=[\w$]+\[0\];switch\([\w$]+\)\{case"Str":/, "the built-in functions");
   const pageCompile = name(/function ([\w$]+)\([\w$]+\)\{const [\w$]+=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\([\w$]+\);if\([\w$]+===null&&[\w$]+\.length===0\)return\{script:null,errors:\[\],hasScript:!1\}/, "the page script compiler");
   const pageRunner = name(/class ([\w$]+)\{constructor\([\w$]+,[\w$]+,[\w$]+=[\w$]+\)\{this\.script=/, "the page script runner");
+  const kernel = name(/class ([\w$]+)\{constructor\([\w$]+\)\{this\.procs=new Map,this\.nextPid=1/, "the kernel");
+  const stack = name(/class ([\w$]+)\{constructor\([\w$]+\)\{this\.addr="0\.0\.0\.0",this\.listeners=new Map/, "the network stack");
+  const sparkRunner = name(/sparkRunner:([\w$]+),hangMs:/, "the SPARK program runner");
   const time = name(/case"TIME":[\w$]+=new [\w$]+\("TIME",([\w$]+)\)/, "TIME");
   const math = name(/case"MATH":[\w$]+=new [\w$]+\("MATH",([\w$]+)\)/, "MATH");
 
   // Export them, and stop the bundle from starting the desktop.
-  const hook = `globalThis.__SIM95={render:${render},Disk:${disk},image:${image},compile:${compile},Interp:${interp},run:${runner},fsns:${fsns},netns:${netns},NS:${ns},builtins:${builtins},pageCompile:${pageCompile},PageScript:${pageRunner},TIME:${time},MATH:${math}};`;
+  const hook = `globalThis.__SIM95={render:${render},Disk:${disk},image:${image},compile:${compile},Interp:${interp},run:${runner},fsns:${fsns},netns:${netns},NS:${ns},builtins:${builtins},pageCompile:${pageCompile},Kernel:${kernel},Stack:${stack},sparkRunner:${sparkRunner},PageScript:${pageRunner},TIME:${time},MATH:${math}};`;
   const boot = /[\w$]+\([\w$]+\)\.render\([\w$]+\.jsx\([\w$]+,\{\}\)\);\s*$/;
   if (!boot.test(js)) throw new Error("Bundle changed: could not find the boot call");
   js = js.replace(boot, hook);
+  // The kernel's scheduler keeps one pending callback in a MessageChannel, which
+  // is fine for the one kernel in a browser tab but not for several machines in
+  // one process. Node has setImmediate; let it use that even with window stubbed.
+  const sched = 'if(typeof setImmediate<"u"&&typeof window>"u")';
+  if (!js.includes(sched)) throw new Error("Bundle changed: could not find the scheduler");
+  js = js.replace(sched, 'if(typeof setImmediate<"u")');
   fs.writeFileSync(out, js);
   return out;
 }
@@ -77,18 +86,19 @@ export async function load() {
 }
 
 // A machine: a fresh default disk plus the host functions a page can reach.
-export async function machine(hostname = "SIM95") {
+export async function machine(hostname = "SIM95", stack = null) {
   const S = await load();
   const disk = new S.Disk(null);
   disk.restore(S.image(hostname, "65.240.0.2"));
   const m = {
-    disk,
+    disk, errors: [],
     read: (p) => disk.read(p), write: (p, t) => disk.write(p, t), exists: (p) => disk.exists(p),
     isDir: (p) => disk.isDir(p), remove: (p) => disk.remove(p), rename: (a, b) => disk.rename(a, b),
     mkdir: (p) => disk.mkdir(p), list: (p) => disk.list(p),
     setTimer: (ms, fn) => setTimeout(fn, ms), beep() {},
-    hostname: () => hostname, localIp: () => "65.240.0.2",
-    resolve: async () => "", ping: async () => -1, machines: async () => [],
+    hostname: () => (stack ? stack.hostname() : hostname), localIp: () => (stack ? stack.localIp() : "65.240.0.2"),
+    resolve: async (h) => (stack ? (await stack.resolve(h)) : ""), ping: async (h) => (stack ? stack.ping(h) : -1),
+    machines: async () => (stack ? stack.machines() : []),
   };
   // Copy a folder from the host into the machine, e.g. putTree("simbook/WEB", "C:\\WEB").
   m.putTree = (src, dest) => {

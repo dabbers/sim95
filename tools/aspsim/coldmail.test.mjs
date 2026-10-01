@@ -1,0 +1,232 @@
+// End-to-end tests for ColdMail: the mail server (coldmail/PROGRAMS/MAILD.SPK)
+// and the webmail (coldmail/WEB/MAIL), on two machines of a pretend network.
+//   node tools/aspsim/coldmail.test.mjs
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { browser as rawBrowser, page, MESSAGE_LIMIT } from "./sim.mjs";
+import { Network } from "./network.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+let failures = 0;
+async function test(name, fn) {
+  try { await fn(); console.log("ok    " + name); }
+  catch (e) { failures++; console.log("FAIL  " + name + "\n      " + (e.stack || e).toString().split("\n").slice(0, 4).join("\n      ")); }
+}
+const ok = (r) => {
+  assert.equal(r.status, "200 OK", r.url + " -> " + r.status + "\n" + r.body.slice(-400));
+  assert.ok(!r.body.includes("ActiveSparkPages error"), r.url + ": " + r.body.slice(r.body.indexOf("ActiveSparkPages error"), r.body.indexOf("ActiveSparkPages error") + 300));
+  return r;
+};
+
+// A visitor using ColdMail's own pages, whose forms carry the form token.
+function browser(m) {
+  const b = rawBrowser(m);
+  const { post, get } = b;
+  b.token = async () => (/name="t" value="([0-9A-F]+)"/.exec((await m.request("GET", "/mail/compose.asp", { cookies: b.cookies() })).body) || [])[1] ?? "";
+  b.post = async (url, form) => post(url, form && !("t" in form) ? { ...form, t: await b.token() } : form);
+  b.get = async (url) => (/^\/mail\/logout\.asp$/.test(url) ? get(url + "?t=" + (await b.token())) : get(url));
+  return b;
+}
+
+const net = new Network();
+const installer = fs.readFileSync(path.join(root, "coldmail/INSTALL.SPK"), "utf8");
+async function install(m) {
+  if (!m.exists("C:\\MAILDATA")) m.mkdir("C:\\MAILDATA");
+  m.write("C:\\MAILDATA\\MAILD.INI", "retry=1\ntries=2");
+  m.write("C:\\MYFILES\\INSTALL.SPK", installer);
+  const pid = m.run("C:\\MYFILES\\INSTALL.SPK");
+  await net.until(() => !m.running(pid), 20000, "the installer");
+  await net.until(() => maild(m) && m.widgets(maild(m), "ListBox")[0]?.items.length > 0, 10000, "the mail server");
+  return m.output(pid);
+}
+const maild = (m) => m.kernel.ps().find((p) => p.name === "MAILD")?.pid;
+const serverLog = (m) => m.widgets(maild(m), "ListBox")[0].get("Items").join("\n");
+async function join(m, u, name, pw = "secret") {
+  const b = browser(m);
+  const r = ok(await b.post("/mail/join.asp", { name, u, pw, pw2: pw }));
+  assert.equal(r.url, "/mail/inbox.asp", "could not sign up " + u);
+  return b;
+}
+const inbox = (m, u) => (m.exists(`C:\\MAILDATA\\BOX\\${u.toUpperCase()}\\INBOX.TXT`) ? m.read(`C:\\MAILDATA\\BOX\\${u.toUpperCase()}\\INBOX.TXT`).trim().split("\n").filter(Boolean) : []);
+const arrives = (m, u, subject) => net.until(() => inbox(m, u).some((l) => l.split("|")[4] === subject), 15000, `"${subject}" for ${u}`);
+const numberOf = (m, u, subject) => inbox(m, u).find((l) => l.split("|")[4] === subject).split("|")[0];
+
+const alpha = await net.boot("ALPHA");
+const bravo = await net.boot("BRAVO");
+
+await test("the installer writes the pages and the server, starts it, and adds it to startup", async () => {
+  const said = await install(alpha);
+  await install(bravo);
+  assert.match(said, /ColdMail is installed \(10 files\)/);
+  assert.match(said, /started C:\\PROGRAMS\\MAILD.SPK/);
+  for (const f of fs.readdirSync(path.join(root, "coldmail/WEB/MAIL"))) assert.equal(alpha.read("C:\\WEB\\MAIL\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB/MAIL", f), "utf8"), f);
+  assert.equal(alpha.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
+  assert.match(serverLog(alpha), /Listening on port 25 as ALPHA/);
+});
+
+await test("running the installer again restarts the server instead of starting a second one", async () => {
+  const before = maild(alpha);
+  const said = await install(alpha);
+  assert.match(said, /stopped the old MAILD/);
+  assert.notEqual(maild(alpha), before);
+  assert.equal(alpha.kernel.ps().filter((p) => p.name === "MAILD").length, 1);
+  assert.deepEqual(alpha.ui.dialogs, []);
+});
+
+let ann, bob, cat;
+await test("signing up gives you an address and a welcome letter", async () => {
+  ann = await join(alpha, "ann", "Ann Alpha");
+  cat = await join(alpha, "cat", "Cat Alpha");
+  bob = await join(bravo, "bob", "Bob Bravo");
+  const r = ok(await ann.get("/mail/inbox.asp"));
+  assert.match(r.body, /ann@alpha/);
+  assert.match(r.body, /Inbox \(1\)/);
+  assert.match(r.body, /<b>Welcome to ColdMail!<\/b>/);
+  const bad = ok(await rawBrowser(alpha).post("/mail/join.asp", { name: "X", u: "ann", pw: "pppp", pw2: "pppp" }));
+  assert.match(bad.body, /Somebody already has ann@alpha/);
+});
+
+await test("a letter crosses the network to another machine's mail server", async () => {
+  let r = ok(await ann.post("/mail/compose.asp", { to: "bob@bravo", subject: "Hello from Alpha", text: "Hi Bob,\n<b>how</b> are you?" }));
+  assert.equal(r.url.split("?")[0], "/mail/inbox.asp");
+  assert.match(r.body, /Your letter is on its way/);
+  await arrives(bravo, "bob", "Hello from Alpha");
+  r = ok(await bob.get("/mail/inbox.asp"));
+  assert.match(r.body, /<b>Ann Alpha<\/b>/);
+  const n = numberOf(bravo, "bob", "Hello from Alpha");
+  r = ok(await bob.get(`/mail/read.asp?n=${n}`));
+  assert.match(r.body, /Ann Alpha &lt;ann@alpha&gt;/);
+  assert.match(r.body, /&lt;b&gt;how&lt;\/b&gt; are you\?/);
+  assert.match(r.body, /Received:.*from ALPHA \(65\.16\.0\.\d+\) by bravo/);
+  assert.ok(!inbox(bravo, "bob").find((l) => l.startsWith(n + "|")).endsWith("|N"), "reading marks it read");
+  assert.match(ok(await ann.get("/mail/inbox.asp?f=sent")).body, /To: bob@bravo/);
+  assert.match(serverLog(alpha), /Sent ann@alpha -> bob@bravo/);
+  assert.match(serverLog(bravo), /Received mail from ann@alpha/);
+});
+
+await test("reply starts from the letter, quoted, and goes back to the sender", async () => {
+  const n = numberOf(bravo, "bob", "Hello from Alpha");
+  let r = ok(await bob.get(`/mail/compose.asp?reply=${n}&f=inbox`));
+  assert.match(r.body, /name="to" size="50" maxlength="400" value="ann@alpha"/);
+  assert.match(r.body, /value="Re: Hello from Alpha"/);
+  assert.match(r.body, /Ann Alpha wrote:\n&gt; Hi Bob,/);
+  ok(await bob.post("/mail/compose.asp", { to: "ann@alpha", subject: "Re: Hello from Alpha", text: "Fine thanks!" }));
+  await arrives(alpha, "ann", "Re: Hello from Alpha");
+  r = ok(await ann.get(`/mail/compose.asp?fwd=${numberOf(alpha, "ann", "Re: Hello from Alpha")}`));
+  assert.match(r.body, /value="Fwd: Re: Hello from Alpha"/);
+  assert.match(r.body, /----- Forwarded letter -----\nFrom: Bob Bravo &lt;bob@bravo&gt;/);
+});
+
+await test("several recipients, on this machine and that one, by full or short address", async () => {
+  ok(await ann.post("/mail/compose.asp", { to: "bob@bravo, cat; Cat Alpha <cat@alpha>", subject: "Party", text: "Saturday!" }));
+  await arrives(bravo, "bob", "Party");
+  await arrives(alpha, "cat", "Party");
+  assert.equal(inbox(alpha, "cat").filter((l) => l.split("|")[4] === "Party").length, 1, "cat only once");
+  const letter = alpha.read(`C:\\MAILDATA\\BOX\\CAT\\${numberOf(alpha, "cat", "Party")}.MSG`);
+  assert.match(letter, /^Received: by alpha; .*\nFrom: Ann Alpha <ann@alpha>\nTo: bob@bravo, cat@alpha\nSubject: Party\n/);
+});
+
+await test("mail to nobody, or nowhere, comes back from MAILER-DAEMON", async () => {
+  ok(await ann.post("/mail/compose.asp", { to: "nobody@bravo", subject: "Anyone?", text: "Hello?" }));
+  ok(await ann.post("/mail/compose.asp", { to: "zed@nowhere", subject: "Lost", text: "Hello?" }));
+  ok(await ann.post("/mail/compose.asp", { to: "ghost", subject: "Local ghost", text: "Boo" }));
+  for (const s of ["Undeliverable: Anyone?", "Undeliverable: Lost", "Undeliverable: Local ghost"]) await arrives(alpha, "ann", s);
+  let r = ok(await ann.get(`/mail/read.asp?n=${numberOf(alpha, "ann", "Undeliverable: Anyone?")}`));
+  assert.match(r.body, /Mail Delivery Subsystem &lt;mailer-daemon@alpha&gt;/);
+  assert.match(r.body, /nobody@bravo\n    550 No such user here: nobody/);
+  assert.match(r.body, /------ This is a copy of your message ------/);
+  r = ok(await ann.get(`/mail/read.asp?n=${numberOf(alpha, "ann", "Undeliverable: Lost")}`));
+  assert.match(r.body, /Gave up after 2 tries: 421 Unknown host: nowhere/);
+  assert.match(serverLog(alpha), /Will try zed@nowhere again/);
+});
+
+await test("letters wait in the outbox while the server is down, and go when it is back", async () => {
+  alpha.kernel.kill(maild(alpha));
+  alpha.write("C:\\MAILDATA\\ALIVE.TXT", "0");
+  let r = ok(await ann.post("/mail/compose.asp", { to: "bob@bravo", subject: "Patience", text: "..." }));
+  assert.match(r.body, /The mail server is not running/);
+  assert.match(r.body, /outbox \(1 now\)/);
+  await new Promise((res) => setTimeout(res, 500));
+  assert.ok(!inbox(bravo, "bob").some((l) => l.includes("|Patience|")));
+  alpha.run("C:\\PROGRAMS\\MAILD.SPK");
+  await arrives(bravo, "bob", "Patience");
+  assert.ok(!ok(await ann.get("/mail/inbox.asp")).body.includes("not running"));
+});
+
+await test("compose refuses bad addresses and long letters, and counts as you type", async () => {
+  let r = ok(await ann.post("/mail/compose.asp", { to: "bob@bra vo", subject: "x", text: "x" }));
+  assert.match(r.body, /'bob@bra vo' is not an address/);
+  assert.match(r.body, /value="bob@bra vo"/, "what you typed is kept");
+  r = ok(await ann.post("/mail/compose.asp", { to: "", subject: "x", text: "x" }));
+  assert.match(r.body, /Who is it to\?/);
+  r = ok(await ann.post("/mail/compose.asp", { to: "bob@bravo", subject: "x", text: "y".repeat(8001) }));
+  assert.match(r.body, /under 8000 characters/);
+  const p = await page(ok(await ann.get("/mail/compose.asp")).body);
+  await p.type("text", "z".repeat(8001));
+  assert.equal(p.el("go").Enabled, false);
+  assert.equal(p.el("text_n").Text, "1 characters too many");
+  await p.type("text", "hi");
+  assert.equal(p.el("go").Enabled, true);
+});
+
+await test("deleting ticked letters, from the Inbox and from a letter", async () => {
+  const before = inbox(alpha, "ann").length;
+  const a = numberOf(alpha, "ann", "Undeliverable: Lost"), b = numberOf(alpha, "ann", "Undeliverable: Local ghost");
+  let r = ok(await ann.post("/mail/delete.asp", { f: "inbox", ["d" + a]: "on", ["d" + b]: "on" }));
+  assert.match(r.body, /2 letters deleted/);
+  assert.equal(inbox(alpha, "ann").length, before - 2);
+  assert.ok(!alpha.exists(`C:\\MAILDATA\\BOX\\ANN\\${a}.MSG`));
+  r = ok(await ann.post("/mail/delete.asp", { f: "inbox", ["d" + numberOf(alpha, "ann", "Undeliverable: Anyone?")]: "1" }));
+  assert.match(r.body, /1 letter deleted/);
+});
+
+await test("other sites cannot send or delete in your name", async () => {
+  const before = alpha.disk.snapshot().files;
+  const cookies = ann.cookies();
+  for (const [url, form] of [["/mail/compose.asp", { to: "bob@bravo", subject: "forged", text: "x" }], ["/mail/delete.asp", { f: "inbox", d1: "on" }]]) {
+    const r = await alpha.request("POST", url, { body: new URLSearchParams(form).toString(), cookies });
+    assert.equal(r.status, "302 Found");
+    assert.ok(r.headers.some((h) => h.startsWith("Location: inbox.asp?why=That+did+not+come")), url);
+  }
+  const after = alpha.disk.snapshot().files;
+  for (const k of Object.keys(after)) if (!k.endsWith("ALIVE.TXT")) assert.equal(after[k], before[k], k);
+});
+
+await test("the mail server speaks SMTP to anyone who connects", async () => {
+  const conn = await bravo.stack.connect(0, "ALPHA", 25);
+  const said = [];
+  conn.onMessage((t) => said.push(t));
+  const ask = async (line) => { const n = said.length; conn.send(line); await net.until(() => said.length > n, 3000, line); return said[said.length - 1]; };
+  await net.until(() => said.length > 0, 3000, "greeting");
+  assert.match(said[0], /^220 ALPHA ColdMail ready/);
+  assert.match(await ask("DATA\nhi"), /^503 RCPT TO first/);
+  assert.match(await ask("HELO BRAVO"), /^250 Hello BRAVO/);
+  assert.match(await ask("RCPT TO:<ann@alpha>"), /^503 MAIL FROM first/);
+  assert.match(await ask("MAIL FROM:<mallory@bravo>"), /^250/);
+  assert.match(await ask("RCPT TO:<..\\..\\SYSTEM@alpha>"), /^550/);
+  assert.match(await ask("RCPT TO:<ann@elsewhere>"), /^551 I only take mail for alpha/);
+  assert.match(await ask("RCPT TO:<ann@alpha>"), /^250/);
+  assert.match(await ask("DATA\nFrom: mallory@bravo\nSubject: by hand\n\nTyped it myself."), /^250 OK delivered/);
+  assert.match(await ask("WHAT"), /^500/);
+  assert.match(await ask("QUIT"), /^221 Bye/);
+  await arrives(alpha, "ann", "by hand");
+});
+
+await test("long folders and long letters still fit on one page", async () => {
+  const dir = "C:\\MAILDATA\\BOX\\CAT";
+  const lines = [];
+  for (let i = 100; i < 260; i++) lines.push(`${i}|1996-07-04 12:00|${"<".repeat(100)} <x@y>|cat@alpha|${"<".repeat(100)}|60000|N`);
+  alpha.write(dir + "\\INBOX.TXT", lines.join("\n") + "\n");
+  alpha.write(dir + "\\259.MSG", "From: x@y\nSubject: big\n\n" + "<".repeat(60000));
+  for (const url of ["/mail/inbox.asp", "/mail/read.asp?n=259", "/mail/compose.asp?reply=259"]) {
+    const r = ok(await cat.get(url));
+    assert.ok(r.raw.length < MESSAGE_LIMIT - 8000, `${url} is ${r.raw.length}`);
+  }
+  assert.match(ok(await cat.get("/mail/read.asp?n=259")).body, /ColdMail stopped here/);
+});
+
+net.shutdown();
+console.log(failures ? `\n${failures} failed` : "\nall passed");
+process.exit(failures ? 1 : 0);
