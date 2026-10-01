@@ -181,6 +181,31 @@ await test("Move In copies another machine's data over its Files service", async
   assert.deepEqual(host.errors, []);
 });
 
+await test("Move In onto a new SimHost before SimBook is there, then SimBook finds it all", async () => {
+  const fresh = await net.boot("FRESH");
+  await install(fresh, "simhost");
+  assert.ok(!fresh.exists("C:\\WEB\\BOOK"));
+  const old = net.machines.find((m) => m.stack.hostname() === "OLDBOOK") || (await net.boot("OLDBOOK"));
+  const users = old.read("C:\\SYSTEM\\USERS.INI");
+  const pid = fresh.run("C:\\PROGRAMS\\MOVEIN.SPK");
+  await wait(() => fresh.widgets(pid, "Button").length, "Move In's window");
+  const boxes = fresh.widgets(pid, "TextBox");
+  boxes[0].set("Text", "oldbook");
+  boxes[1].set("Text", /name=(.*)/i.exec(users)[1].trim());
+  boxes[2].set("Text", /password=(.*)/i.exec(users)[1]);
+  const log = () => fresh.widgets(pid, "ListBox")[0].get("Items").join("\n");
+  fresh.button(pid, "Move In").call("Click");
+  await wait(() => /^(Done|Stopped)/m.test(log()), "Move In to finish: " + log(), 60000);
+  assert.match(log(), /^Done:/m, log());
+  assert.equal(fresh.read("C:\\WEB\\BOOK\\PHOTOS\\CAT1.PIC"), "a photo");
+  assert.deepEqual(fresh.ui.dialogs, [], "nothing here yet: nothing to ask");
+  // SimBook installs around them
+  await install(fresh, "simbook");
+  assert.equal(fresh.read("C:\\WEB\\BOOK\\PHOTOS\\CAT1.PIC"), "a photo");
+  const r = ok(await browser(fresh).post("/book/login.asp", { u: "cat", pw: "secret" }));
+  assert.match(r.url, /home\.asp$/, r.body.slice(0, 300));
+});
+
 await test("Vapor knows web apps live in folders here", async () => {
   // a Vapor library line for SimBook with its folder: Open goes to /book/
   host.write("C:\\MYFILES\\VINST.SPK", installer("vapor"));

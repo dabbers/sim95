@@ -328,6 +328,22 @@ SUB MoveIn ()
     Say("Nothing on " + host + " was changed. Once you are happy, you can close it.")
 END SUB
 
+' A folder, and any folders it is in that are not there yet (SimBook's
+' pictures go in C:\WEB\BOOK\PICS even before SimBook is installed here).
+SUB MakeDirs (path AS String)
+    VAR part AS String
+    VAR sofar AS String
+    FOR EACH part IN path.Split("\")
+        IF part = "" THEN CONTINUE
+        IF sofar = "" THEN
+            sofar = part
+            CONTINUE
+        END IF
+        sofar = sofar + "\" + part
+        IF NOT FS.Exists(sofar) THEN FS.MakeDir(sofar)
+    NEXT
+END SUB
+
 ' One request to the Files service, and its reply.
 FUNCTION Request (text AS String) AS String
     VAR since AS Integer
@@ -359,7 +375,7 @@ SUB CopyTree (there AS String, here AS String)
         Say("  " + host + " has no " + there + ".")
         RETURN
     END IF
-    IF NOT FS.Exists(here) THEN FS.MakeDir(here)
+    MakeDirs(here)
     FOR EACH line IN reply.Lines()
         IF first THEN
             first = FALSE
