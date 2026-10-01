@@ -40,17 +40,18 @@ END IF
 <%= BoxTop("Edit My Profile") %>
 <form action="edit.asp" method="post">
 <table cellpadding="4">
-<tr><td><font size="2">Name:</font></td><td><input name="name" size="30" value="<%= H(Field(rec, "name")) %>"></td></tr>
+<tr><td><font size="2">Name:</font></td><td><input name="name" size="30" maxlength="<%= MAXNAME %>" value="<%= H(Field(rec, "name")) %>"></td></tr>
 <tr><td><font size="2">Sex:</font></td><td><select name="sex"><%= Opt("", Field(rec, "sex")) %><%= Opt("Female", Field(rec, "sex")) %><%= Opt("Male", Field(rec, "sex")) %></select></td></tr>
-<tr><td><font size="2">Birthday:</font></td><td><input name="birthday" size="20" value="<%= H(Field(rec, "birthday")) %>"></td></tr>
-<tr><td><font size="2">Hometown:</font></td><td><input name="hometown" size="30" value="<%= H(Field(rec, "hometown")) %>"></td></tr>
+<tr><td><font size="2">Birthday:</font></td><td><input name="birthday" size="20" maxlength="<%= SHORTFIELD %>" value="<%= H(Field(rec, "birthday")) %>"></td></tr>
+<tr><td><font size="2">Hometown:</font></td><td><input name="hometown" size="30" maxlength="<%= SHORTFIELD %>" value="<%= H(Field(rec, "hometown")) %>"></td></tr>
 <tr><td><font size="2">Relationship:</font></td><td><select name="status"><%= Opt("", Field(rec, "status")) %><%= Opt("Single", Field(rec, "status")) %><%= Opt("In a Relationship", Field(rec, "status")) %><%= Opt("Married", Field(rec, "status")) %><%= Opt("It's Complicated", Field(rec, "status")) %></select></td></tr>
-<tr><td valign="top"><font size="2">Interests:</font></td><td><textarea name="interests" rows="3" cols="40"><%= H(Field(rec, "interests")) %></textarea></td></tr>
-<tr><td valign="top"><font size="2">Favorite Music:</font></td><td><textarea name="music" rows="3" cols="40"><%= H(Field(rec, "music")) %></textarea></td></tr>
-<tr><td valign="top"><font size="2">About Me:</font></td><td><textarea name="about" rows="5" cols="40"><%= H(Field(rec, "about")) %></textarea></td></tr>
+<tr><td valign="top"><font size="2">Interests:</font></td><td><%= LimitedBox("interests", Field(rec, "interests"), 3, 40, LONGFIELD) %></td></tr>
+<tr><td valign="top"><font size="2">Favorite Music:</font></td><td><%= LimitedBox("music", Field(rec, "music"), 3, 40, LONGFIELD) %></td></tr>
+<tr><td valign="top"><font size="2">About Me:</font></td><td><%= LimitedBox("about", Field(rec, "about"), 5, 40, LONGFIELD) %></td></tr>
 <tr><td valign="top"><font size="2">Picture:</font></td><td><font size="2"><a href="picture.asp">Change my picture</a></font></td></tr>
-<tr><td></td><td><input type="submit" value="Save Changes"></td></tr>
+<tr><td></td><td><input type="submit" id="go" value="Save Changes"></td></tr>
 </table>
 </form>
+<%= LimitScript("interests,music,about", Str(LONGFIELD) + "," + Str(LONGFIELD) + "," + Str(LONGFIELD)) %>
 </td></tr></table>
 <%= Bottom() %>

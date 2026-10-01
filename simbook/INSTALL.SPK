@@ -28,7 +28,10 @@ SUB Main ()
     File11()
     File12()
     File13()
-    Print("SimBook is installed in C:\WEB (14 files).")
+    File14()
+    File15()
+    File16()
+    Print("SimBook is installed in C:\WEB (17 files).")
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
 
@@ -71,6 +74,8 @@ SUB File0 ()
     t = t + "'   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory" + NL
     t = t + "'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to" + NL
     t = t + "'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out" + NL
+    t = t + "'   C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|  thumbs up and down on one post" + NL
+    t = t + "'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post: date|author|author name|text" + NL
     t = t + "'   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)" + NL
     t = t + "'" + NL
     t = t + "' A post is one line: id|date time|author|author name|wall|wall name|text" + NL
@@ -86,12 +91,14 @@ SUB File0 ()
     t = t + "CONST FEEDSIZE = 25" + NL
     t = t + "CONST FEEDSCAN = 1000" + NL
     t = t + "CONST MAXPOST = 1000" + NL
+    t = t + "CONST MAXREPLY = 500" + NL
+    t = t + "CONST FEEDREPLIES = 2         ' replies shown under a post in the feed and on Walls" + NL
     t = t + "CONST MAXNAME = 40" + NL
     t = t + "CONST SHORTFIELD = 60" + NL
     t = t + "CONST LONGFIELD = 500" + NL
     t = t + "CONST MAXPIC = 20000" + NL
     t = t + "CONST PICSIZE = 100" + NL
-    t = t + "CONST PAGEROOM = 24000        ' how much feed or Wall one page may carry" + NL
+    t = t + "CONST PAGEROOM = 20000        ' how much feed, Wall or replies one page may carry" + NL
     t = t + "" + NL
     t = t + "' HTTPD.SPK sends a whole page as one network message, and a message holds" + NL
     t = t + "' 64K: a bigger page would stop the web server. So names, profile fields and" + NL
@@ -102,13 +109,13 @@ SUB File0 ()
     t = t + "' ---------------------------------------------------------------- the disk" + NL
     t = t + "" + NL
     t = t + "SUB EnsureDisk ()" + NL
-    t = t + "    IF FS.Exists(DATADIR + ""\SESSIONS"") THEN RETURN" + NL
-    t = t + "    IF NOT FS.Exists(DATADIR) THEN FS.MakeDir(DATADIR)" + NL
-    t = t + "    IF NOT FS.Exists(DATADIR + ""\USERS"") THEN FS.MakeDir(DATADIR + ""\USERS"")" + NL
-    t = t + "    IF NOT FS.Exists(DATADIR + ""\FRIENDS"") THEN FS.MakeDir(DATADIR + ""\FRIENDS"")" + NL
-    t = t + "    IF NOT FS.Exists(DATADIR + ""\WALLS"") THEN FS.MakeDir(DATADIR + ""\WALLS"")" + NL
+    t = t + "    VAR dir AS String" + NL
+    t = t + "    VAR dirs AS Array OF String" + NL
+    t = t + "    dirs = ["""", ""\USERS"", ""\FRIENDS"", ""\WALLS"", ""\SESSIONS"", ""\VOTES"", ""\REPLIES""]" + NL
+    t = t + "    FOR EACH dir IN dirs" + NL
+    t = t + "        IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)" + NL
+    t = t + "    NEXT" + NL
     t = t + "    IF NOT FS.Exists(PICDIR) THEN FS.MakeDir(PICDIR)" + NL
-    t = t + "    FS.MakeDir(DATADIR + ""\SESSIONS"")" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "FUNCTION ReadOr (path AS String, fallback AS String) AS String" + NL
@@ -386,8 +393,136 @@ SUB File0 ()
     t = t + "    RETURN """"" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
-    t = t + "' One post as a row of the feed or a wall. onWall leaves out ""on X's Wall""." + NL
-    t = t + "FUNCTION PostHtml (line AS String, onWall AS Bool) AS String" + NL
+    t = t + "' The line of post number id, or """" when there is none. IndexOf does the" + NL
+    t = t + "' searching, so this costs a handful of steps however long the log is." + NL
+    t = t + "FUNCTION FindPost (id AS String) AS String" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    VAR at AS Integer" + NL
+    t = t + "    IF id = """" OR id.Length > 8 THEN RETURN """"" + NL
+    t = t + "    IF NOT OnlyFrom(id, ""0123456789"") THEN RETURN """"" + NL
+    t = t + "    text = Chr(10) + ReadOr(DATADIR + ""\POSTS.TXT"", """")" + NL
+    t = t + "    at = text.IndexOf(Chr(10) + id + ""|"")" + NL
+    t = t + "    IF at < 0 THEN RETURN """"" + NL
+    t = t + "    text = text.Substring(at + 1, text.Length - at - 1)" + NL
+    t = t + "    at = text.IndexOf(Chr(10))" + NL
+    t = t + "    IF at >= 0 THEN text = text.Substring(0, at)" + NL
+    t = t + "    RETURN text" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Who may give a post a thumb or a reply: the people whose News Feed it reaches." + NL
+    t = t + "' That is its author and the owner of its Wall, and their friends." + NL
+    t = t + "FUNCTION CanTalk (u AS String, line AS String) AS Bool" + NL
+    t = t + "    VAR p AS Array OF String" + NL
+    t = t + "    p = line.Split(""|"")" + NL
+    t = t + "    IF p.Count < 7 THEN RETURN FALSE" + NL
+    t = t + "    IF u = p[2] OR u = p[4] THEN RETURN TRUE" + NL
+    t = t + "    RETURN IsFriend(u, p[2]) OR IsFriend(u, p[4])" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- thumbs" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION VotesOf (id AS String) AS String" + NL
+    t = t + "    RETURN ReadOr(DATADIR + ""\VOTES\"" + id + "".TXT"", ""|"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' How many ""+"" or ""-"" votes a |ann+|bob-| list holds." + NL
+    t = t + "FUNCTION CountVotes (votes AS String, sign AS String) AS Integer" + NL
+    t = t + "    RETURN (votes.Length - votes.Replace(sign + ""|"", """").Length) / 2" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Thumbs up (""+"") or down (""-""). The same thumb again takes it back." + NL
+    t = t + "SUB Vote (u AS String, id AS String, sign AS String)" + NL
+    t = t + "    VAR votes AS String" + NL
+    t = t + "    VAR had AS Bool" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    votes = VotesOf(id)" + NL
+    t = t + "    had = votes.Contains(""|"" + u + sign + ""|"")" + NL
+    t = t + "    votes = votes.Replace(""|"" + u + ""+|"", ""|"").Replace(""|"" + u + ""-|"", ""|"")" + NL
+    t = t + "    IF NOT had THEN votes = votes + u + sign + ""|""" + NL
+    t = t + "    FS.Write(DATADIR + ""\VOTES\"" + id + "".TXT"", votes)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- replies" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION AddReply (u AS String, id AS String, text AS String) AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    line = FindPost(id)" + NL
+    t = t + "    text = text.Replace(Chr(13), """").Trim()" + NL
+    t = t + "    IF line = """" THEN RETURN ""That post is gone.""" + NL
+    t = t + "    IF NOT CanTalk(u, line) THEN RETURN ""Only friends can reply to that.""" + NL
+    t = t + "    IF text = """" THEN RETURN ""Write something first.""" + NL
+    t = t + "    IF text.Length > MAXREPLY THEN RETURN ""Keep replies under "" + Str(MAXREPLY) + "" characters.""" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    FS.Append(DATADIR + ""\REPLIES\"" + id + "".TXT"", TIME.Date + "" "" + TIME.Clock.Substring(0, 5) + ""|"" + u + ""|"" + Esc(NameOf(u)) + ""|"" + Esc(text) + Chr(10))" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION Replies (id AS String) AS Array OF String" + NL
+    t = t + "    VAR all AS Array OF String" + NL
+    t = t + "    VAR out AS Array OF String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    all = ReadOr(DATADIR + ""\REPLIES\"" + id + "".TXT"", """").Lines()" + NL
+    t = t + "    FOR EACH line IN all" + NL
+    t = t + "        IF line <> """" THEN out.Add(line)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN out" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION ReplyHtml (line AS String) AS String" + NL
+    t = t + "    VAR r AS Array OF String" + NL
+    t = t + "    r = line.Split(""|"")" + NL
+    t = t + "    IF r.Count < 4 THEN RETURN """"" + NL
+    t = t + "    RETURN ""<tr><td width=""""16""""></td><td bgcolor=""""#EDEFF4""""><font size=""""2""""><a href=""""profile.asp?u="" + r[1] + """"""><b>"" + H(Unesc(r[2])) + ""</b></a> <font color=""""#808080"""">"" + r[0] + ""</font><br>"" + Br(Unesc(r[3])) + ""</font></td></tr>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The newest replies to a post that fit in room characters, oldest first, with a" + NL
+    t = t + "' link to the rest. most = 0 means as many as fit." + NL
+    t = t + "FUNCTION RepliesHtml (id AS String, most AS Integer, room AS Integer) AS String" + NL
+    t = t + "    VAR all AS Array OF String" + NL
+    t = t + "    VAR out AS String" + NL
+    t = t + "    VAR i AS Integer" + NL
+    t = t + "    VAR shown AS Integer" + NL
+    t = t + "    all = Replies(id)" + NL
+    t = t + "    IF all.Count = 0 THEN RETURN """"" + NL
+    t = t + "    FOR i = all.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF most > 0 AND shown >= most THEN BREAK" + NL
+    t = t + "        IF out.Length > room THEN BREAK" + NL
+    t = t + "        out = ReplyHtml(all[i]) + out" + NL
+    t = t + "        shown = shown + 1" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    IF shown < all.Count THEN" + NL
+    t = t + "        out = ""<tr><td width=""""16""""></td><td><font size=""""1""""><a href=""""view.asp?id="" + id + """""">See all "" + Str(all.Count) + "" replies</a></font></td></tr>"" + out" + NL
+    t = t + "    END IF" + NL
+    t = t + "    RETURN ""<table width=""""100%"""" cellpadding=""""3"""" cellspacing=""""1"""">"" + out + ""</table>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- showing posts" + NL
+    t = t + "" + NL
+    t = t + "' Thumbs and the reply link under a post. back says where a thumb returns to:" + NL
+    t = t + "' ""home"", ""view"", or the user whose Wall it is on." + NL
+    t = t + "FUNCTION ActionsHtml (id AS String, line AS String, back AS String) AS String" + NL
+    t = t + "    VAR votes AS String" + NL
+    t = t + "    VAR up AS String" + NL
+    t = t + "    VAR down AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    votes = VotesOf(id)" + NL
+    t = t + "    up = ""thumbs up ("" + Str(CountVotes(votes, ""+"")) + "")""" + NL
+    t = t + "    down = ""thumbs down ("" + Str(CountVotes(votes, ""-"")) + "")""" + NL
+    t = t + "    IF votes.Contains(""|"" + viewer + ""+|"") THEN up = ""<b>"" + up + ""</b>""" + NL
+    t = t + "    IF votes.Contains(""|"" + viewer + ""-|"") THEN down = ""<b>"" + down + ""</b>""" + NL
+    t = t + "    n = Replies(id).Count" + NL
+    t = t + "    IF NOT CanTalk(viewer, line) THEN" + NL
+    t = t + "        RETURN ""<font size=""""1"""" color=""""#808080"""">"" + up + "" &middot; "" + down + "" &middot; <a href=""""view.asp?id="" + id + """""">"" + Str(n) + "" replies</a></font>""" + NL
+    t = t + "    END IF" + NL
+    t = t + "    RETURN ""<font size=""""1""""><a href=""""vote.asp?id="" + id + ""&v=up&b="" + back + """""">"" + up + ""</a> &middot; "" _" + NL
+    t = t + "         + ""<a href=""""vote.asp?id="" + id + ""&v=down&b="" + back + """""">"" + down + ""</a> &middot; "" _" + NL
+    t = t + "         + ""<a href=""""view.asp?id="" + id + """""">reply</a></font>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' One post as a row of the feed or a Wall, with its thumbs and newest replies." + NL
+    t = t + "' onWall leaves out the Wall it is on; most is how many replies to show (0 = all" + NL
+    t = t + "' that fit)." + NL
+    t = t + "FUNCTION PostHtml (line AS String, onWall AS Bool, back AS String, most AS Integer) AS String" + NL
     t = t + "    VAR p AS Array OF String" + NL
     t = t + "    VAR who AS String" + NL
     t = t + "    p = line.Split(""|"")" + NL
@@ -396,7 +531,9 @@ SUB File0 ()
     t = t + "    IF p[2] <> p[4] AND NOT onWall THEN" + NL
     t = t + "        who = who + "" &raquo; <a href=""""profile.asp?u="" + p[4] + """"""><b>"" + H(Unesc(p[5])) + ""</b></a>""" + NL
     t = t + "    END IF" + NL
-    t = t + "    RETURN ""<tr><td bgcolor=""""#F7F7F7""""><font size=""""2"""">"" + who + "" <font color=""""#808080"""">"" + p[1] + ""</font><br>"" + Br(Unesc(p[6])) + ""</font></td></tr>""" + NL
+    t = t + "    RETURN ""<tr><td bgcolor=""""#F7F7F7""""><font size=""""2"""">"" + who + "" <a href=""""view.asp?id="" + p[0] + """"""><font color=""""#808080"""">"" + p[1] + ""</font></a><br>"" _" + NL
+    t = t + "         + Br(Unesc(p[6])) + ""</font><br>"" + ActionsHtml(p[0], line, back) _" + NL
+    t = t + "         + RepliesHtml(p[0], most, PAGEROOM) + ""</td></tr>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' The newest posts on one wall." + NL
@@ -408,7 +545,7 @@ SUB File0 ()
     t = t + "    lines = ReadOr(DATADIR + ""\WALLS\"" + u + "".TXT"", """").Lines()" + NL
     t = t + "    FOR i = lines.Count - 1 TO 0 STEP -1" + NL
     t = t + "        IF lines[i] <> """" THEN" + NL
-    t = t + "            out = out + PostHtml(lines[i], TRUE)" + NL
+    t = t + "            out = out + PostHtml(lines[i], TRUE, u, FEEDREPLIES)" + NL
     t = t + "            shown = shown + 1" + NL
     t = t + "            IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK" + NL
     t = t + "        END IF" + NL
@@ -434,7 +571,7 @@ SUB File0 ()
     t = t + "        p = lines[i].Split(""|"")" + NL
     t = t + "        IF p.Count >= 7 THEN" + NL
     t = t + "            IF circle.Contains(""|"" + p[2] + ""|"") OR circle.Contains(""|"" + p[4] + ""|"") THEN" + NL
-    t = t + "                out = out + PostHtml(lines[i], FALSE)" + NL
+    t = t + "                out = out + PostHtml(lines[i], FALSE, ""home"", FEEDREPLIES)" + NL
     t = t + "                shown = shown + 1" + NL
     t = t + "                IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK" + NL
     t = t + "            END IF" + NL
@@ -483,6 +620,42 @@ SUB File0 ()
     t = t + "FUNCTION Opt (value AS String, current AS String) AS String" + NL
     t = t + "    IF value = current THEN RETURN ""<option selected>"" + H(value) + ""</option>""" + NL
     t = t + "    RETURN ""<option>"" + H(value) + ""</option>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' A text box that counts down as you type, and the page script that does the" + NL
+    t = t + "' counting. Voyager sends a whole form as one 64K message and a text area has no" + NL
+    t = t + "' maxlength, so this greys out the form's button (id=""go"") while any box on the" + NL
+    t = t + "' page holds more than it may. The server checks again anyway." + NL
+    t = t + "FUNCTION LimitedBox (name AS String, value AS String, rows AS Integer, cols AS Integer, most AS Integer) AS String" + NL
+    t = t + "    RETURN ""<textarea name="""""" + name + """""" id="""""" + name + """""" rows="""""" + Str(rows) + """""" cols="""""" + Str(cols) + """""" onchange=""""Limits_Check"""">"" + H(value) + ""</textarea><br>"" _" + NL
+    t = t + "         + ""<font size=""""1"""" color=""""#808080"""" id="""""" + name + ""_n"""">up to "" + Str(most) + "" characters</font>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' names and limits are comma-separated and in step: ""about,music"", ""500,500""." + NL
+    t = t + "FUNCTION LimitScript (names AS String, limits AS String) AS String" + NL
+    t = t + "    RETURN ""<script type=""""spark"""">"" + Chr(10) _" + NL
+    t = t + "         + ""SUB Limits_Check ()"" + Chr(10) _" + NL
+    t = t + "         + ""    VAR names AS Array OF String"" + Chr(10) _" + NL
+    t = t + "         + ""    VAR limits AS Array OF String"" + Chr(10) _" + NL
+    t = t + "         + ""    VAR i AS Integer"" + Chr(10) _" + NL
+    t = t + "         + ""    VAR n AS Integer"" + Chr(10) _" + NL
+    t = t + "         + ""    VAR most AS Integer"" + Chr(10) _" + NL
+    t = t + "         + ""    VAR fits AS Bool = TRUE"" + Chr(10) _" + NL
+    t = t + "         + ""    names = """""" + names + """""".Split("""","""")"" + Chr(10) _" + NL
+    t = t + "         + ""    limits = """""" + limits + """""".Split("""","""")"" + Chr(10) _" + NL
+    t = t + "         + ""    FOR i = 0 TO names.Count - 1"" + Chr(10) _" + NL
+    t = t + "         + ""        n = PAGE.Get(names[i]).Value.Length"" + Chr(10) _" + NL
+    t = t + "         + ""        most = Int(Val(limits[i]))"" + Chr(10) _" + NL
+    t = t + "         + ""        IF n > most THEN"" + Chr(10) _" + NL
+    t = t + "         + ""            PAGE.Get(names[i] + """"_n"""").Text = Str(n - most) + """" characters too many"""""" + Chr(10) _" + NL
+    t = t + "         + ""            fits = FALSE"" + Chr(10) _" + NL
+    t = t + "         + ""        ELSE"" + Chr(10) _" + NL
+    t = t + "         + ""            PAGE.Get(names[i] + """"_n"""").Text = Str(most - n) + """" characters left"""""" + Chr(10) _" + NL
+    t = t + "         + ""        END IF"" + Chr(10) _" + NL
+    t = t + "         + ""    NEXT"" + Chr(10) _" + NL
+    t = t + "         + ""    PAGE.Get(""""go"""").Enabled = fits"" + Chr(10) _" + NL
+    t = t + "         + ""END SUB"" + Chr(10) _" + NL
+    t = t + "         + ""</script>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "FUNCTION Picture (u AS String) AS String" + NL
@@ -536,18 +709,19 @@ SUB File1 ()
     t = t + "<%= BoxTop(""Edit My Profile"") %>" + NL
     t = t + "<form action=""edit.asp"" method=""post"">" + NL
     t = t + "<table cellpadding=""4"">" + NL
-    t = t + "<tr><td><font size=""2"">Name:</font></td><td><input name=""name"" size=""30"" value=""<%= H(Field(rec, ""name"")) %>""></td></tr>" + NL
+    t = t + "<tr><td><font size=""2"">Name:</font></td><td><input name=""name"" size=""30"" maxlength=""<%= MAXNAME %>"" value=""<%= H(Field(rec, ""name"")) %>""></td></tr>" + NL
     t = t + "<tr><td><font size=""2"">Sex:</font></td><td><select name=""sex""><%= Opt("""", Field(rec, ""sex"")) %><%= Opt(""Female"", Field(rec, ""sex"")) %><%= Opt(""Male"", Field(rec, ""sex"")) %></select></td></tr>" + NL
-    t = t + "<tr><td><font size=""2"">Birthday:</font></td><td><input name=""birthday"" size=""20"" value=""<%= H(Field(rec, ""birthday"")) %>""></td></tr>" + NL
-    t = t + "<tr><td><font size=""2"">Hometown:</font></td><td><input name=""hometown"" size=""30"" value=""<%= H(Field(rec, ""hometown"")) %>""></td></tr>" + NL
+    t = t + "<tr><td><font size=""2"">Birthday:</font></td><td><input name=""birthday"" size=""20"" maxlength=""<%= SHORTFIELD %>"" value=""<%= H(Field(rec, ""birthday"")) %>""></td></tr>" + NL
+    t = t + "<tr><td><font size=""2"">Hometown:</font></td><td><input name=""hometown"" size=""30"" maxlength=""<%= SHORTFIELD %>"" value=""<%= H(Field(rec, ""hometown"")) %>""></td></tr>" + NL
     t = t + "<tr><td><font size=""2"">Relationship:</font></td><td><select name=""status""><%= Opt("""", Field(rec, ""status"")) %><%= Opt(""Single"", Field(rec, ""status"")) %><%= Opt(""In a Relationship"", Field(rec, ""status"")) %><%= Opt(""Married"", Field(rec, ""status"")) %><%= Opt(""It's Complicated"", Field(rec, ""status"")) %></select></td></tr>" + NL
-    t = t + "<tr><td valign=""top""><font size=""2"">Interests:</font></td><td><textarea name=""interests"" rows=""3"" cols=""40""><%= H(Field(rec, ""interests"")) %></textarea></td></tr>" + NL
-    t = t + "<tr><td valign=""top""><font size=""2"">Favorite Music:</font></td><td><textarea name=""music"" rows=""3"" cols=""40""><%= H(Field(rec, ""music"")) %></textarea></td></tr>" + NL
-    t = t + "<tr><td valign=""top""><font size=""2"">About Me:</font></td><td><textarea name=""about"" rows=""5"" cols=""40""><%= H(Field(rec, ""about"")) %></textarea></td></tr>" + NL
+    t = t + "<tr><td valign=""top""><font size=""2"">Interests:</font></td><td><%= LimitedBox(""interests"", Field(rec, ""interests""), 3, 40, LONGFIELD) %></td></tr>" + NL
+    t = t + "<tr><td valign=""top""><font size=""2"">Favorite Music:</font></td><td><%= LimitedBox(""music"", Field(rec, ""music""), 3, 40, LONGFIELD) %></td></tr>" + NL
+    t = t + "<tr><td valign=""top""><font size=""2"">About Me:</font></td><td><%= LimitedBox(""about"", Field(rec, ""about""), 5, 40, LONGFIELD) %></td></tr>" + NL
     t = t + "<tr><td valign=""top""><font size=""2"">Picture:</font></td><td><font size=""2""><a href=""picture.asp"">Change my picture</a></font></td></tr>" + NL
-    t = t + "<tr><td></td><td><input type=""submit"" value=""Save Changes""></td></tr>" + NL
+    t = t + "<tr><td></td><td><input type=""submit"" id=""go"" value=""Save Changes""></td></tr>" + NL
     t = t + "</table>" + NL
     t = t + "</form>" + NL
+    t = t + "<%= LimitScript(""interests,music,about"", Str(LONGFIELD) + "","" + Str(LONGFIELD) + "","" + Str(LONGFIELD)) %>" + NL
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("EDIT.ASP")
@@ -599,9 +773,10 @@ SUB File3 ()
     t = t + "<form action=""post.asp"" method=""post"">" + NL
     t = t + "<input type=""hidden"" name=""to"" value=""<%= viewer %>"">" + NL
     t = t + "<input type=""hidden"" name=""back"" value=""home"">" + NL
-    t = t + "<p><textarea name=""text"" rows=""3"" cols=""50""></textarea><br>" + NL
-    t = t + "<input type=""submit"" value=""Share""></p>" + NL
+    t = t + "<p><%= LimitedBox(""text"", """", 3, 50, MAXPOST) %><br>" + NL
+    t = t + "<input type=""submit"" id=""go"" value=""Share""></p>" + NL
     t = t + "</form>" + NL
+    t = t + "<%= LimitScript(""text"", Str(MAXPOST)) %>" + NL
     t = t + "<%= BoxTop(""News Feed"") %>" + NL
     t = t + "<table width=""100%"" cellpadding=""5"" cellspacing=""2"">" + NL
     t = t + "<%= FeedHtml(viewer) %>" + NL
@@ -956,9 +1131,10 @@ SUB File12 ()
     t = t + "<% IF mine OR friend THEN %>" + NL
     t = t + "<form action=""post.asp"" method=""post"">" + NL
     t = t + "<input type=""hidden"" name=""to"" value=""<%= who %>"">" + NL
-    t = t + "<p><textarea name=""text"" rows=""3"" cols=""50""></textarea><br>" + NL
-    t = t + "<input type=""submit"" value=""<% IF mine THEN %>Share<% ELSE %>Write on the Wall<% END IF %>""></p>" + NL
+    t = t + "<p><%= LimitedBox(""text"", """", 3, 50, MAXPOST) %><br>" + NL
+    t = t + "<input type=""submit"" id=""go"" value=""<% IF mine THEN %>Share<% ELSE %>Write on the Wall<% END IF %>""></p>" + NL
     t = t + "</form>" + NL
+    t = t + "<%= LimitScript(""text"", Str(MAXPOST)) %>" + NL
     t = t + "<% ELSE %>" + NL
     t = t + "<p><font size=""2"" color=""#808080"">Only <%= H(Field(rec, ""name"")) %>'s friends can write on this Wall.</font></p>" + NL
     t = t + "<% END IF %>" + NL
@@ -972,6 +1148,24 @@ SUB File12 ()
 END SUB
 
 SUB File13 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' REPLY.ASP - adds a reply to a post, then shows the post again." + NL
+    t = t + "VAR id AS String" + NL
+    t = t + "VAR problem AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "IF REQUEST.Method <> ""POST"" THEN RESPONSE.Redirect(""home.asp"")" + NL
+    t = t + "id = REQUEST.Form(""id"")" + NL
+    t = t + "problem = AddReply(viewer, id, REQUEST.Form(""text""))" + NL
+    t = t + "IF FindPost(id) = """" THEN RESPONSE.Redirect(""home.asp"")" + NL
+    t = t + "IF problem <> """" THEN RESPONSE.Redirect(""view.asp?id="" + id + ""&why="" + UrlEnc(problem))" + NL
+    t = t + "RESPONSE.Redirect(""view.asp?id="" + id)" + NL
+    t = t + "%>" + NL
+    Put("REPLY.ASP")
+END SUB
+
+SUB File14 ()
     t = ""
     t = t + "' SHRINK.SPK - makes a Sketch picture small enough to be a SimBook profile picture." + NL
     t = t + "'" + NL
@@ -1086,4 +1280,63 @@ SUB File13 ()
     t = t + "    RETURN best" + NL
     t = t + "END FUNCTION" + NL
     Put("SHRINK.SPK")
+END SUB
+
+SUB File15 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' VIEW.ASP?id=N - one post with all its replies (as many as fit), and a reply box." + NL
+    t = t + "VAR id AS String" + NL
+    t = t + "VAR line AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "id = REQUEST.Query(""id"")" + NL
+    t = t + "line = FindPost(id)" + NL
+    t = t + "IF line = """" THEN RESPONSE.Redirect(""home.asp"")" + NL
+    t = t + "%>" + NL
+    t = t + "<%= Top(""Post"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr><td valign=""top"">" + NL
+    t = t + "<%= Notice(REQUEST.Query(""why"")) %>" + NL
+    t = t + "<%= BoxTop(""Post"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""5"" cellspacing=""2"">" + NL
+    t = t + "<%= PostHtml(line, FALSE, ""view"", 0) %>" + NL
+    t = t + "</table>" + NL
+    t = t + "<% IF CanTalk(viewer, line) THEN %>" + NL
+    t = t + "<%= BoxTop(""Reply"") %>" + NL
+    t = t + "<form action=""reply.asp"" method=""post"">" + NL
+    t = t + "<input type=""hidden"" name=""id"" value=""<%= id %>"">" + NL
+    t = t + "<p><%= LimitedBox(""text"", """", 3, 50, MAXREPLY) %><br>" + NL
+    t = t + "<input type=""submit"" id=""go"" value=""Reply""></p>" + NL
+    t = t + "</form>" + NL
+    t = t + "<%= LimitScript(""text"", Str(MAXREPLY)) %>" + NL
+    t = t + "<% ELSE %>" + NL
+    t = t + "<p><font size=""2"" color=""#808080"">Only friends can reply to this.</font></p>" + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "</td></tr></table>" + NL
+    t = t + "<%= Bottom() %>" + NL
+    Put("VIEW.ASP")
+END SUB
+
+SUB File16 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' VOTE.ASP?id=N&v=up|down&b=back - thumbs up or down on a post (the same thumb" + NL
+    t = t + "' again takes it back), then returns to the feed, the post or the Wall it came from." + NL
+    t = t + "VAR id AS String" + NL
+    t = t + "VAR line AS String" + NL
+    t = t + "VAR back AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "id = REQUEST.Query(""id"")" + NL
+    t = t + "line = FindPost(id)" + NL
+    t = t + "IF line <> """" AND CanTalk(viewer, line) THEN" + NL
+    t = t + "    IF REQUEST.Query(""v"") = ""up"" THEN Vote(viewer, id, ""+"")" + NL
+    t = t + "    IF REQUEST.Query(""v"") = ""down"" THEN Vote(viewer, id, ""-"")" + NL
+    t = t + "END IF" + NL
+    t = t + "back = REQUEST.Query(""b"")" + NL
+    t = t + "IF back = ""view"" THEN RESPONSE.Redirect(""view.asp?id="" + id)" + NL
+    t = t + "IF back <> ""home"" AND UserExists(back) THEN RESPONSE.Redirect(""profile.asp?u="" + back)" + NL
+    t = t + "RESPONSE.Redirect(""home.asp"")" + NL
+    t = t + "%>" + NL
+    Put("VOTE.ASP")
 END SUB

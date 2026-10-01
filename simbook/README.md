@@ -2,7 +2,7 @@
 
 A tiny social network for [SIM95](https://sim95.kippy.io/), in the spirit of
 the 2004 PHP-era thefacebook: accounts, profiles with a picture, friends,
-Walls, and a News Feed. It is written entirely in SPARK as ActiveSparkPages
+Walls, a News Feed, thumbs up and down, and replies. It is written entirely in SPARK as ActiveSparkPages
 (`.ASP`) served by the machine's own `HTTPD.SPK`, and it installs as the
 machine's home page.
 
@@ -29,6 +29,8 @@ the pages without touching anyone's data.
 | `profile.asp?u=name` | Picture, information, friends, and the Wall |
 | `edit.asp` | Edit your profile |
 | `picture.asp` | Upload or remove your picture (a `.PIC`, up to 100x100) |
+| `view.asp?id=N` | One post with all its replies, and a reply box |
+| `vote.asp`, `reply.asp` | Thumbs and replies; they redirect back |
 | `people.asp?q=text` | Member directory and search |
 | `post.asp`, `friend.asp`, `login.asp`, `join.asp`, `logout.asp` | Form handlers that redirect back |
 
@@ -36,6 +38,13 @@ the pages without touching anyone's data.
 * **Walls**: only you and your friends can write on your Wall. Writing on your
   own Wall is your status update.
 * **Feed**: the newest 25 posts written by or to you or a friend.
+* **Thumbs and replies**: everyone whose feed a post reaches can give it a
+  thumb up or down (click again to take it back) or reply. That means its
+  author, the owner of its Wall, and their friends. The feed and Walls show
+  the newest two replies; the post's own page shows the rest.
+* **Counters**: every text box counts down as you type, and the button greys
+  out while a box holds too much. This is a SPARK page script, which Voyager
+  runs on every keystroke. The server checks the limits again anyway.
 
 ## Pictures and the 64K limit
 
@@ -46,6 +55,14 @@ one ("Message too long"). The picture page therefore hands out
 [`SHRINK.SPK`](WEB/SHRINK.SPK), which a visitor runs on their own machine. It
 turns `ME.PIC` into a 100x75 `AVATAR.PIC` of about 8K. Each 4x4 block becomes
 the colour it holds most of, ignoring white, so thin lines survive.
+
+Can a page batch a big submission into several requests instead? Not from
+Voyager. A page script gets only `PAGE`, `TIME`, `MATH`, and a `SYS` with
+`Ticks`, `Sleep` and `Beep`. It cannot open a connection, and it cannot read
+the file a file box points at. A stand-alone SPARK program could (it has
+`NET_Socket`), but a full-size picture would then be too big for `HTTPD.SPK`
+to send back as an image. So SimBook keeps everything small enough to travel
+in one message, and the live counters make sure text boxes do.
 
 On the server side, a page over 64K would stop the web server. So names,
 profile fields and posts are capped, and the feed, Wall and directory stop
@@ -66,6 +83,8 @@ C:\BOOKDATA\POSTS.TXT           every post, append-only (the feed reads this)
 C:\BOOKDATA\PEOPLE.TXT          user|name directory
 C:\BOOKDATA\SESSIONS\<id>.TXT   sign-in cookie -> user
 C:\BOOKDATA\NEXTID.TXT          post counter
+C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|
+C:\BOOKDATA\REPLIES\<post>.TXT  date|author|name|text, one reply per line
 C:\WEB\PICS\<user>.PIC          profile pictures
 ```
 
@@ -78,6 +97,7 @@ User names are 3–8 letters or digits, because they double as 8.3 file names.
 * There is no locking. Two requests at the same moment could race on a file.
   HTTPD handles one request at a time, so this is mostly theoretical.
 * There is no CSRF protection, no post deletion, and no friend requests.
+  Thumbs are plain links, so a page elsewhere could vote on your behalf.
 
 ## Developing
 
@@ -92,4 +112,5 @@ The tests use `tools/aspsim`, a headless SIM95. It downloads the live bundle
 from sim95.kippy.io and runs the real SPARK compiler, interpreter, disk and ASP
 renderer in Node, so 8.3 names, compile errors and the page time limit all
 behave as they do on the real machine. It also enforces the 64K message limit
-on requests and pages. Set `SIM95_REFRESH=1` to re-download.
+on requests and pages. It runs a page's own SPARK script the way Voyager does,
+so the tests can type into a box and watch the counter. Set `SIM95_REFRESH=1` to re-download.

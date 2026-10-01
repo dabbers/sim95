@@ -64,9 +64,10 @@ friend = IsFriend(viewer, who)
 <% IF mine OR friend THEN %>
 <form action="post.asp" method="post">
 <input type="hidden" name="to" value="<%= who %>">
-<p><textarea name="text" rows="3" cols="50"></textarea><br>
-<input type="submit" value="<% IF mine THEN %>Share<% ELSE %>Write on the Wall<% END IF %>"></p>
+<p><%= LimitedBox("text", "", 3, 50, MAXPOST) %><br>
+<input type="submit" id="go" value="<% IF mine THEN %>Share<% ELSE %>Write on the Wall<% END IF %>"></p>
 </form>
+<%= LimitScript("text", Str(MAXPOST)) %>
 <% ELSE %>
 <p><font size="2" color="#808080">Only <%= H(Field(rec, "name")) %>'s friends can write on this Wall.</font></p>
 <% END IF %>

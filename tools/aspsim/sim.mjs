@@ -17,7 +17,8 @@ const SITE = "https://sim95.kippy.io";
 export const MESSAGE_LIMIT = 65536;
 
 async function bundlePath() {
-  const out = path.join(cacheDir, "sim95.mjs");
+  // Bump when the exports below change, so an old cache is rebuilt.
+  const out = path.join(cacheDir, "sim95-v2.mjs");
   if (fs.existsSync(out) && !process.env.SIM95_REFRESH) return out;
   fs.mkdirSync(cacheDir, { recursive: true });
   const html = await (await fetch(SITE + "/")).text();
@@ -41,11 +42,13 @@ async function bundlePath() {
   const netns = name(/function ([\w$]+)\([\w$]+\)\{return\{LocalAddress:/, "the NET namespace");
   const ns = name(/new ([\w$]+)\("FS",/, "the namespace class");
   const builtins = name(/function ([\w$]+)\([\w$]+,[\w$]+\)\{const [\w$]+=[\w$]+\[0\];switch\([\w$]+\)\{case"Str":/, "the built-in functions");
+  const pageCompile = name(/function ([\w$]+)\([\w$]+\)\{const [\w$]+=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\([\w$]+\);if\([\w$]+===null&&[\w$]+\.length===0\)return\{script:null,errors:\[\],hasScript:!1\}/, "the page script compiler");
+  const pageRunner = name(/class ([\w$]+)\{constructor\([\w$]+,[\w$]+,[\w$]+=[\w$]+\)\{this\.script=/, "the page script runner");
   const time = name(/case"TIME":[\w$]+=new [\w$]+\("TIME",([\w$]+)\)/, "TIME");
   const math = name(/case"MATH":[\w$]+=new [\w$]+\("MATH",([\w$]+)\)/, "MATH");
 
   // Export them, and stop the bundle from starting the desktop.
-  const hook = `globalThis.__SIM95={render:${render},Disk:${disk},image:${image},compile:${compile},Interp:${interp},run:${runner},fsns:${fsns},netns:${netns},NS:${ns},builtins:${builtins},TIME:${time},MATH:${math}};`;
+  const hook = `globalThis.__SIM95={render:${render},Disk:${disk},image:${image},compile:${compile},Interp:${interp},run:${runner},fsns:${fsns},netns:${netns},NS:${ns},builtins:${builtins},pageCompile:${pageCompile},PageScript:${pageRunner},TIME:${time},MATH:${math}};`;
   const boot = /[\w$]+\([\w$]+\)\.render\([\w$]+\.jsx\([\w$]+,\{\}\)\);\s*$/;
   if (!boot.test(js)) throw new Error("Bundle changed: could not find the boot call");
   js = js.replace(boot, hook);
@@ -177,4 +180,44 @@ export function browser(m) {
     post: (url, form) => b.go("POST", url, form),
   };
   return b;
+}
+
+// The SPARK in a page as Voyager would run it, against a pretend page made of
+// the elements that have an id. type(id, text) sets a box and fires its
+// onchange, as typing does; el(id) is that element's Value, Text and Enabled.
+export async function page(html) {
+  const S = await load();
+  const { script, errors, hasScript } = S.pageCompile(html);
+  if (!hasScript) return null;
+  if (!script) throw new Error("Page script error: " + errors.map((e) => e.display ?? e.message).join("; "));
+  const els = new Map();
+  const attr = (a, n) => (new RegExp(`\\s${n}="([^"]*)"`, "i").exec(a) || [])[1];
+  for (const m of html.matchAll(/<(\w+)(\s[^>]*\sid="[^"]+"[^>]*|\s+id="[^"]+"[^>]*)>/gi)) {
+    const tag = m[1].toUpperCase(), a = m[2], id = attr(a, "id");
+    let value = attr(a, "value") ?? "";
+    if (tag === "TEXTAREA") value = html.slice(m.index + m[0].length, html.indexOf("</textarea>", m.index));
+    els.set(id, { Id: id, TagName: tag, Value: value, Text: value, Enabled: true, Visible: true, Checked: false, onchange: attr(a, "onchange") });
+  }
+  let status = "";
+  const host = {
+    hasElement: (id) => els.has(id),
+    getElement: (id, p) => els.get(id)[p],
+    setElement: (id, p, v) => { const e = els.get(id); e[p] = v; if (p === "Value" || p === "Text") e.Value = e.Text = v; },
+    getTitle: () => "", setTitle() {}, setStatus: (t) => { status = t; }, location: () => "http://localhost/",
+    navigate() {}, alert: async () => {}, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), beep() {},
+  };
+  const run = new S.PageScript(script, host);
+  run.start();
+  await run.idle();
+  const p = {
+    el: (id) => els.get(id),
+    status: () => status,
+    async type(id, text) {
+      host.setElement(id, "Value", text);
+      const sub = els.get(id).onchange;
+      if (sub) { run.fire(sub); await run.idle(); }
+      if (status.startsWith("Script error")) throw new Error(status);
+    },
+  };
+  return p;
 }

@@ -22,9 +22,10 @@ rec = LoadUser(viewer)
 <form action="post.asp" method="post">
 <input type="hidden" name="to" value="<%= viewer %>">
 <input type="hidden" name="back" value="home">
-<p><textarea name="text" rows="3" cols="50"></textarea><br>
-<input type="submit" value="Share"></p>
+<p><%= LimitedBox("text", "", 3, 50, MAXPOST) %><br>
+<input type="submit" id="go" value="Share"></p>
 </form>
+<%= LimitScript("text", Str(MAXPOST)) %>
 <%= BoxTop("News Feed") %>
 <table width="100%" cellpadding="5" cellspacing="2">
 <%= FeedHtml(viewer) %>

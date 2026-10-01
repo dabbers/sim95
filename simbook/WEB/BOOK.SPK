@@ -13,6 +13,8 @@
 '   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory
 '   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to
 '   C:\BOOKDATA\NEXTID.TXT          the last post number handed out
+'   C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|  thumbs up and down on one post
+'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post: date|author|author name|text
 '   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)
 '
 ' A post is one line: id|date time|author|author name|wall|wall name|text
@@ -28,12 +30,14 @@ CONST COOKIE = "simbook"
 CONST FEEDSIZE = 25
 CONST FEEDSCAN = 1000
 CONST MAXPOST = 1000
+CONST MAXREPLY = 500
+CONST FEEDREPLIES = 2         ' replies shown under a post in the feed and on Walls
 CONST MAXNAME = 40
 CONST SHORTFIELD = 60
 CONST LONGFIELD = 500
 CONST MAXPIC = 20000
 CONST PICSIZE = 100
-CONST PAGEROOM = 24000        ' how much feed or Wall one page may carry
+CONST PAGEROOM = 20000        ' how much feed, Wall or replies one page may carry
 
 ' HTTPD.SPK sends a whole page as one network message, and a message holds
 ' 64K: a bigger page would stop the web server. So names, profile fields and
@@ -44,13 +48,13 @@ VAR viewer AS String          ' who is signed in; "" for nobody
 ' ---------------------------------------------------------------- the disk
 
 SUB EnsureDisk ()
-    IF FS.Exists(DATADIR + "\SESSIONS") THEN RETURN
-    IF NOT FS.Exists(DATADIR) THEN FS.MakeDir(DATADIR)
-    IF NOT FS.Exists(DATADIR + "\USERS") THEN FS.MakeDir(DATADIR + "\USERS")
-    IF NOT FS.Exists(DATADIR + "\FRIENDS") THEN FS.MakeDir(DATADIR + "\FRIENDS")
-    IF NOT FS.Exists(DATADIR + "\WALLS") THEN FS.MakeDir(DATADIR + "\WALLS")
+    VAR dir AS String
+    VAR dirs AS Array OF String
+    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES"]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
+    NEXT
     IF NOT FS.Exists(PICDIR) THEN FS.MakeDir(PICDIR)
-    FS.MakeDir(DATADIR + "\SESSIONS")
 END SUB
 
 FUNCTION ReadOr (path AS String, fallback AS String) AS String
@@ -328,8 +332,136 @@ FUNCTION AddPost (author AS String, wall AS String, text AS String) AS String
     RETURN ""
 END FUNCTION
 
-' One post as a row of the feed or a wall. onWall leaves out "on X's Wall".
-FUNCTION PostHtml (line AS String, onWall AS Bool) AS String
+' The line of post number id, or "" when there is none. IndexOf does the
+' searching, so this costs a handful of steps however long the log is.
+FUNCTION FindPost (id AS String) AS String
+    VAR text AS String
+    VAR at AS Integer
+    IF id = "" OR id.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(id, "0123456789") THEN RETURN ""
+    text = Chr(10) + ReadOr(DATADIR + "\POSTS.TXT", "")
+    at = text.IndexOf(Chr(10) + id + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    at = text.IndexOf(Chr(10))
+    IF at >= 0 THEN text = text.Substring(0, at)
+    RETURN text
+END FUNCTION
+
+' Who may give a post a thumb or a reply: the people whose News Feed it reaches.
+' That is its author and the owner of its Wall, and their friends.
+FUNCTION CanTalk (u AS String, line AS String) AS Bool
+    VAR p AS Array OF String
+    p = line.Split("|")
+    IF p.Count < 7 THEN RETURN FALSE
+    IF u = p[2] OR u = p[4] THEN RETURN TRUE
+    RETURN IsFriend(u, p[2]) OR IsFriend(u, p[4])
+END FUNCTION
+
+' ---------------------------------------------------------------- thumbs
+
+FUNCTION VotesOf (id AS String) AS String
+    RETURN ReadOr(DATADIR + "\VOTES\" + id + ".TXT", "|")
+END FUNCTION
+
+' How many "+" or "-" votes a |ann+|bob-| list holds.
+FUNCTION CountVotes (votes AS String, sign AS String) AS Integer
+    RETURN (votes.Length - votes.Replace(sign + "|", "").Length) / 2
+END FUNCTION
+
+' Thumbs up ("+") or down ("-"). The same thumb again takes it back.
+SUB Vote (u AS String, id AS String, sign AS String)
+    VAR votes AS String
+    VAR had AS Bool
+    EnsureDisk()
+    votes = VotesOf(id)
+    had = votes.Contains("|" + u + sign + "|")
+    votes = votes.Replace("|" + u + "+|", "|").Replace("|" + u + "-|", "|")
+    IF NOT had THEN votes = votes + u + sign + "|"
+    FS.Write(DATADIR + "\VOTES\" + id + ".TXT", votes)
+END SUB
+
+' ---------------------------------------------------------------- replies
+
+FUNCTION AddReply (u AS String, id AS String, text AS String) AS String
+    VAR line AS String
+    line = FindPost(id)
+    text = text.Replace(Chr(13), "").Trim()
+    IF line = "" THEN RETURN "That post is gone."
+    IF NOT CanTalk(u, line) THEN RETURN "Only friends can reply to that."
+    IF text = "" THEN RETURN "Write something first."
+    IF text.Length > MAXREPLY THEN RETURN "Keep replies under " + Str(MAXREPLY) + " characters."
+    EnsureDisk()
+    FS.Append(DATADIR + "\REPLIES\" + id + ".TXT", TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|" + u + "|" + Esc(NameOf(u)) + "|" + Esc(text) + Chr(10))
+    RETURN ""
+END FUNCTION
+
+FUNCTION Replies (id AS String) AS Array OF String
+    VAR all AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    all = ReadOr(DATADIR + "\REPLIES\" + id + ".TXT", "").Lines()
+    FOR EACH line IN all
+        IF line <> "" THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION ReplyHtml (line AS String) AS String
+    VAR r AS Array OF String
+    r = line.Split("|")
+    IF r.Count < 4 THEN RETURN ""
+    RETURN "<tr><td width=""16""></td><td bgcolor=""#EDEFF4""><font size=""2""><a href=""profile.asp?u=" + r[1] + """><b>" + H(Unesc(r[2])) + "</b></a> <font color=""#808080"">" + r[0] + "</font><br>" + Br(Unesc(r[3])) + "</font></td></tr>"
+END FUNCTION
+
+' The newest replies to a post that fit in room characters, oldest first, with a
+' link to the rest. most = 0 means as many as fit.
+FUNCTION RepliesHtml (id AS String, most AS Integer, room AS Integer) AS String
+    VAR all AS Array OF String
+    VAR out AS String
+    VAR i AS Integer
+    VAR shown AS Integer
+    all = Replies(id)
+    IF all.Count = 0 THEN RETURN ""
+    FOR i = all.Count - 1 TO 0 STEP -1
+        IF most > 0 AND shown >= most THEN BREAK
+        IF out.Length > room THEN BREAK
+        out = ReplyHtml(all[i]) + out
+        shown = shown + 1
+    NEXT
+    IF shown < all.Count THEN
+        out = "<tr><td width=""16""></td><td><font size=""1""><a href=""view.asp?id=" + id + """>See all " + Str(all.Count) + " replies</a></font></td></tr>" + out
+    END IF
+    RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""1"">" + out + "</table>"
+END FUNCTION
+
+' ---------------------------------------------------------------- showing posts
+
+' Thumbs and the reply link under a post. back says where a thumb returns to:
+' "home", "view", or the user whose Wall it is on.
+FUNCTION ActionsHtml (id AS String, line AS String, back AS String) AS String
+    VAR votes AS String
+    VAR up AS String
+    VAR down AS String
+    VAR n AS Integer
+    votes = VotesOf(id)
+    up = "thumbs up (" + Str(CountVotes(votes, "+")) + ")"
+    down = "thumbs down (" + Str(CountVotes(votes, "-")) + ")"
+    IF votes.Contains("|" + viewer + "+|") THEN up = "<b>" + up + "</b>"
+    IF votes.Contains("|" + viewer + "-|") THEN down = "<b>" + down + "</b>"
+    n = Replies(id).Count
+    IF NOT CanTalk(viewer, line) THEN
+        RETURN "<font size=""1"" color=""#808080"">" + up + " &middot; " + down + " &middot; <a href=""view.asp?id=" + id + """>" + Str(n) + " replies</a></font>"
+    END IF
+    RETURN "<font size=""1""><a href=""vote.asp?id=" + id + "&v=up&b=" + back + """>" + up + "</a> &middot; " _
+         + "<a href=""vote.asp?id=" + id + "&v=down&b=" + back + """>" + down + "</a> &middot; " _
+         + "<a href=""view.asp?id=" + id + """>reply</a></font>"
+END FUNCTION
+
+' One post as a row of the feed or a Wall, with its thumbs and newest replies.
+' onWall leaves out the Wall it is on; most is how many replies to show (0 = all
+' that fit).
+FUNCTION PostHtml (line AS String, onWall AS Bool, back AS String, most AS Integer) AS String
     VAR p AS Array OF String
     VAR who AS String
     p = line.Split("|")
@@ -338,7 +470,9 @@ FUNCTION PostHtml (line AS String, onWall AS Bool) AS String
     IF p[2] <> p[4] AND NOT onWall THEN
         who = who + " &raquo; <a href=""profile.asp?u=" + p[4] + """><b>" + H(Unesc(p[5])) + "</b></a>"
     END IF
-    RETURN "<tr><td bgcolor=""#F7F7F7""><font size=""2"">" + who + " <font color=""#808080"">" + p[1] + "</font><br>" + Br(Unesc(p[6])) + "</font></td></tr>"
+    RETURN "<tr><td bgcolor=""#F7F7F7""><font size=""2"">" + who + " <a href=""view.asp?id=" + p[0] + """><font color=""#808080"">" + p[1] + "</font></a><br>" _
+         + Br(Unesc(p[6])) + "</font><br>" + ActionsHtml(p[0], line, back) _
+         + RepliesHtml(p[0], most, PAGEROOM) + "</td></tr>"
 END FUNCTION
 
 ' The newest posts on one wall.
@@ -350,7 +484,7 @@ FUNCTION WallHtml (u AS String) AS String
     lines = ReadOr(DATADIR + "\WALLS\" + u + ".TXT", "").Lines()
     FOR i = lines.Count - 1 TO 0 STEP -1
         IF lines[i] <> "" THEN
-            out = out + PostHtml(lines[i], TRUE)
+            out = out + PostHtml(lines[i], TRUE, u, FEEDREPLIES)
             shown = shown + 1
             IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK
         END IF
@@ -376,7 +510,7 @@ FUNCTION FeedHtml (u AS String) AS String
         p = lines[i].Split("|")
         IF p.Count >= 7 THEN
             IF circle.Contains("|" + p[2] + "|") OR circle.Contains("|" + p[4] + "|") THEN
-                out = out + PostHtml(lines[i], FALSE)
+                out = out + PostHtml(lines[i], FALSE, "home", FEEDREPLIES)
                 shown = shown + 1
                 IF shown >= FEEDSIZE OR out.Length > PAGEROOM THEN BREAK
             END IF
@@ -425,6 +559,42 @@ END FUNCTION
 FUNCTION Opt (value AS String, current AS String) AS String
     IF value = current THEN RETURN "<option selected>" + H(value) + "</option>"
     RETURN "<option>" + H(value) + "</option>"
+END FUNCTION
+
+' A text box that counts down as you type, and the page script that does the
+' counting. Voyager sends a whole form as one 64K message and a text area has no
+' maxlength, so this greys out the form's button (id="go") while any box on the
+' page holds more than it may. The server checks again anyway.
+FUNCTION LimitedBox (name AS String, value AS String, rows AS Integer, cols AS Integer, most AS Integer) AS String
+    RETURN "<textarea name=""" + name + """ id=""" + name + """ rows=""" + Str(rows) + """ cols=""" + Str(cols) + """ onchange=""Limits_Check"">" + H(value) + "</textarea><br>" _
+         + "<font size=""1"" color=""#808080"" id=""" + name + "_n"">up to " + Str(most) + " characters</font>"
+END FUNCTION
+
+' names and limits are comma-separated and in step: "about,music", "500,500".
+FUNCTION LimitScript (names AS String, limits AS String) AS String
+    RETURN "<script type=""spark"">" + Chr(10) _
+         + "SUB Limits_Check ()" + Chr(10) _
+         + "    VAR names AS Array OF String" + Chr(10) _
+         + "    VAR limits AS Array OF String" + Chr(10) _
+         + "    VAR i AS Integer" + Chr(10) _
+         + "    VAR n AS Integer" + Chr(10) _
+         + "    VAR most AS Integer" + Chr(10) _
+         + "    VAR fits AS Bool = TRUE" + Chr(10) _
+         + "    names = """ + names + """.Split("","")" + Chr(10) _
+         + "    limits = """ + limits + """.Split("","")" + Chr(10) _
+         + "    FOR i = 0 TO names.Count - 1" + Chr(10) _
+         + "        n = PAGE.Get(names[i]).Value.Length" + Chr(10) _
+         + "        most = Int(Val(limits[i]))" + Chr(10) _
+         + "        IF n > most THEN" + Chr(10) _
+         + "            PAGE.Get(names[i] + ""_n"").Text = Str(n - most) + "" characters too many""" + Chr(10) _
+         + "            fits = FALSE" + Chr(10) _
+         + "        ELSE" + Chr(10) _
+         + "            PAGE.Get(names[i] + ""_n"").Text = Str(most - n) + "" characters left""" + Chr(10) _
+         + "        END IF" + Chr(10) _
+         + "    NEXT" + Chr(10) _
+         + "    PAGE.Get(""go"").Enabled = fits" + Chr(10) _
+         + "END SUB" + Chr(10) _
+         + "</script>"
 END FUNCTION
 
 FUNCTION Picture (u AS String) AS String

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
-import { machine, browser, MESSAGE_LIMIT } from "./sim.mjs";
+import { machine, browser, page, MESSAGE_LIMIT } from "./sim.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let failures = 0;
@@ -210,6 +210,98 @@ await test("removing a friend is mutual", async () => {
   ok(await bob.post("/friend.asp", { u: "ann", do: "add" }));
 });
 
+const postId = (text) => {
+  const line = m.read("C:\\BOOKDATA\\POSTS.TXT").split("\n").find((l) => l.endsWith("|" + text));
+  assert.ok(line, "no post " + text);
+  return line.split("|")[0];
+};
+
+await test("thumbs up and down count, switch, and take back", async () => {
+  ok(await ann.post("/post.asp", { to: "ann", text: "thumb me", back: "home" }));
+  const id = postId("thumb me");
+  let r = ok(await ann.get(`/vote.asp?id=${id}&v=up&b=home`));
+  assert.equal(r.url, "/home.asp");
+  assert.match(r.body, /<b>thumbs up \(1\)<\/b>/);
+  r = ok(await bob.get(`/vote.asp?id=${id}&v=up&b=ann`));
+  assert.equal(r.url, "/profile.asp?u=ann");
+  assert.match(r.body, /<b>thumbs up \(2\)<\/b>/);
+  r = ok(await bob.get(`/vote.asp?id=${id}&v=down&b=view`));
+  assert.equal(r.url, `/view.asp?id=${id}`);
+  assert.match(r.body, />thumbs up \(1\)</);
+  assert.match(r.body, /<b>thumbs down \(1\)<\/b>/);
+  r = ok(await bob.get(`/vote.asp?id=${id}&v=down&b=view`));
+  assert.match(r.body, />thumbs down \(0\)</);
+  assert.equal(m.read(`C:\\BOOKDATA\\VOTES\\${id}.TXT`), "|ann+|");
+});
+
+await test("strangers can see thumbs but not give them", async () => {
+  const id = postId("thumb me");
+  const cat = browser(m);
+  ok(await cat.post("/login.asp", { u: "cat", pw: "secret" }));
+  const r = ok(await cat.get(`/vote.asp?id=${id}&v=down&b=view`));
+  assert.match(r.body, /thumbs up \(1\) &middot; thumbs down \(0\)/);
+  assert.ok(!r.body.includes("vote.asp"));
+  assert.match(r.body, /Only friends can reply/);
+});
+
+await test("bad post numbers go home", async () => {
+  for (const id of ["", "abc", "..%5C1", "999999", "123456789"]) {
+    assert.equal(ok(await ann.get(`/vote.asp?id=${id}&v=up&b=view`)).url, "/home.asp", id);
+    assert.equal(ok(await ann.get(`/view.asp?id=${id}`)).url, "/home.asp", id);
+  }
+});
+
+await test("replies show under the post, newest two in the feed, all on the post", async () => {
+  const id = postId("thumb me");
+  for (const [who, text] of [[bob, "first <reply>"], [ann, "second\nreply"], [bob, "third reply"]]) {
+    const r = ok(await who.post("/reply.asp", { id, text }));
+    assert.equal(r.url, `/view.asp?id=${id}`);
+  }
+  let r = ok(await ann.get(`/view.asp?id=${id}`));
+  assert.ok(r.body.indexOf("first &lt;reply&gt;") < r.body.indexOf("second<br>reply"), "oldest first");
+  assert.ok(r.body.indexOf("second<br>reply") < r.body.indexOf("third reply"));
+  r = ok(await ann.get("/home.asp"));
+  const at = r.body.indexOf("thumb me");
+  const post = r.body.slice(at, r.body.indexOf("</td></tr>\n", at) + 200);
+  assert.ok(!r.body.includes("first &lt;reply&gt;"), "only the newest two in the feed");
+  assert.match(r.body, /second<br>reply/);
+  assert.match(r.body, /See all 3 replies/);
+  assert.equal(m.read(`C:\\BOOKDATA\\REPLIES\\${id}.TXT`).trim().split("\n").length, 3);
+});
+
+await test("replies are refused from strangers, and when empty or too long", async () => {
+  const id = postId("thumb me");
+  const cat = browser(m);
+  ok(await cat.post("/login.asp", { u: "cat", pw: "secret" }));
+  let r = ok(await cat.post("/reply.asp", { id, text: "let me in" }));
+  assert.match(r.body, /Only friends can reply to that/);
+  r = ok(await ann.post("/reply.asp", { id, text: "  " }));
+  assert.match(r.body, /Write something first/);
+  r = ok(await ann.post("/reply.asp", { id, text: "y".repeat(501) }));
+  assert.match(r.body, /under 500 characters/);
+  assert.equal(m.read(`C:\\BOOKDATA\\REPLIES\\${id}.TXT`).trim().split("\n").length, 3);
+});
+
+await test("text boxes count down as you type and grey out the button when over", async () => {
+  const e = await page(ok(await ann.get("/edit.asp")).body);
+  assert.equal(e.el("go").Enabled, true);
+  await e.type("about", "a".repeat(400));
+  assert.equal(e.el("about_n").Text, "100 characters left");
+  await e.type("music", "m".repeat(520));
+  assert.equal(e.el("music_n").Text, "20 characters too many");
+  assert.equal(e.el("go").Enabled, false);
+  await e.type("music", "m".repeat(500));
+  assert.equal(e.el("go").Enabled, true);
+  for (const [url, most] of [["/home.asp", 1000], ["/profile.asp?u=ann", 1000], [`/view.asp?id=${postId("thumb me")}`, 500]]) {
+    const p = await page(ok(await ann.get(url)).body);
+    await p.type("text", "z".repeat(most + 1));
+    assert.equal(p.el("go").Enabled, false, url);
+    await p.type("text", "z".repeat(most));
+    assert.equal(p.el("text_n").Text, "0 characters left", url);
+    assert.equal(p.el("go").Enabled, true, url);
+  }
+});
+
 await test("people directory lists and searches members", async () => {
   let r = ok(await ann.get("/people.asp"));
   for (const n of ["Ann Example", "Bob Builder", "Cat Stranger"]) assert.ok(r.body.includes(n), n);
@@ -261,10 +353,17 @@ await test("every page stays under 64K even with the nastiest content allowed", 
   ok(await a.post("/edit.asp", { name: lt(100), sex: lt(100), birthday: lt(100), hometown: lt(100), status: lt(100), interests: lt(900), music: lt(900), about: lt(900) }));
   for (let i = 0; i < 30; i++) ok(await books["wst" + (1 + i)].post("/post.asp", { to: "wst0", text: lt(1000) }));
   for (let i = 0; i < 30; i++) ok(await a.post("/post.asp", { to: "wst0", text: lt(1000), back: "home" }));
+  // every one of those posts gets a pile of the longest replies
+  const ids = big.read("C:\\BOOKDATA\\POSTS.TXT").trim().split("\n").map((l) => l.split("|")[0]);
+  for (const id of ids.slice(-30)) for (let j = 0; j < 3; j++) ok(await a.post("/reply.asp", { id, text: lt(500) }));
+  const one = ids[ids.length - 1];
+  for (let j = 0; j < 60; j++) ok(await books["wst" + (1 + (j % 30))].post("/reply.asp", { id: one, text: lt(500) }));
   const sizes = [];
-  for (const url of ["/home.asp", "/profile.asp?u=wst0", "/profile.asp?u=wst1", "/people.asp", "/edit.asp", "/picture.asp"]) {
+  for (const url of ["/home.asp", "/profile.asp?u=wst0", "/profile.asp?u=wst1", "/people.asp", "/edit.asp", "/picture.asp", "/view.asp?id=" + one]) {
     const r = ok(await a.get(url));
     assert.equal(r.url, url, "not signed in");
+    const pg = await page(r.body);
+    if (pg && pg.el("text")) await pg.type("text", "x");
     sizes.push(`${url} ${r.raw.length}`);
     assert.ok(r.raw.length < MESSAGE_LIMIT - 8000, `${url} is ${r.raw.length} characters`);
   }
