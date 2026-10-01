@@ -143,6 +143,19 @@ await test("AskSim and ELIZA-95 install straight into their folders", async () =
   const home = ok(await browser(host).get("/"));
   for (const f of ["book", "mail", "ask", "eliza"]) assert.match(home.body, new RegExp(`<a href="/${f}/">`));
   assert.match(home.body, /4 web apps on one computer/);
+  // the installers leave an APP.INF, which is how the front page knows them
+  assert.equal(host.read("C:\\WEB\\ASK\\APP.INF").split("|")[0], "AskSim");
+  // so an app it has never heard of shows up too, and GeoSimies once installed
+  host.mkdir("C:\\WEB\\ZINE");
+  host.write("C:\\WEB\\ZINE\\APP.INF", "Zine Machine|A <b>zine</b> about zines.|#FF00FF\n");
+  await install(host, "geosimies");
+  const again = ok(await browser(host).get("/")).body;
+  assert.match(again, /<a href="\/zine\/"><font color="#FFFFFF" size="4"><b>Zine Machine<\/b>/);
+  assert.match(again, /A &lt;b&gt;zine&lt;\/b&gt; about zines\./, "escaped");
+  assert.match(again, /<a href="\/geo\/">.*GeoSimies/);
+  assert.match(again, /6 web apps on one computer/);
+  host.remove("C:\\WEB\\ZINE\\APP.INF");
+  host.remove("C:\\WEB\\ZINE");
   ok(await browser(host).get("/ask/index.asp?q=hello"));
   ok(await browser(host).get("/eliza/"));
 });

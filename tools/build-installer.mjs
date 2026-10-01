@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { simxplorerSource } from "./simxplorer-source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lit = (s) => '"' + s.replace(/"/g, '""') + '"';
@@ -88,6 +89,7 @@ function catalogLine(text, parts) {
 const withHeader = (meta, body) => header({ ...meta, version: version(body) }) + "\n" + body;
 const vaporClient = () => withHeader({ id: "VAPOR", name: "Vapor", kind: "client", category: "Vapor", run: "C:\\PROGRAMS\\VAPOR.SPK", files: "C:\\PROGRAMS\\VAPOR.SPK", tasks: "VAPOR", about: "The Vapor program itself." }, read("vapor/PROGRAMS/VAPOR.SPK"));
 const gameText = (g) => withHeader({ id: g.id, name: g.name, kind: "game", category: g.genre, run: `C:\\GAMES\\${g.id}\\${g.id}.SPK`, files: `C:\\GAMES\\${g.id}\\${g.id}.SPK`, tasks: g.id, about: g.about }, read(`vapor/GAMES/${g.id}.SPK`));
+const stocked = ["simplayer"];
 function vaporStore() {
   const files = [];
   const catalog = [];
@@ -98,6 +100,14 @@ function vaporStore() {
     parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\${g.id}\\${i + 1}.TXT`, text: () => p }));
     catalog.push(catalogLine(text, parts.length));
   }
+  // programs every store has on its shelves from the start
+  for (const key of stocked) {
+    const text = makeInstaller(key).text;
+    const id = /\|id=([^|]*)/.exec(text)[1];
+    const parts = cut(text);
+    parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\${id}\\${i + 1}.TXT`, text: () => p }));
+    catalog.push(catalogLine(text, parts.length));
+  }
   const client = vaporClient();
   const parts = cut(client);
   parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\VAPOR\\${i + 1}.TXT`, text: () => p }));
@@ -106,6 +116,26 @@ function vaporStore() {
   files.push({ dest: "C:\\PROGRAMS\\VAPOR.SPK", text: () => client });
   return files;
 }
+
+// How each web app shows on a SimHost front page: its installer leaves this in
+// its folder as APP.INF (name|blurb|colour), and the front page lists every
+// folder that has one. An app not listed here gets the first sentence of its
+// Vapor blurb.
+const portal = {
+  BOOK: ["The social network: profiles, friends, a news feed, walls, photos and pokes.", "#3B5998"],
+  MAIL: ["Free webmail, with a real mail server behind it.", "#2E5E8C"],
+  ASK: ["A search engine with a real crawler that goes round every machine on the network.", "#8B1A1A"],
+  GEO: ["Free homepages for everybody: neighborhoods, hit counters, guestbooks and webrings.", "#008080"],
+  ELIZA: ["A chatbot with Language-Model-of-Certain-Size manners.", "#2F6F4F"],
+  PAL: ["Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.", "#003087"],
+  TUBE: ["Movies: watch them, put yours up, give them stars. They play in SimPlayer.", "#CC0000"],
+  WIKI: ["The encyclopedia: hundreds of articles from Wikipedia, as of 1996.", "#000040"],
+  STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
+};
+const appInf = (app) => {
+  const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
+  return [app.vapor?.name || app.title, blurb, colour].map((v) => v.replace(/[|\r\n]/g, " ")).join("|");
+};
 
 const apps = {
   simbook: {
@@ -175,12 +205,28 @@ const apps = {
 ' which tells server pages which browser is asking. The home page is not touched.`,
     // the demo, and SNIFF.SPK for other web apps to import
     copy: [["simxplorer/WEB", "C:\\WEB\\SXDEMO"]],
-    // the engine and the window, joined into one program
-    generated: [{ dest: "C:\\PROGRAMS\\SIMXPLOR.SPK", text: () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") }],
+    // the engine, the window and SimPlayer, joined into one program
+    generated: [{ dest: "C:\\PROGRAMS\\SIMXPLOR.SPK", text: simxplorerSource }],
     dirs: ["C:\\WEB\\SXDEMO"],
     first: [],
     last: [`SYS.Start("C:\\PROGRAMS\\SIMXPLOR.SPK", "")`],
     done: `Print("Simxplorer is running. Next time, start C:\\PROGRAMS\\SIMXPLOR.SPK from Files. Its demo: http://" + NET.HostName.Lower() + "/sxdemo/")`,
+    code: () => "",
+  },
+  simplayer: {
+    vapor: { id: "SIMPLAYR", name: "SimPlayer", kind: "program", category: "Multimedia", run: "C:\\PROGRAMS\\PLAYER.SPK", tasks: "PLAYER", startup: "", about: "The movie player for SIM95: plays SimMovies from the disk or streams them from the web, like the ones on SimTube. (Simxplorer has it built in.)" },
+    title: "SimPlayer",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
+' SimPlayer, the movie player, to C:\\PROGRAMS\\PLAYER.SPK and starts it. It plays
+' SimMovies (.SMV) from the disk, or streams them from a web address such as
+' a SimTube movie's. Simxplorer has SimPlayer built in; this is the same
+' player on its own, for Voyager users and for movies on the disk.`,
+    copy: [],
+    generated: [{ dest: "C:\\PROGRAMS\\PLAYER.SPK", text: () => read("simplayer/src/PLAYER.SPK") }],
+    dirs: [],
+    first: [],
+    last: [`SYS.Start("C:\\PROGRAMS\\PLAYER.SPK", "")`],
+    done: `Print("SimPlayer is running. Next time, start C:\\PROGRAMS\\PLAYER.SPK from Files, or give it a movie's address.")`,
     code: () => "",
   },
   frostbird: {
@@ -223,8 +269,8 @@ const apps = {
 ' C:\\PROGRAMS\\VAPOR.SPK and starts it. Other machines get Vapor from the
 ' store's page, and download games from it. Your home page is not touched.`,
     copy: [["vapor/WEB", "C:\\WEB\\VAPOR"]],
-    generated: vaporStore(),
-    dirs: ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\VAPOR", ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)],
+    generated: () => vaporStore(),
+    dirs: ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\VAPOR", "C:\\WEB\\VAPOR\\SIMPLAYR", ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)],
     first: [],
     last: [`SYS.Start("C:\\PROGRAMS\\VAPOR.SPK", "")`],
     done: `Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")`,
@@ -287,16 +333,16 @@ const apps = {
   },
   simtube: {
     folder: "TUBE",
-    vapor: { folder: "TUBE", id: "SIMTUBE", name: "SimTube", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "Movies for the SIM95 network: watch, upload, rate and comment, with SimPlayer (C:\\PROGRAMS\\PLAYER.SPK) to play them. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    vapor: { folder: "TUBE", id: "SIMTUBE", name: "SimTube", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "Movies for the SIM95 network: watch, upload, rate and comment. Movies play in Simxplorer (SimPlayer is built in) or in SimPlayer from Vapor. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "SimTube",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimTube becomes
 ' this machine's home page: its pages go into C:\\WEB (the stock INDEX.HTM moves
-' to WELCOME.HTM), and SimPlayer, the movie player, into C:\\PROGRAMS\\PLAYER.SPK.
-' The sample movies wait in C:\\TUBEDATA\\SEED until the first visit to the front
-' page puts them up. Movies, accounts and comments in C:\\TUBEDATA are left
-' alone, so running it again upgrades SimTube. Then open http://YOURNAME/ in
-' Voyager, and play a movie with C:\\PROGRAMS\\PLAYER.SPK.`,
-    copy: [["simtube/WEB", "C:\\WEB"], ["simtube/PROGRAMS", "C:\\PROGRAMS"]],
+' to WELCOME.HTM). The sample movies wait in C:\\TUBEDATA\\SEED until the first
+' visit to the front page puts them up. Movies, accounts and comments in
+' C:\\TUBEDATA are left alone, so running it again upgrades SimTube. Then open
+' http://YOURNAME/ in Voyager. Movies play in Simxplorer, which has SimPlayer
+' built in, or in SimPlayer on its own (from Vapor).`,
+    copy: [["simtube/WEB", "C:\\WEB"]],
     // the sample movies, made by tools/make-movies.mjs
     generated: fs.readdirSync(path.join(root, "simtube/MOVIES")).sort().map((f) => ({ dest: "C:\\TUBEDATA\\SEED\\" + f.toUpperCase(), text: () => read("simtube/MOVIES/" + f) })),
     dirs: [],
@@ -308,6 +354,58 @@ const apps = {
 SUB TubeDirs ()
     IF NOT FS.Exists("C:\\TUBEDATA") THEN FS.MakeDir("C:\\TUBEDATA")
     IF NOT FS.Exists("C:\\TUBEDATA\\SEED") THEN FS.MakeDir("C:\\TUBEDATA\\SEED")
+END SUB
+`,
+  },
+  simstats: {
+    folder: "STATS",
+    vapor: { folder: "STATS", id: "SIMSTATS", name: "SimStats", kind: "web", category: "Internet", run: "/", tasks: "", startup: "", about: "Free web statistics for any site on the network: hits, unique visitors, top pages, referrers, browsers, live traffic and LED hit counters. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "SimStats",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimStats becomes
+' this machine's home page: its pages go into C:\\WEB (the stock INDEX.HTM moves
+' to WELCOME.HTM). On a SimHost machine it goes in C:\\WEB\\STATS instead, and
+' the front page counts its own visitors with it. Accounts and statistics are
+' kept in C:\\STATDATA, which is left alone, so running it again upgrades
+' SimStats without losing a hit. It also adds a line to C:\\WEB\\ROBOTS.TXT so
+' AskSim's crawler leaves the tracking tag alone. Then open http://YOURNAME/
+' in Voyager.`,
+    copy: [["simstats/WEB", "C:\\WEB"]],
+    dirs: [],
+    first: ["MoveHomePage()", "StatsSetup()"],
+    last: [],
+    url: "/",
+    code: () => moveHomePage + `
+' Where SimStats keeps its numbers, outside C:\\WEB. Also "this machine": a site
+' that belongs to nobody (the machine's owner sees it on admin.asp), which the
+' SimHost front page counts its visitors with. Its id is in C:\\STATDATA\\HOME.TXT.
+SUB StatsSetup ()
+    VAR dirs AS Array OF String
+    VAR dir AS String
+    VAR id AS String
+    VAR robots AS String
+    VAR rule AS String
+    dirs = ["C:\\STATDATA", "C:\\STATDATA\\USERS", "C:\\STATDATA\\SESSIONS", "C:\\STATDATA\\S"]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    NEXT
+    IF NOT FS.Exists("C:\\STATDATA\\HOME.TXT") THEN
+        id = Hex(268435456 + Rnd(1879048191))
+        IF NOT FS.Exists("C:\\STATDATA\\S\\" + id) THEN FS.MakeDir("C:\\STATDATA\\S\\" + id)
+        FS.Append("C:\\STATDATA\\SITES.TXT", id + "||This machine (" + NET.HostName.Upper() + ")|http://" + NET.HostName.Lower() + "/|0|" + TIME.Date + "|1" + NL)
+        FS.Write("C:\\STATDATA\\HOME.TXT", id)
+        Print("  made the site " + id + " for this machine itself")
+    END IF
+    ' AskSim's crawler reads /robots.txt: it has no business with the tag
+    rule = "Disallow: /hit.asp"
+    IF intoDir <> "" THEN rule = "Disallow: /" + intoDir.Lower() + "/hit.asp"
+    robots = ""
+    IF FS.Exists("C:\\WEB\\ROBOTS.TXT") THEN robots = FS.Read("C:\\WEB\\ROBOTS.TXT")
+    IF NOT robots.Contains(rule) THEN
+        IF robots = "" THEN robots = "User-agent: *" + NL
+        IF NOT robots.EndsWith(NL) THEN robots = robots + NL
+        FS.Write("C:\\WEB\\ROBOTS.TXT", robots + rule + NL)
+        Print("  told crawlers to keep off the tag in C:\\WEB\\ROBOTS.TXT")
+    END IF
 END SUB
 `,
   },
@@ -334,7 +432,7 @@ END SUB
   },
   wikisim: {
     folder: "WIKI",
-    vapor: { folder: "WIKI", id: "WIKISIM", name: "WikiSim", kind: "web", category: "Reference", run: "/", tasks: "", startup: "", about: "An encyclopedia as of 1996: more than a thousand articles from Wikipedia, with search, A to Z, a random article and an article of the day. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    vapor: { folder: "WIKI", id: "WIKISIM", name: "WikiSim", kind: "web", category: "Reference", run: "/", tasks: "", startup: "", about: "An encyclopedia as of 1996: hundreds of articles from Wikipedia, with search, A to Z, a random article and an article of the day. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "WikiSim",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. WikiSim becomes
 ' this machine's home page: its pages go into C:\\WEB (the stock INDEX.HTM moves
@@ -386,7 +484,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", wikisim: "WIKI.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", wikisim: "WIKI.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);
@@ -397,10 +495,16 @@ function relocateCode() {
 }
 
 function build(key) {
+  const out = makeInstaller(key);
+  fs.writeFileSync(path.join(root, key, "INSTALL.SPK"), out.text);
+  console.log(`${key}/INSTALL.SPK: ${out.files} files, ${out.text.length} bytes`);
+}
+
+function makeInstaller(key) {
   const app = apps[key];
   const files = [];
   for (const [from, to] of app.copy) for (const f of fs.readdirSync(path.join(root, from)).sort()) files.push({ text: () => read(path.join(from, f)), dest: to + "\\" + f.toUpperCase() });
-  for (const g of app.generated || []) files.push(g);
+  for (const g of (typeof app.generated === "function" ? app.generated() : app.generated) || []) files.push(g);
   let out = `' INSTALL.SPK - puts ${app.title} on this machine. Generated by tools/build-installer.mjs;
 ' edit the files in ${key}/ and rebuild rather than editing this.
 '
@@ -424,6 +528,8 @@ ${app.first.map((s) => "    " + (s === "MoveHomePage()" ? `IF intoDir = "" THEN 
 ${files.map((f, i) => `    File${i}()`).join("\n")}
     Print("${app.title} is installed (${files.length} files).")
 ${app.last.map((s) => "    " + s).join("\n")}
+${app.folder ? `    ' how it shows on the SimHost front page, which lists every folder with one of these
+    IF intoDir <> "" THEN FS.Write("C:\\WEB\\" + intoDir + "\\APP.INF", ${lit(appInf(app))})` : ""}
     ${app.done || (app.folder ? `IF intoDir = "" THEN
         Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
     ELSE
@@ -454,8 +560,7 @@ END SUB
   out += app.code();
   // the header Vapor reads, so this installer can be published in a Vapor store
   if (app.vapor) out = withHeader({ ...app.vapor, files: files.map((f) => f.dest).join(";") }, out);
-  fs.writeFileSync(path.join(root, key, "INSTALL.SPK"), out);
-  console.log(`${key}/INSTALL.SPK: ${files.length} files, ${out.length} bytes`);
+  return { text: out, files: files.length };
 }
 
 const wanted = process.argv.slice(2);

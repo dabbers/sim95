@@ -233,7 +233,13 @@ Tests:
 
 ## Movies
 
-A SimMovie link (SimTube's `movie.asp?v=N`, served as `video/x-simmovie`, or
-any file starting `SIMMOVIE`) opens in SimPlayer (`C:\PROGRAMS\PLAYER.SPK`),
-the way RealVideo links opened RealPlayer, and the browser stays on the page
-it was on. Without SimPlayer, it says where to get it.
+SimPlayer is built in. A SimMovie link (SimTube's `movie.asp?v=N`, served as
+`video/x-simmovie`, or any file starting `SIMMOVIE`) pops up a SimPlayer
+window of the browser's own, with every control the standalone player has,
+and the browser stays on the page it was on. Another movie reuses the window,
+and closing it leaves the browser running. No download needed.
+
+It is the same code as SimPlayer on its own (`simplayer/src/PLAYER.SPK`).
+`tools/simxplorer-source.mjs` adds it to `SIMXPLOR.SPK` with every top-level
+name prefixed `Mv`, because a SPARK program has one namespace and the
+player's names (`win`, `state`, `StartFetch`...) are the browser's names too.

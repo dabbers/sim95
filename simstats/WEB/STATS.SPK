@@ -1,0 +1,740 @@
+' STATS.SPK - SimStats' pages: accounts, sites, the tracking code to paste,
+' and the dashboards. Every page imports TRACK.SPK (the counting, and the
+' files it keeps) and then this:
+'     <%@ import file="TRACK.SPK" %>
+'     <%@ import file="STATS.SPK" %>
+'
+' A dashboard reads one small rollup file per day (see TRACK.SPK), never the
+' raw hits, so thirty busy days come up inside a server page's time limit,
+' and every list stops at a screenful so the page stays under 64K.
+
+CONST COOKIE = "simstats"
+CONST MAXNAME = 40
+CONST MAXURL = 100
+CONST MAXSITES = 20            ' sites to an account
+CONST TOPN = 12                ' rows in each Top list
+CONST BARW = 300               ' pixels for the longest bar
+
+VAR viewer AS String           ' who is signed in; "" for nobody
+VAR formToken AS String
+VAR lastSite AS String         ' the id AddSite handed out
+VAR indexable AS Bool          ' TRUE: AskSim may keep this page
+
+' ---------------------------------------------------------------- the disk
+
+SUB EnsureDisk ()
+    VAR dir AS String
+    VAR dirs AS Array OF String
+    dirs = ["", "\USERS", "\SESSIONS", "\S"]
+    FOR EACH dir IN dirs
+        IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
+    NEXT
+END SUB
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+FUNCTION ValidName (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(u, "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION CleanName (u AS String) AS String
+    VAR s AS String
+    s = u.Trim().Lower()
+    IF ValidName(s) THEN RETURN s
+    RETURN ""
+END FUNCTION
+
+FUNCTION Plural (n AS Integer, one AS String, many AS String) AS String
+    IF n = 1 THEN RETURN "1 " + one
+    RETURN Str(n) + " " + many
+END FUNCTION
+
+' 1234567 as 1,234,567
+FUNCTION Commas (n AS Integer) AS String
+    VAR s AS String
+    VAR out AS String
+    s = Str(n)
+    WHILE s.Length > 3
+        out = "," + s.Substring(s.Length - 3, 3) + out
+        s = s.Substring(0, s.Length - 3)
+    END WHILE
+    RETURN s + out
+END FUNCTION
+
+' Where this page is: C:\WEB, or C:\WEB\STATS when SimStats has a folder of its own.
+FUNCTION AppDir () AS String
+    VAR page AS String
+    page = SERVER.ScriptName
+    RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
+END FUNCTION
+
+' Where SimStats is on the web: http://host/ or http://host/stats/
+FUNCTION SiteUrl () AS String
+    IF AppDir().Upper() = "C:\WEB" THEN RETURN "http://" + SERVER.Name.Lower() + "/"
+    RETURN "http://" + SERVER.Name.Lower() + "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
+' ---------------------------------------------------------------- accounts
+' The same as SimBook's: a salted hash, never the password; a session file
+' named by the cookie; a form token on everything that changes something.
+
+FUNCTION UserPath (u AS String) AS String
+    RETURN DATADIR + "\USERS\" + u + ".TXT"
+END FUNCTION
+
+FUNCTION UserExists (u AS String) AS Bool
+    IF NOT ValidName(u) THEN RETURN FALSE
+    RETURN FS.Exists(UserPath(u))
+END FUNCTION
+
+FUNCTION LoadUser (u AS String) AS Array OF String
+    RETURN FS.Read(UserPath(u)).Lines()
+END FUNCTION
+
+SUB SaveUser (u AS String, rec AS Array OF String)
+    FS.Write(UserPath(u), rec.Join(Chr(10)))
+END SUB
+
+FUNCTION Field (rec AS Array OF String, name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN rec
+        IF line.StartsWith(name + "=") THEN RETURN Unesc(line.Substring(name.Length + 1, line.Length - name.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB SetField (rec AS Array OF String, name AS String, value AS String)
+    VAR i AS Integer
+    FOR i = 0 TO rec.Count - 1
+        IF rec[i].StartsWith(name + "=") THEN
+            rec[i] = name + "=" + Esc(value)
+            RETURN
+        END IF
+    NEXT
+    rec.Add(name + "=" + Esc(value))
+END SUB
+
+FUNCTION NameOf (u AS String) AS String
+    IF NOT UserExists(u) THEN RETURN u
+    RETURN Field(LoadUser(u), "name")
+END FUNCTION
+
+' Not real cryptography - SIM95 has none - but the password itself never
+' touches the disk.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION
+
+FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
+    VAR rec AS Array OF String
+    VAR salt AS String
+    EnsureDisk()
+    IF NOT ValidName(u) THEN RETURN "Pick a user name of 3 to 8 letters or digits."
+    IF FS.Exists(UserPath(u)) THEN RETURN "Somebody already has the name " + u + "."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    name = Clip(name, MAXNAME)
+    IF name = "" THEN RETURN "Tell us your name."
+    salt = NewToken()
+    SetField(rec, "name", name)
+    SetField(rec, "salt", salt)
+    SetField(rec, "pass", Hash(salt, pw))
+    SetField(rec, "joined", TIME.Date)
+    SaveUser(u, rec)
+    RETURN ""
+END FUNCTION
+
+FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN FALSE
+    rec = LoadUser(u)
+    RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+SUB SignIn (u AS String)
+    VAR token AS String
+    EnsureDisk()
+    token = NewToken()
+    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u + Chr(10) + NewToken() + NewToken())
+    RESPONSE.SetCookie(COOKIE, token)
+END SUB
+
+FUNCTION SessionPath () AS String
+    VAR token AS String
+    token = REQUEST.Cookie(COOKIE)
+    IF NOT IsId(token) THEN RETURN ""
+    RETURN DATADIR + "\SESSIONS\" + token + ".TXT"
+END FUNCTION
+
+SUB SignOut ()
+    VAR path AS String
+    path = SessionPath()
+    IF path <> "" THEN
+        IF FS.Exists(path) THEN FS.Delete(path)
+    END IF
+    RESPONSE.SetCookie(COOKIE, "")
+END SUB
+
+' Who the cookie says is signed in, or "". Also sets formToken.
+FUNCTION CurrentUser () AS String
+    VAR path AS String
+    VAR lines AS Array OF String
+    VAR u AS String
+    path = SessionPath()
+    IF path = "" THEN RETURN ""
+    IF NOT FS.Exists(path) THEN RETURN ""
+    lines = FS.Read(path).Lines()
+    IF lines.Count < 2 THEN RETURN ""
+    u = lines[0].Trim()
+    IF NOT UserExists(u) THEN RETURN ""
+    formToken = lines[1].Trim()
+    RETURN u
+END FUNCTION
+
+SUB RequireLogin ()
+    viewer = CurrentUser()
+    IF viewer = "" THEN RESPONSE.Redirect("index.asp?e=login")
+END SUB
+
+' Voyager sends SimStats' cookie with a form on any site, so the cookie alone
+' proves nothing: every form carries the session's token too.
+SUB RequireToken ()
+    VAR sent AS String
+    sent = REQUEST.Form("t")
+    IF sent = "" THEN sent = REQUEST.Query("t")
+    IF sent = "" OR sent <> formToken THEN RESPONSE.Redirect("index.asp?e=token")
+END SUB
+
+FUNCTION TokenField () AS String
+    RETURN "<input type=""hidden"" name=""t"" value=""" + formToken + """>"
+END FUNCTION
+
+FUNCTION TokenArg () AS String
+    RETURN "t=" + formToken
+END FUNCTION
+
+' The machine's owner: the user name and password in C:\SYSTEM\USERS.INI,
+' the same ones the Files service asks for.
+FUNCTION IsOwner (name AS String, pw AS String) AS Bool
+    VAR line AS String
+    VAR owner AS String
+    VAR pass AS String
+    FOR EACH line IN ReadOr("C:\SYSTEM\USERS.INI", "").Lines()
+        line = line.Trim()
+        IF line.Lower().StartsWith("name=") THEN owner = line.Substring(5, line.Length - 5).Trim()
+        IF line.Lower().StartsWith("password=") THEN pass = line.Substring(9, line.Length - 9)
+    NEXT
+    IF owner = "" OR pw = "" THEN RETURN FALSE
+    RETURN owner.Lower() = name.Trim().Lower() AND pass = pw
+END FUNCTION
+
+' ---------------------------------------------------------------- sites
+
+FUNCTION AllSites () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\SITES.TXT", "").Lines()
+        IF line.Split("|").Count >= 7 THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION SitesOf (u AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN AllSites()
+        IF SF(line, 1) = u THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Site id, which must be the viewer's. Anybody else's (or none) goes home:
+' one account never sees another's numbers.
+FUNCTION MySite (id AS String) AS String
+    VAR line AS String
+    line = SiteLine(id.Trim().Upper())
+    IF line = "" OR SF(line, 1) <> viewer THEN RESPONSE.Redirect("index.asp?e=site&why=" + UrlEnc("That isn't one of your sites."))
+    RETURN line
+END FUNCTION
+
+' An address people type: http:// is added when it is missing.
+FUNCTION CleanUrl (url AS String) AS String
+    url = Clip(url, MAXURL)
+    IF url = "" THEN RETURN ""
+    IF NOT url.Lower().StartsWith("http://") THEN url = "http://" + url
+    IF url.Contains(" ") OR url.Contains("""") OR url.Contains("<") OR url.Contains(">") THEN RETURN ""
+    RETURN url
+END FUNCTION
+
+FUNCTION SiteRecord (id AS String, owner AS String, name AS String, url AS String, pub AS String, created AS String, isOn AS String) AS String
+    RETURN id + "|" + Esc(owner) + "|" + Esc(name) + "|" + Esc(url) + "|" + pub + "|" + created + "|" + isOn
+END FUNCTION
+
+' A new site for owner. Returns "" (and sets lastSite) or what is wrong.
+FUNCTION AddSite (owner AS String, name AS String, url AS String) AS String
+    VAR id AS String
+    name = Clip(name, MAXNAME)
+    IF name = "" THEN RETURN "Give your site a name."
+    url = CleanUrl(url)
+    IF url = "" THEN RETURN "Type your site's address, like http://bravo/."
+    IF SitesOf(owner).Count >= MAXSITES THEN RETURN "You can count up to " + Str(MAXSITES) + " sites. Delete one first."
+    EnsureDisk()
+    id = NewToken()
+    WHILE SiteLine(id) <> ""
+        id = NewToken()
+    END WHILE
+    FS.MakeDir(SiteDir(id))
+    FS.Append(DATADIR + "\SITES.TXT", SiteRecord(id, owner, name, url, "0", TIME.Date, "1") + Chr(10))
+    lastSite = id
+    RETURN ""
+END FUNCTION
+
+' A site's line, changed.
+SUB ReplaceSite (old AS String, line AS String)
+    VAR text AS String
+    text = (Chr(10) + ReadOr(DATADIR + "\SITES.TXT", "")).Replace(Chr(10) + old + Chr(10), Chr(10) + line + Chr(10))
+    FS.Write(DATADIR + "\SITES.TXT", text.Substring(1, text.Length - 1))
+END SUB
+
+' Changes field i of site id.
+SUB SetSiteField (id AS String, i AS Integer, value AS String)
+    VAR old AS String
+    VAR p AS Array OF String
+    old = SiteLine(id)
+    IF old = "" THEN RETURN
+    p = old.Split("|")
+    p[i] = Esc(value)
+    ReplaceSite(old, p.Join("|"))
+END SUB
+
+' A site and all its numbers go.
+SUB DeleteSite (id AS String)
+    VAR f AS String
+    VAR old AS String
+    old = SiteLine(id)
+    IF old = "" THEN RETURN
+    ReplaceSite(old, "")
+    FS.Write(DATADIR + "\SITES.TXT", ReadOr(DATADIR + "\SITES.TXT", "").Replace(Chr(10) + Chr(10), Chr(10)))
+    IF FS.Exists(SiteDir(id)) THEN
+        FOR EACH f IN FS.List(SiteDir(id))
+            IF NOT f.EndsWith("\") THEN FS.Delete(SiteDir(id) + "\" + f)
+        NEXT
+        TRY
+            FS.Delete(SiteDir(id))
+        CATCH err
+        END TRY
+    END IF
+END SUB
+
+' Hits over the last days days (1 is today).
+FUNCTION HitsIn (id AS String, days AS Integer) AS Integer
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR t0 AS Integer
+    VAR text AS String
+    VAR at AS Integer
+    t0 = DayNum(TIME.Date)
+    FOR i = 0 TO days - 1
+        text = Chr(10) + ReadOr(SiteDir(id) + "\" + DayFile(DateOf(t0 - i)) + ".TXT", "")
+        at = text.IndexOf(Chr(10) + "h|all|")
+        IF at >= 0 THEN n = n + Int(Val(text.Substring(at + 7, text.Length - at - 7).Split(Chr(10))[0]))
+    NEXT
+    RETURN n
+END FUNCTION
+
+' ---------------------------------------------------------------- the code to paste
+
+' A page's address in a tag's query: what would break it is escaped, but the
+' slashes stay, so the tag still reads well.
+FUNCTION QueryEnc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("&", "%26").Replace("+", "%2B").Replace(" ", "+").Replace("#", "%23").Replace("?", "%3F").Replace("""", "%22").Replace("<", "%3C").Replace(">", "%3E")
+END FUNCTION
+
+FUNCTION HitUrl (id AS String) AS String
+    RETURN SiteUrl() + "hit.asp?s=" + id
+END FUNCTION
+
+' The plain tag: any browser that shows pictures counts with it.
+FUNCTION PlainTag (id AS String, page AS String) AS String
+    RETURN "<img src=""" + HitUrl(id) + "&p=" + QueryEnc(page) + """ width=""1"" height=""1"" border=""0"" alt="""">"
+END FUNCTION
+
+' For Simxplorer: JavaScript fills in the page, its title and where the
+' visitor came from. Voyager skips the script and takes the plain tag inside
+' <noscript>; Simxplorer drops <noscript>, so nobody is counted twice.
+FUNCTION ScriptTag (id AS String, page AS String) AS String
+    RETURN "<script language=""JavaScript"">" + Chr(10) + "<!--" + Chr(10) _
+         + "document.write('<img src=""" + HitUrl(id) + "&p=' + escape(location.pathname) + '&t=' + escape(document.title) + '&r=' + escape(document.referrer) + '&z=' + (new Date()).getTime() + '"" width=""1"" height=""1"" border=""0"" alt="""">');" + Chr(10) _
+         + "// -->" + Chr(10) + "</script>" + Chr(10) _
+         + "<noscript>" + PlainTag(id, page) + "</noscript>"
+END FUNCTION
+
+' The visible counter, linking to the public stats (or to SimStats).
+FUNCTION BadgeTag (line AS String, page AS String) AS String
+    VAR link AS String
+    link = SiteUrl() + "simstats.htm"
+    IF SF(line, 4) = "1" THEN link = SiteUrl() + "public.asp?s=" + SF(line, 0)
+    RETURN "<a href=""" + link + """><img src=""" + HitUrl(SF(line, 0)) + "&b=1&p=" + QueryEnc(page) + """ width=""88"" height=""31"" border=""0"" alt=""SimStats counter""></a>"
+END FUNCTION
+
+' ---------------------------------------------------------------- page furniture
+
+FUNCTION Top (title AS String) AS String
+    VAR s AS String
+    s = "<html><head><title>" + H(title) + " - SimStats</title>"
+    IF NOT indexable THEN s = s + "<meta name=""robots"" content=""noindex,nofollow"">"
+    s = s + "</head><body bgcolor=""#FFFFFF"" text=""#000000"" link=""#003366"" vlink=""#663366"">" _
+      + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#003366""><tr>" _
+      + "<td><a href=""index.asp""><font size=""6"" color=""#FFCC00""><b>Sim</b></font><font size=""6"" color=""#FFFFFF""><b>Stats</b></font></a>" _
+      + "<font color=""#99CCFF"" size=""2"">&nbsp; who's visiting your web site?</font></td>" _
+      + "<td align=""right""><font color=""#FFFFFF"" size=""2"">"
+    IF viewer <> "" THEN
+        s = s + "<a href=""index.asp""><font color=""#FFFFFF"">My Sites</font></a> | " _
+              + "<a href=""logout.asp?" + TokenArg() + """><font color=""#FFFFFF"">Log Out</font></a>"
+    ELSE
+        s = s + "<a href=""index.asp""><font color=""#FFFFFF"">Log In</font></a> | <a href=""index.asp#join""><font color=""#FFFFFF"">Sign Up FREE</font></a>"
+    END IF
+    RETURN s + "</font></td></tr></table>" _
+         + "<table width=""100%"" cellpadding=""2"" cellspacing=""0"" bgcolor=""#FFCC00""><tr><td align=""center""><font size=""1"" color=""#003366""><b>FREE</b> web statistics &middot; hit counters &middot; real-time visitor tracking &middot; no banner ads!</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">SimStats on " + H(SERVER.Name) + " &middot; " + TIME.Date + " &middot; " _
+         + "<a href=""simstats.htm"">About SimStats</a> &middot; <a href=""privacy.htm"">Privacy</a> &middot; <a href=""optout.asp"">Don't count me</a><br>" _
+         + "Copyright &copy; 1998 SimStats. Best viewed at 640x480.</font></center></body></html>"
+END FUNCTION
+
+FUNCTION BoxTop (title AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""0""><tr><td bgcolor=""#336699""><font color=""#FFFFFF"" size=""2""><b>" + title + "</b></font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Notice (text AS String) AS String
+    IF text = "" THEN RETURN ""
+    RETURN "<table width=""100%"" cellpadding=""4""><tr><td bgcolor=""#FFF9D7""><font size=""2"">" + H(text) + "</font></td></tr></table>"
+END FUNCTION
+
+' A bar of n against the most, as a table cell of that width and colour.
+FUNCTION Bar (n AS Integer, most AS Integer, colour AS String, room AS Integer) AS String
+    VAR w AS Integer
+    IF most < 1 OR n < 1 THEN RETURN ""
+    w = MATH.Max(1, Int(room * n / most))
+    RETURN "<table cellpadding=""0"" cellspacing=""0""><tr><td bgcolor=""" + colour + """ width=""" + Str(w) + """ height=""9""></td></tr></table>"
+END FUNCTION
+
+' 1970-01-01 was a Thursday.
+FUNCTION DayName (d AS String) AS String
+    VAR names AS Array OF String
+    names = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
+    RETURN names[DayNum(d) MOD 7]
+END FUNCTION
+
+' ---------------------------------------------------------------- the dashboard
+
+VAR pKey AS Array OF String      ' pages
+VAR pCnt AS Array OF Integer
+VAR tKey AS Array OF String      ' their titles
+VAR tVal AS Array OF String
+VAR bKey AS Array OF String      ' browsers
+VAR bCnt AS Array OF Integer
+VAR rKey AS Array OF String      ' referrers
+VAR rCnt AS Array OF Integer
+VAR mKey AS Array OF String      ' machines
+VAR mCnt AS Array OF Integer
+VAR vKey AS Array OF String      ' visitors, all the days together
+VAR hourCnt AS Array OF Integer
+VAR dayDate AS Array OF String
+VAR dayHits AS Array OF Integer
+VAR dayVisitors AS Array OF Integer
+
+SUB Tally (keys AS Array OF String, counts AS Array OF Integer, key AS String, n AS Integer)
+    VAR i AS Integer
+    i = keys.IndexOf(key)
+    IF i < 0 THEN
+        keys.Add(key)
+        counts.Add(n)
+    ELSE
+        counts[i] = counts[i] + n
+    END IF
+END SUB
+
+' Reads the rollups of the last days days, oldest first.
+SUB LoadDays (id AS String, days AS Integer)
+    VAR t0 AS Integer
+    VAR i AS Integer
+    VAR d AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR n AS Integer
+    VAR hits AS Integer
+    VAR seen AS Integer
+    VAR at AS Integer
+    FOR i = 0 TO 23
+        hourCnt.Add(0)
+    NEXT
+    t0 = DayNum(TIME.Date)
+    FOR i = days - 1 TO 0 STEP -1
+        d = DateOf(t0 - i)
+        hits = 0
+        seen = 0
+        FOR EACH line IN ReadOr(SiteDir(id) + "\" + DayFile(d) + ".TXT", "").Split(Chr(10))
+            p = line.Split("|")
+            IF p.Count < 3 THEN CONTINUE
+            n = Int(Val(p[2]))
+            SELECT CASE p[0]
+                CASE "h"
+                    hits = n
+                CASE "u"
+                    seen = seen + 1
+                    IF vKey.IndexOf(p[1]) < 0 THEN vKey.Add(p[1])
+                CASE "p"
+                    Tally(pKey, pCnt, p[1], n)
+                CASE "t"
+                    at = tKey.IndexOf(p[1])
+                    IF at < 0 THEN
+                        tKey.Add(p[1])
+                        tVal.Add(p[2])
+                    ELSE
+                        tVal[at] = p[2]
+                    END IF
+                CASE "b"
+                    Tally(bKey, bCnt, p[1], n)
+                CASE "o"
+                    at = Int(Val(p[1]))
+                    IF at >= 0 AND at < 24 THEN hourCnt[at] = hourCnt[at] + n
+                CASE "r"
+                    Tally(rKey, rCnt, p[1], n)
+                CASE "m"
+                    Tally(mKey, mCnt, p[1], n)
+            END SELECT
+        NEXT
+        dayDate.Add(d)
+        dayHits.Add(hits)
+        dayVisitors.Add(seen)
+    NEXT
+END SUB
+
+' The positions of the biggest counts, biggest first, at most most of them.
+FUNCTION TopOf (counts AS Array OF Integer, most AS Integer) AS Array OF Integer
+    VAR keys AS Array OF String
+    VAR out AS Array OF Integer
+    VAR i AS Integer
+    FOR i = 0 TO counts.Count - 1
+        keys.Add(Str(counts[i]).PadLeft(9) + "|" + Str(100000 - i).PadLeft(6) + "|" + Str(i))
+    NEXT
+    keys.Sort()
+    keys.Reverse()
+    FOR i = 0 TO MATH.Min(most, keys.Count) - 1
+        out.Add(Int(Val(keys[i].Split("|")[2])))
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION SumOf (counts AS Array OF Integer) AS Integer
+    VAR n AS Integer
+    VAR c AS Integer
+    FOR EACH c IN counts
+        n = n + c
+    NEXT
+    RETURN n
+END FUNCTION
+
+FUNCTION Pct (n AS Integer, total AS Integer) AS String
+    IF total < 1 THEN RETURN "0%"
+    RETURN Str(MATH.Round(n * 100 / total)) + "%"
+END FUNCTION
+
+' A Top list: what, how many, a bar. kind: "p" pages, "r" referrers,
+' "b" browsers, "m" machines.
+FUNCTION TopTable (title AS String, kind AS String, keys AS Array OF String, counts AS Array OF Integer, colour AS String) AS String
+    VAR s AS String
+    VAR i AS Integer
+    VAR k AS String
+    VAR shown AS String
+    VAR total AS Integer
+    VAR most AS Integer
+    VAR order AS Array OF Integer
+    VAR at AS Integer
+    total = SumOf(counts)
+    s = BoxTop(title) + "<table cellpadding=""2"" cellspacing=""0"" width=""100%"">"
+    IF keys.Count = 0 THEN RETURN s + "<tr><td><font size=""2"" color=""#808080"">Nothing yet.</font></td></tr></table>"
+    order = TopOf(counts, TOPN)
+    most = counts[order[0]]
+    FOR EACH i IN order
+        k = Unesc(keys[i])
+        shown = H(k)
+        IF kind = "p" THEN
+            at = tKey.IndexOf(keys[i])
+            IF at >= 0 THEN shown = "<b>" + H(Clip(Unesc(tVal[at]), 50)) + "</b><br><font size=""1"">" + H(k) + "</font>"
+        ELSEIF kind = "r" AND k.StartsWith("http://") THEN
+            shown = "<a href=""" + H(k) + """>" + H(Clip(k, 60)) + "</a>"
+        END IF
+        s = s + "<tr><td width=""45%""><font size=""2"">" + shown + "</font></td><td align=""right"" width=""60""><font size=""2"">" + Commas(counts[i]) + "</font></td>" _
+              + "<td align=""right"" width=""40""><font size=""1"">" + Pct(counts[i], total) + "</font></td><td>" + Bar(counts[i], most, colour, 160) + "</td></tr>"
+    NEXT
+    IF keys.Count > TOPN THEN s = s + "<tr><td colspan=""4""><font size=""1"" color=""#808080"">The top " + Str(TOPN) + " of " + Str(keys.Count) + ".</font></td></tr>"
+    RETURN s + "</table>"
+END FUNCTION
+
+' Everything about a site over the last days days. pub: the public page,
+' which shows no visitor's address.
+FUNCTION Dashboard (line AS String, days AS Integer, pub AS Bool) AS String
+    VAR id AS String
+    VAR s AS String
+    VAR i AS Integer
+    VAR hits AS Integer
+    VAR most AS Integer
+    VAR total AS Array OF String
+    id = SF(line, 0)
+    LoadDays(id, days)
+    hits = SumOf(dayHits)
+    total = ReadOr(SiteDir(id) + "\TOTAL.TXT", "0|" + TIME.Date).Split("|")
+    ' the numbers that matter
+    s = "<table width=""100%"" cellpadding=""6"" cellspacing=""2""><tr>" _
+      + "<td bgcolor=""#E8F0F8"" align=""center""><font size=""5""><b>" + Commas(hits) + "</b></font><br><font size=""1"">HITS</font></td>" _
+      + "<td bgcolor=""#E8F0F8"" align=""center""><font size=""5""><b>" + Commas(vKey.Count) + "</b></font><br><font size=""1"">UNIQUE VISITORS</font></td>" _
+      + "<td bgcolor=""#E8F0F8"" align=""center""><font size=""5""><b>" + Commas(pKey.Count) + "</b></font><br><font size=""1"">PAGES SEEN</font></td>" _
+      + "<td bgcolor=""#E8F0F8"" align=""center""><font size=""5""><b>" + Commas(Int(Val(total[0]))) + "</b></font><br><font size=""1"">ALL TIME, SINCE " + H(total[1].Trim()) + "</font></td>" _
+      + "</tr></table>"
+    ' hits and visitors a day
+    most = 1
+    FOR i = 0 TO dayHits.Count - 1
+        most = MATH.Max(most, dayHits[i])
+    NEXT
+    s = s + BoxTop("Hits and Visitors by Day") + "<table cellpadding=""1"" cellspacing=""0"">"
+    FOR i = dayHits.Count - 1 TO 0 STEP -1
+        s = s + "<tr><td><font size=""1"">" + DayName(dayDate[i]) + " " + dayDate[i].Substring(5, 5) + "</font></td><td align=""right"" width=""40""><font size=""1"">" + Str(dayHits[i]) + "<br>" + Str(dayVisitors[i]) + "</font></td><td>" _
+              + Bar(dayHits[i], most, "#3366CC", BARW) + Bar(dayVisitors[i], most, "#FF9900", BARW) + "</td></tr>"
+    NEXT
+    s = s + "</table><font size=""1""><font color=""#3366CC"">&#9632;</font> hits &nbsp; <font color=""#FF9900"">&#9632;</font> unique visitors</font><br><br>"
+    ' the hours, as a histogram of upright bars
+    most = 1
+    FOR i = 0 TO 23
+        most = MATH.Max(most, hourCnt[i])
+    NEXT
+    s = s + BoxTop("Hits by Hour of the Day") + "<table cellpadding=""0"" cellspacing=""2""><tr>"
+    FOR i = 0 TO 23
+        s = s + "<td valign=""bottom"" align=""center""><font size=""1"">" + Str(hourCnt[i]) + "</font>"
+        IF hourCnt[i] > 0 THEN s = s + "<table cellpadding=""0"" cellspacing=""0""><tr><td bgcolor=""#339966"" width=""14"" height=""" + Str(MATH.Max(1, Int(60 * hourCnt[i] / most))) + """></td></tr></table>"
+        s = s + "</td>"
+    NEXT
+    s = s + "</tr><tr>"
+    FOR i = 0 TO 23
+        s = s + "<td align=""center""><font size=""1"">" + Str(i) + "</font></td>"
+    NEXT
+    s = s + "</tr></table><br>"
+    s = s + TopTable("Top Pages", "p", pKey, pCnt, "#3366CC") + "<br>"
+    s = s + TopTable("Top Referrers (where visitors came from)", "r", rKey, rCnt, "#CC6633") + "<br>"
+    s = s + TopTable("Browsers", "b", bKey, bCnt, "#9933CC") + "<br>"
+    IF NOT pub THEN s = s + TopTable("Visiting Machines", "m", mKey, mCnt, "#339966") + "<br>"
+    RETURN s
+END FUNCTION
+
+' ---------------------------------------------------------------- live
+
+' The last 20 hits, newest first, one line each. pub leaves out addresses.
+FUNCTION LiveLines (id AS String, pub AS Bool) AS Array OF String
+    VAR out AS Array OF String
+    VAR lines AS Array OF String
+    VAR p AS Array OF String
+    VAR i AS Integer
+    VAR when AS String
+    VAR s AS String
+    lines = ReadOr(SiteDir(id) + "\LIVE.TXT", "").Lines()
+    FOR i = lines.Count - 1 TO 0 STEP -1
+        p = lines[i].Split("|")
+        IF p.Count < 6 THEN CONTINUE
+        when = p[0]
+        IF when.StartsWith(TIME.Date) THEN when = when.Substring(11, when.Length - 11)
+        s = when + "  "
+        IF NOT pub THEN s = s + Unesc(p[1]).PadRight(12) + "  "
+        s = s + Unesc(p[2]).PadRight(16) + "  " + Unesc(p[3])
+        IF p[5] <> "" THEN s = s + "  from " + Unesc(p[5])
+        out.Add(Clip(s, 150))
+    NEXT
+    RETURN out
+END FUNCTION
+
+' The Live box: a line per hit, each in a span that the page's JavaScript
+' fills in again from live.asp every few seconds (Simxplorer). Voyager
+' gets a Reload link, and live.asp reloads itself.
+FUNCTION LiveBox (id AS String, pub AS Bool) AS String
+    VAR s AS String
+    VAR rows AS Array OF String
+    VAR i AS Integer
+    VAR url AS String
+    url = "live.asp?s=" + id
+    IF pub THEN url = url + "&pub=1"
+    rows = LiveLines(id, pub)
+    s = BoxTop("Live: the Last " + Str(LIVEROWS) + " Hits") + "<table width=""100%"" cellpadding=""4"" cellspacing=""0"" bgcolor=""#000000""><tr><td><font color=""#00FF00"" size=""2""><tt>"
+    FOR i = 0 TO LIVEROWS - 1
+        IF i < rows.Count THEN
+            s = s + "<span id=""live" + Str(i) + """>" + H(rows[i]) + "</span><br>"
+        ELSE
+            s = s + "<span id=""live" + Str(i) + """></span><br>"
+        END IF
+    NEXT
+    IF rows.Count = 0 THEN s = s + "Waiting for the first visitor..."
+    s = s + "</tt></font></td></tr></table><font size=""1""><span id=""livestate"">As of " + TIME.Clock + ".</span> <a href=""" + url + """>Reload</a> &middot; <a href=""" + url + "&w=1"">Watch live</a> (reloads itself)</font>" _
+      + "<script language=""JavaScript"">" + Chr(10) _
+      + "var liveN = 0;" + Chr(10) _
+      + "function liveTick() {" + Chr(10) _
+      + "  var x = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject(""Microsoft.XMLHTTP"");" + Chr(10) _
+      + "  x.onreadystatechange = function () {" + Chr(10) _
+      + "    if (x.readyState != 4 || x.status != 200) return;" + Chr(10) _
+      + "    var rows = x.responseText.split(""\n"");" + Chr(10) _
+      + "    for (var i = 0; i < " + Str(LIVEROWS) + "; i++) document.getElementById(""live"" + i).innerText = i < rows.length ? rows[i] : """";" + Chr(10) _
+      + "    liveN++;" + Chr(10) _
+      + "    document.getElementById(""livestate"").innerText = ""Live: updated "" + liveN + "" times without reloading."";" + Chr(10) _
+      + "  };" + Chr(10) _
+      + "  x.open(""GET"", """ + url + "&f=text&n="" + liveN, true);" + Chr(10) _
+      + "  x.send(null);" + Chr(10) _
+      + "}" + Chr(10) _
+      + "setInterval(""liveTick()"", 5000);" + Chr(10) _
+      + "</script>"
+    RETURN s
+END FUNCTION
+
+' The range links: Today, 7 days, 30 days.
+FUNCTION RangeBar (page AS String, id AS String, days AS Integer) AS String
+    VAR s AS String
+    VAR d AS Integer
+    VAR names AS Array OF String
+    VAR spans AS Array OF Integer
+    VAR i AS Integer
+    names = ["Today", "Last 7 days", "Last 30 days"]
+    spans = [1, 7, 30]
+    s = "<font size=""2""><b>Show:</b> "
+    FOR i = 0 TO 2
+        d = spans[i]
+        IF i > 0 THEN s = s + " | "
+        IF d = days THEN
+            s = s + "<b>" + names[i] + "</b>"
+        ELSE
+            s = s + "<a href=""" + page + "?s=" + id + "&r=" + Str(d) + """>" + names[i] + "</a>"
+        END IF
+    NEXT
+    RETURN s + "</font>"
+END FUNCTION
+
+FUNCTION RangeOf (r AS String) AS Integer
+    IF r = "7" THEN RETURN 7
+    IF r = "30" THEN RETURN 30
+    RETURN 1
+END FUNCTION

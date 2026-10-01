@@ -6,6 +6,8 @@ VAR day AS Integer
 VAR dayText AS String
 VAR dyk AS String
 VAR line AS String
+VAR t AS String
+VAR starts AS String
 LoadIndex()
 day = DayArticle()
 IF day > 0 THEN
@@ -16,6 +18,10 @@ IF day > 0 THEN
     END IF
 END IF
 dyk = DidYouKnow()
+' a few big subjects, the ones this edition has
+FOR EACH t IN ["Earth", "History", "Science", "Philosophy", "Music", "Art", "Ancient Rome", "Computer", "World Wide Web"]
+    IF FindArticle(t) > 0 AND starts.Split("<br>").Count < 7 THEN starts = starts + "<a href=""article.asp?a=" + Str(FindArticle(t)) + """>" + H(t) + "</a><br>"
+NEXT
 %>
 <%= Top("Contents") %>
 <% IF articleCount = 0 THEN %>
@@ -37,7 +43,7 @@ dyk = DidYouKnow()
 <td valign="top">
 <%= Box("Explore", "#800000", "<font size=""3""><a href=""random.asp""><b>Random article</b></a><br>Open the encyclopedia at any page.<p><a href=""letter.asp?l=A""><b>Browse A to Z</b></a><br>Every title, in order.<p><a href=""wikisim.htm""><b>About WikiSim</b></a><br>Where the articles come from.</font>") %>
 <p>
-<%= Box("Start here", "#404040", "<a href=""article.asp?a=Earth"">Earth</a><br><a href=""article.asp?a=History"">History</a><br><a href=""article.asp?a=Science"">Science</a><br><a href=""article.asp?a=Music"">Music</a><br><a href=""article.asp?a=Computer"">Computer</a><br><a href=""article.asp?a=World+Wide+Web"">World Wide Web</a>") %>
+<%= Box("Start here", "#404040", starts) %>
 </td>
 </tr></table>
 <% END IF %>

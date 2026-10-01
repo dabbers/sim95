@@ -2,7 +2,7 @@
 
 *The encyclopedia on your computer.* WikiSim 96 is an encyclopedia for
 [SIM95](https://sim95.kippy.io/) in the style of the 1996 CD-ROM ones
-(Encarta, Grolier): ARTICLES articles, a search box, A to Z, a random
+(Encarta, Grolier): 619 articles, a search box, A to Z, a random
 article, an article of the day and "Did you know?". The articles are real:
 they are Wikipedia's, cut back to what was known in 1996.
 
@@ -10,7 +10,7 @@ they are Wikipedia's, cut back to what was known in 1996.
 
 1. In SIM95 open **Start > Programs > SPARK**.
 2. Paste in the whole of [`INSTALL.SPK`](INSTALL.SPK) (it is big, about
-   INSTALLK; Vapor can also fetch it in parts), save it as
+   410K; Vapor can also fetch it in parts), save it as
    `C:\MYFILES\INSTALL.SPK`, and press **F5**.
 3. Open `http://YOURNAME/` in Voyager.
 
@@ -22,8 +22,8 @@ home page alone; SimHost also moves a WikiSim that was the home page into
 Nothing writes there but the installer, so running it again just puts a
 fresh copy there.
 
-[ELIZA-95](../eliza/) on the same machine reads them too: "what is a
-modem?" gets "According to WikiSim (1996 edition): ..." and the article's
+[ELIZA-95](../eliza/) on the same machine reads them too: "what is
+music?" gets "According to WikiSim (1996 edition): ..." and the article's
 address.
 
 ## The pages
@@ -31,7 +31,7 @@ address.
 | Page | |
 |---|---|
 | `index.asp` | The front page: search, A to Z, the Article of the Day and Did you know? (both the same all day, by the machine's date), and a few doors in |
-| `article.asp?a=12` | One article, by number or by title (`a=modem`, `a=doom` finds *Doom (1993 video game)*): the text with links to other articles, See also, the articles either side, and where the text came from |
+| `article.asp?a=12` | One article, by number or by title, in any case (`a=music`; a short title finds a long one, so `a=doom` would find *Doom (1993 video game)*): the text with links to other articles, See also, the articles either side, and where the text came from |
 | `search.asp?q=words` | Titles that start with what you typed, then titles with every word, then articles whose text has every word: 40 at most |
 | `letter.asp?l=M&p=2` | Every title under a letter, 150 to a page (`l=0` for the ones that start with a digit) |
 | `random.asp` | Off to any article |
@@ -59,6 +59,14 @@ The articles are Wikipedia's [Vital Articles, Level 3](https://en.wikipedia.org/
 modems, BBSes, Netscape, Windows 95, DOOM, Myst, Tamagotchi, CompuServe,
 Usenet, Gopher, *The X-Files*, *Friends*, Nirvana, *Toy Story* and so on.
 Only the introduction of each is used.
+
+**This edition is partial.** Wikipedia was throttling the address it was
+built from, so the build stopped after 620 of the 1,187 titles (the first
+three fifths of the Vital Articles: people, history, geography, the arts,
+philosophy, religion, society) and was finished from the cache with
+`--offline`. The rest of the Vital Articles and all the hand-picked extras
+are still in the script: run `node tools/make-wikisim.mjs` again on a quieter
+day, and it fetches only what it doesn't have.
 
 The script asks Wikipedia's API gently: one request at a time, three
 seconds apart, 20 intros to a request, backing off for longer and longer when
@@ -88,7 +96,8 @@ WikiSim is an encyclopedia of 1996, so the script cuts each introduction back:
 * What is left is cut, at the end of a sentence, to about 560 characters,
   so the whole encyclopedia fits in one installer.
 
-DROPPEDN articles were left out by the cut; [`DROPPED.TXT`](DROPPED.TXT)
+One article was left out by the cut (Hong Kong, a special administrative region
+only from 1997), 28 sentences were dropped, and others were mended; [`DROPPED.TXT`](DROPPED.TXT)
 lists them and why. The test checks the result: no sentence in the data
 names a year after 1996 or anything on the list.
 

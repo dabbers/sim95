@@ -178,7 +178,7 @@ END FUNCTION
 FUNCTION Top (title AS String) AS String
     VAR out AS String
     out = "<html><head><title>" + H(title) + " - WikiSim 96</title>" + Chr(10) _
-        + "<meta name=""description"" content=""WikiSim 96, the encyclopedia on your computer: more than a thousand articles, as of 1996."">" + Chr(10) _
+        + "<meta name=""description"" content=""WikiSim 96, the encyclopedia on your computer: hundreds of articles, as of 1996."">" + Chr(10) _
         + "</head>" + Chr(10) + "<body bgcolor=""#FFFFF0"" link=""#000080"" vlink=""#600060"">" + Chr(10) _
         + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#000040""><tr>" _
         + "<td><a href=""index.asp""><font face=""Times New Roman"" color=""#FFD700"" size=""6""><b>W</b></font><font face=""Times New Roman"" color=""#FFFFFF"" size=""5""><b>iki</b></font><font face=""Times New Roman"" color=""#FFD700"" size=""6""><b>S</b></font><font face=""Times New Roman"" color=""#FFFFFF"" size=""5""><b>im</b></font></a>" _

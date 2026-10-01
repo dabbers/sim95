@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Network } from "./network.mjs";
+import { simxplorerSource } from "../simxplorer-source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let failures = 0;
@@ -104,7 +105,7 @@ await test("the installer writes SIMXPLOR.SPK and starts it", async () => {
   await net.until(() => !alpha.running(pid), 60000, "the installer");
   assert.match(alpha.output(pid), /wrote C:\\WEB\\SXDEMO\\SNIFF.SPK[\s\S]*wrote C:\\PROGRAMS\\SIMXPLOR.SPK[\s\S]*Simxplorer is installed \(6 files\)\.[\s\S]*Simxplorer is running/);
   assert.equal(alpha.read("C:\\WEB\\SXDEMO\\BADGE.PIC"), fs.readFileSync(path.join(root, "simxplorer/WEB/BADGE.PIC"), "utf8"), "the demo comes too");
-  assert.ok(alpha.read("C:\\PROGRAMS\\SIMXPLOR.SPK") === fs.readFileSync(path.join(root, "simxplorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "simxplorer/src/BROWSER.SPK"), "utf8"), "simxplorer/INSTALL.SPK is out of date: node tools/build-installer.mjs explorer");
+  assert.ok(alpha.read("C:\\PROGRAMS\\SIMXPLOR.SPK") === simxplorerSource(), "simxplorer/INSTALL.SPK is out of date: node tools/build-installer.mjs simxplorer");
   const started = () => alpha.kernel.ps().find((p) => p.name === "SIMXPLOR");
   await net.until(() => started() && alpha.widgets(started().pid, "HtmlView").length, 30000, "Simxplorer");
   assert.deepEqual(alpha.errors, []);
@@ -557,25 +558,29 @@ await test("ELIZA-95 in Simxplorer: the answer types itself out in JavaScript", 
   assert.deepEqual(dialogs(), []);
 });
 
-await test("a SimMovie opens in SimPlayer, and the browser stays where it was", async () => {
-  page("smoke.smv", "SIMMOVIE 1\ntitle=Smoke\nwidth=40\nheight=30\nfps=5\nframes=1\n.\n*X0\n");
+await test("a SimMovie plays in the built-in SimPlayer, which pops up; the browser stays where it was", async () => {
+  page("smoke.smv", "SIMMOVIE 1\ntitle=Smoke\nwidth=40\nheight=30\nfps=5\nframes=2\n.\n*X0\n*X9\n");
   page("movies.htm", '<html><head><title>Movies</title></head><body><a href="smoke.smv">Smoke</a></body></html>');
-  if (alpha.exists("C:\\PROGRAMS\\PLAYER.SPK")) alpha.remove("C:\\PROGRAMS\\PLAYER.SPK");
-  await go("http://bravo/movies.htm");
-  await loaded("Movies");
-  // no player: say where to get one
-  await go("http://bravo/smoke.smv");
-  await loaded("SimPlayer required");
-  assert.match(html(), /This is a SimMovie/);
-  // with a player: it gets the address, and the page stays
-  alpha.write("C:\\PROGRAMS\\PLAYER.SPK", 'SUB Main ()\n    FS.Write("C:\\MYFILES\\PLAYED.TXT", SYS.Args[0])\nEND SUB\n');
+  assert.ok(!alpha.exists("C:\\PROGRAMS\\PLAYER.SPK"), "no SimPlayer program needed");
   await go("http://bravo/movies.htm");
   await loaded("Movies");
   await go("http://bravo/smoke.smv");
-  await wait(() => alpha.exists("C:\\MYFILES\\PLAYED.TXT"), "SimPlayer to start");
-  assert.equal(alpha.read("C:\\MYFILES\\PLAYED.TXT"), "http://bravo/smoke.smv");
-  await wait(() => /Opened http:\/\/bravo\/smoke.smv in SimPlayer/.test(status()), "the status: " + status());
-  assert.equal(title(), "Movies - Simxplorer");
+  const popup = () => alpha.widgets(ie, "Window").find((w) => String(w.get("Title")).startsWith("SimPlayer"));
+  await wait(() => popup() && popup().get("Title") === "SimPlayer - Smoke", "the SimPlayer window: " + alpha.widgets(ie, "Window").map((w) => w.get("Title")).join(" / "), 15000);
+  await wait(() => /^(playing|ended)\|/.test(popup().get("Tag")), "it to play: " + popup().get("Tag"), 15000);
+  assert.equal(title(), "Movies - Simxplorer", "the browser stayed on its page");
+  assert.match(status(), /Playing http:\/\/bravo\/smoke.smv in SimPlayer/);
+  // another movie reuses the window; closing it leaves the browser running
+  await go("http://bravo/smoke.smv");
+  await wait(() => alpha.widgets(ie, "Window").filter((w) => String(w.get("Title")).startsWith("SimPlayer") && !w.destroyed).length === 1, "one SimPlayer window");
+  popup().call("Close");
+  await wait(() => !alpha.widgets(ie, "Window").some((w) => String(w.get("Title")).startsWith("SimPlayer") && !w.destroyed), "the SimPlayer window to close");
+  assert.ok(alpha.running(ie), "Simxplorer is still running");
+  await go("http://bravo/movies.htm");
+  await loaded("Movies");
+  await go("http://bravo/smoke.smv");
+  await wait(() => popup() && !popup().destroyed && popup().get("Title") === "SimPlayer - Smoke", "SimPlayer again");
+  assert.deepEqual(alpha.errors, []);
 });
 
 net.shutdown();

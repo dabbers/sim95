@@ -17,12 +17,15 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | ELIZA-95 | `http://HOST/eliza/` | `C:\WEB\ELIZA` |
 | SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
 | SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
+| SimStats | `http://HOST/stats/` | `C:\WEB\STATS` |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
-`http://HOST/` becomes a front page that lists them. Each app keeps its data
+`http://HOST/` becomes a front page that lists them. Each web app's installer leaves an `APP.INF` (name, blurb, colour) in its folder, and the front page lists every folder that has one, so apps added later show up without reinstalling SimHost. Each app keeps its data
 where it always has (`C:\BOOKDATA`, `C:\MAILDATA`, `C:\ASKDATA`,
-`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`, `C:\WIKIDATA`), and each has its own cookie, so they don't get in each other's
-way. The mail server and the crawler run side by side.
+`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`, `C:\TUBEDATA`, `C:\STATDATA`, `C:\WIKIDATA`), and each has its own cookie, so they don't get in each other's
+way. The mail server and the crawler run side by side. With SimStats in
+`/stats/`, the front page counts its own visitors: SimStats' installer makes a
+site for the machine itself, and the front page carries its tag.
 
 ## Setting up
 
@@ -60,7 +63,8 @@ Run `C:\PROGRAMS\MOVEIN.SPK` on the host for each old machine:
    * Simxplorer favorites;
    * GeoSimies homepages and guestbooks (their neighborhood folders too);
    * SimPal accounts and money;
-   * SimTube movies, ratings and comments.
+   * SimTube movies, ratings and comments;
+   * SimStats accounts, sites and statistics.
 3. Press **Move In**.
 
 It copies over the old machine's Files service (port 139, on by default),
@@ -73,7 +77,9 @@ only adds to it:
 * SimPal is never merged: two ledgers can't be added together without money
   appearing or vanishing, so if the host already has SimPal accounts, Move
   In skips it and says so. SimTube is the same: its movie numbers would
-  collide.
+  collide. So is SimStats once the host has SimStats accounts (their names
+  would collide); before that, the other machine's sites are added beside the
+  host's own "this machine" site.
 * Lists that can be joined line by line get the lines they're missing:
   favorites, Vapor's library and SimBook's member list.
 

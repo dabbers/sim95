@@ -59,7 +59,7 @@ async function stepsFor(m, url) {
 // ---------------------------------------------------------------- the data
 
 await test("the data: every article indexed, in order, in volumes that fit", async () => {
-  assert.ok(index.length >= 900, index.length + " articles");
+  assert.ok(index.length >= 500, index.length + " articles");
   assert.equal(articles.size, index.length);
   index.forEach((p, i) => {
     assert.equal(Number(p[0]), i + 1, "ids follow the index");
@@ -79,7 +79,7 @@ await test("the data: every article indexed, in order, in volumes that fit", asy
     assert.ok(titleOf.has(Number(id)));
     for (const s of see.split(" ").filter(Boolean)) assert.ok(titleOf.has(Number(s)), "see also " + s);
   }
-  for (const want of ["Modem", "Netscape Navigator", "Windows 95", "The X-Files", "Toy Story", "Chess", "Earth"]) assert.ok(titles.includes(want), want);
+  for (const want of ["Albert Einstein", "History", "Music", "Paris", "World War II", "Nelson Mandela"]) assert.ok(titles.includes(want), want);
 });
 
 await test("the 1996 cut: no sentence names a year after 1996, or anything banned", async () => {
@@ -142,21 +142,26 @@ await test("the front page: logo, search, A to Z, random, article of the day, di
 });
 
 await test("an article: its text, links to other articles, See also, and where it came from", async () => {
-  const id = byTitle("Modem");
+  const id = byTitle("Albert Einstein");
   const a = articles.get(id);
   let r = ok(await b.get("/article.asp?a=" + id));
-  assert.match(r.body, /<title>Modem - WikiSim 96<\/title>/);
-  assert.match(r.body, /From Wikipedia, the free encyclopedia \(text as of 1996, edited\) &mdash; <a href="license.htm">CC BY-SA 4.0<\/a>\. Original article: &quot;Modem&quot;/);
+  assert.match(r.body, /<title>Albert Einstein - WikiSim 96<\/title>/);
+  assert.match(r.body, /From Wikipedia, the free encyclopedia \(text as of 1996, edited\) &mdash; <a href="license.htm">CC BY-SA 4.0<\/a>\. Original article: &quot;Albert Einstein&quot;/);
   for (const m of a.text.matchAll(/\{(\d+)\|([^}]*)\}/g)) assert.ok(r.body.includes(`<a href="article.asp?a=${m[1]}">${m[2].replace(/&/g, "&amp;")}</a>`), "link to " + m[1]);
-  const see = data("LINKS.TXT").split("\n").find((l) => l.startsWith(id + "|")).split("|")[1].split(" ").filter(Boolean);
-  if (see.length) {
-    assert.match(r.body, /<h3>See also<\/h3>/);
-    for (const s of see) assert.ok(r.body.includes(`<li><a href="article.asp?a=${s}">`), "see also " + s);
+  // See also: the articles that link here, for every article that has any
+  const seeOf = (n) => ((data("LINKS.TXT").split("\n").find((l) => l.startsWith(n + "|")) || "|").split("|")[1]).split(" ").filter(Boolean);
+  assert.equal(r.body.includes("<h3>See also</h3>"), seeOf(id).length > 0);
+  const linked = Number(data("LINKS.TXT").split("\n")[0].split("|")[0]);
+  const lr = ok(await b.get("/article.asp?a=" + linked));
+  assert.match(lr.body, /<h3>See also<\/h3>/);
+  for (const s of seeOf(linked)) {
+    assert.ok(lr.body.includes(`<li><a href="article.asp?a=${s}">${titleOf.get(Number(s)).replace(/&/g, "&amp;")}</a>`), "see also " + s);
+    assert.ok(articles.get(Number(s)).text.includes("{" + linked + "|"), titleOf.get(Number(s)) + " links to " + linked);
   }
   assert.ok(r.body.includes(`<a href="article.asp?a=${id - 1}">&lt;&lt; `) && r.body.includes(`<a href="article.asp?a=${id + 1}">`), "either side");
   // by title, in any case, and by a short title
-  assert.equal(ok(await b.get("/article.asp?a=modem")).body, r.body);
-  assert.equal(ok(await b.get("/article.asp?a=Windows+95")).body, ok(await b.get("/article.asp?a=" + byTitle("Windows 95"))).body);
+  assert.equal(ok(await b.get("/article.asp?a=albert+einstein")).body, r.body);
+  assert.equal(ok(await b.get("/article.asp?a=World+War+II")).body, ok(await b.get("/article.asp?a=" + byTitle("World War II"))).body);
   const doom = index.find((p) => p[1].startsWith("Doom ("));
   if (doom) assert.match(ok(await b.get("/article.asp?a=doom")).body, new RegExp("<title>" + doom[1].replace(/[()]/g, "\\$&")));
   // somewhere that isn't there
@@ -200,10 +205,10 @@ await test("letter pages list every title, a page at a time, each under 64K", as
 });
 
 await test("search: titles first, then words in the text; and misses", async () => {
-  let r = ok(await b.get("/search.asp?q=modem"));
-  assert.match(r.body, /found for &quot;modem&quot;/);
+  let r = ok(await b.get("/search.asp?q=music"));
+  assert.match(r.body, /found for &quot;music&quot;/);
   const first = /<li><a href="article.asp\?a=(\d+)">/.exec(r.body)[1];
-  assert.equal(titleOf.get(Number(first)), "Modem", "the title comes first");
+  assert.equal(titleOf.get(Number(first)), "Music", "the title comes first");
   // a word that is in some article's text and in no title
   const word = "telephone";
   const inText = [...articles.values()].filter((a) => plain(a.text).toLowerCase().includes(word) && !a.title.toLowerCase().includes(word));
@@ -223,7 +228,7 @@ await test("search: titles first, then words in the text; and misses", async () 
 
 await test("search stays well inside the time limit", async () => {
   const report = [];
-  for (const url of ["/search.asp?q=zzzzqqq", "/search.asp?q=the+of+and", "/search.asp?q=e", "/search.asp?q=a+b+c+d+e+f+g", "/letter.asp?l=S", "/index.asp", "/article.asp?a=Zebra"]) {
+  for (const url of ["/search.asp?q=zzzzqqq", "/search.asp?q=the+of+and", "/search.asp?q=e", "/search.asp?q=a+b+c+d+e+f+g", "/letter.asp?l=S", "/index.asp", "/article.asp?a=Zoroastrianism"]) {
     const s = await stepsFor(alpha, url);
     report.push(`${url} ${s}`);
     assert.ok(s < 2000, `${url} needs ${s} of 20000 yields`);
@@ -259,12 +264,12 @@ await test("the about page is found by search engines; the licence says the text
 await test("ELIZA-95 on the same machine answers from WikiSim", async () => {
   await install(alpha, "eliza");
   const e = browser(alpha);
-  const r = ok(await e.post("/index.asp", { say: "What is a modem?", temp: "0" }));
+  const r = ok(await e.post("/index.asp", { say: "What is music?", temp: "0" }));
   const i = r.body.indexOf('<pre id="answer">');
   const said = r.body.slice(i + 17, r.body.indexOf("</pre>", i)).replace(/\s+/g, " ");
-  assert.match(said, /^According to WikiSim \(1996 edition\): \S.*modem/i);
+  assert.match(said, /^According to WikiSim \(1996 edition\): Music /);
   assert.match(said, /The whole article is at http:\/\/alpha\/article\.asp\?a=\d+$/);
-  assert.ok(said.includes("http://alpha/article.asp?a=" + byTitle("Modem")), said);
+  assert.ok(said.endsWith("http://alpha/article.asp?a=" + byTitle("Music")), said);
 });
 
 // ---------------------------------------------------------------- SimHost
@@ -284,14 +289,14 @@ await test("in a SimHost folder: /wiki/ works and its links stay inside /wiki/",
   r = ok(await h.get("/wiki/"));
   assert.match(r.body, /Article of the Day/);
   assert.ok(!/href="\//.test(r.body), "no links from the root");
-  r = ok(await h.get("/wiki/search.asp?q=modem"));
-  assert.match(r.body, /<b>Modem<\/b>/);
+  r = ok(await h.get("/wiki/search.asp?q=music"));
+  assert.match(r.body, /<b>Music<\/b>/);
   ok(await h.get("/wiki/random.asp"));
   assert.match(h.last.url, /^\/wiki\/article\.asp\?a=\d+$/);
   await install(host, "eliza");
   const e = browser(host);
-  r = ok(await e.post("/eliza/index.asp", { say: "what is chess?", temp: "0" }));
-  assert.ok(r.body.includes("http://host/wiki/article.asp?a=" + byTitle("Chess")), "ELIZA points into /wiki/");
+  r = ok(await e.post("/eliza/index.asp", { say: "what is philosophy?", temp: "0" }));
+  assert.ok(r.body.includes("http://host/wiki/article.asp?a=" + byTitle("Philosophy")), "ELIZA points into /wiki/");
 });
 
 await test("SimHost moves a WikiSim that was the home page into /wiki/", async () => {
@@ -299,7 +304,7 @@ await test("SimHost moves a WikiSim that was the home page into /wiki/", async (
   const said = await install(alpha, "simhost");
   assert.match(said, /moved WikiSim \(\d+ files\) into C:\\WEB\\WIKI: http:\/\/alpha\/wiki\//);
   assert.ok(alpha.exists("C:\\WEB\\WIKI\\ARTICLE.ASP") && !alpha.exists("C:\\WEB\\WIKI.SPK"));
-  ok(await browser(alpha).get("/wiki/article.asp?a=Chess"));
+  ok(await browser(alpha).get("/wiki/article.asp?a=Philosophy"));
   assert.deepEqual(alpha.errors, []);
   assert.deepEqual(host.errors, []);
 });

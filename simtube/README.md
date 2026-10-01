@@ -7,10 +7,9 @@ drawing commands per frame. There are three parts:
 * **SimMovie**, the format: keyframes and deltas, cut into 15K parts with a
   manifest so a long movie can travel over a network that carries 64K a
   message.
-* **SimPlayer** (`C:\PROGRAMS\PLAYER.SPK`), a movie player in the style of
-  the 1998 players: Play/Pause, Stop, Rewind, a frame at a time, a seek bar
-  to click or drag, a time display, Loop, and Mute. It plays from your disk
-  or streams from the web, starting as soon as a few seconds are in.
+* **SimPlayer**, the movie player, which lives in [`simplayer/`](../simplayer/):
+  built into Simxplorer, and a Vapor app of its own (`C:\PROGRAMS\PLAYER.SPK`)
+  for Voyager users.
 * **SimTube**, the web site: a front page of movies with pictures and view
   counts, a page for each movie, uploads, stars, comments, accounts and Most
   Viewed. Written in SPARK as ActiveSparkPages, like [SimBook](../simbook/).
@@ -35,14 +34,15 @@ home page alone. SimHost also moves a SimTube that was the home page into
 `/tube/`, movies and all. Running the installer again upgrades the pages
 without touching anybody's movies.
 
-The installer also writes SimPlayer to `C:\PROGRAMS\PLAYER.SPK`. Other
-machines can get it from the site: **Get SimPlayer** (`getplay.asp`) hands
-it out as plain text, to save as `C:\PROGRAMS\PLAYER.SPK`.
+SimTube doesn't install a player. **Get SimPlayer** (`getplay.asp`) explains
+where it is: built into Simxplorer, and in every Vapor store's Apps section
+(or `sim-get install simplayr`).
 
 ## Watching
 
-Voyager can't play a movie. Each movie's page gives its address, such as
-`http://alpha/tube/movie.asp?v=2`, to open in SimPlayer:
+In Simxplorer, a movie page's **Play** link pops up the built-in SimPlayer.
+Voyager can't play a movie, so each movie's page also gives its address,
+such as `http://alpha/tube/movie.asp?v=2`, to open in SimPlayer on its own:
 
 * type or paste it into SimPlayer's **Address** box and press Enter (or
   **File > Open URL**, Ctrl+L);
@@ -85,7 +85,7 @@ socket's `onMessage` and `onClose`. That is the pattern
 | `movie.asp?v=N` | The movie for SimPlayer: its manifest, as `video/x-simmovie` |
 | `movie.asp?v=N&p=K` | Part K |
 | `thumb.asp?v=N` | Its picture, a SIM95PIC (`image/x-sim95pic`) |
-| `getplay.asp` | SimPlayer, as plain text |
+| `getplay.asp` | Where to get SimPlayer (Simxplorer, or Vapor) |
 | `simtube.htm` | Help: watching, and the SimMovie format |
 | `join.asp`, `login.asp`, `logout.asp`, `rate.asp`, `comment.asp` | Form handlers that redirect back |
 
@@ -231,9 +231,10 @@ fs.writeFileSync("BALL.SMV", m.toString());
 It also has `parse`, `cut` (the parts) and `calls` (the canvas calls
 SimPlayer makes for a frame), which the tests check SimPlayer against.
 
-## For Simxplorer (later)
+## How browsers spot a movie
 
-Simxplorer could hand movie links straight to SimPlayer. What it needs to know:
+Simxplorer plays these itself (see [its README](../simxplorer/README.md#movies)).
+What a browser or program needs to know:
 
 * A movie answers with `Content-Type: video/x-simmovie`. The body starts with
   `SIMMOVIE-PARTS 1` (a manifest) or `SIMMOVIE 1` (a whole movie).
@@ -245,9 +246,8 @@ Simxplorer could hand movie links straight to SimPlayer. What it needs to know:
   address. SimPlayer fetches it and its parts itself, with the
   `User-Agent: SimPlayer/1.0 (SIM95)`.
 
-Playing inside the page (an `<embed>`) would need Simxplorer to own a canvas;
-the drawing code in `PLAYER.SPK` (`DrawFrame`, `DrawCmd`, `FillPoly`) is
-self-contained enough to lift.
+Playing inside the page itself (an `<embed>`) would need the page view to
+hold a canvas; Simxplorer pops up a player window instead.
 
 ## Toward Sparkwave
 

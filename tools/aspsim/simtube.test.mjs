@@ -31,7 +31,7 @@ const wait = (fn, what, ms = 20000) => net.until(fn, ms, what);
 async function install(m, app) {
   m.write("C:\\MYFILES\\INSTALL.SPK", installer(app));
   const pid = m.run("C:\\MYFILES\\INSTALL.SPK");
-  await wait(() => !m.running(pid) || /in Voyager/.test(m.output(pid)), app + "'s installer", 60000);
+  await wait(() => !m.running(pid) || /in Voyager|from Files/.test(m.output(pid)), app + "'s installer", 60000);
   assert.deepEqual(m.ui.dialogs, [], app + ": " + m.output(pid));
   return m.output(pid);
 }
@@ -64,10 +64,17 @@ await test("the installer makes SimTube ALPHA's home page; the first visit puts 
   const said = await install(alpha, "simtube");
   assert.match(said, /SimTube is installed \(\d+ files\)/);
   assert.match(said, /Open http:\/\/alpha\/ in Voyager/);
-  assert.ok(alpha.exists("C:\\WEB\\TUBE.SPK") && alpha.exists("C:\\PROGRAMS\\PLAYER.SPK"));
-  assert.equal(alpha.read("C:\\PROGRAMS\\PLAYER.SPK"), fs.readFileSync(path.join(root, "simtube/PROGRAMS/PLAYER.SPK"), "utf8").replace(/\n?$/, "\n"));
+  assert.ok(alpha.exists("C:\\WEB\\TUBE.SPK"));
+  assert.ok(!alpha.exists("C:\\PROGRAMS\\PLAYER.SPK"), "SimPlayer is an app of its own now, from Vapor");
+  // SimPlayer, installed on its own
+  const playerSaid = await install(alpha, "simplayer");
+  assert.match(playerSaid, /SimPlayer is installed \(1 files\)/);
+  assert.equal(alpha.read("C:\\PROGRAMS\\PLAYER.SPK"), fs.readFileSync(path.join(root, "simplayer/src/PLAYER.SPK"), "utf8").replace(/\n?$/, "\n"));
+  assert.match(installer("simplayer"), /^' VAPOR\|id=SIMPLAYR\|name=SimPlayer\|kind=program\|version=[0-9a-f]{8}\|category=Multimedia\|run=C:\\PROGRAMS\\PLAYER.SPK\|files=C:\\PROGRAMS\\PLAYER.SPK\|tasks=PLAYER\|/);
+  await wait(() => alpha.kernel.ps().some((x) => x.name === "PLAYER"), "SimPlayer to start");
+  for (const x of alpha.kernel.ps().filter((x) => x.name === "PLAYER")) alpha.kernel.kill(x.pid);
   assert.ok(alpha.exists("C:\\TUBEDATA\\SEED\\DANCE.SMV"));
-  assert.match(installer("simtube"), /^' VAPOR\|id=SIMTUBE\|name=SimTube\|kind=web\|version=[0-9a-f]{8}\|category=Fun\|run=\/\|files=[^|]*C:\\PROGRAMS\\PLAYER.SPK[^|]*\|tasks=\|startup=\|folder=TUBE\|about=.*SimPlayer/);
+  assert.match(installer("simtube"), /^' VAPOR\|id=SIMTUBE\|name=SimTube\|kind=web\|version=[0-9a-f]{8}\|category=Fun\|run=\/\|files=(?![^|]*PLAYER)[^|]*\|tasks=\|startup=\|folder=TUBE\|about=.*SimPlayer/);
 
   const r = ok(await browser(alpha).get("/"));
   assert.match(r.body, /Welcome to SimTube[\s\S]*Dancing Baby[\s\S]*All Your Base/, "newest first");
@@ -482,7 +489,10 @@ await test("pages stay under 64K: a full front page, and a movie with a pile of 
     const x = await ann.get(page);
     assert.ok(x.raw.length < MESSAGE_LIMIT && x.body.length > 100, page);
   }
-  assert.equal((await ann.get("/getplay.asp")).body.trimEnd(), alpha.read("C:\\PROGRAMS\\PLAYER.SPK").trimEnd());
+  const get = (await ann.get("/getplay.asp")).body;
+  assert.match(get, /SimPlayer is built in/);
+  assert.match(get, /from <b>Vapor<\/b>/);
+  assert.match(get, /sim-get install simplayr/);
   assert.deepEqual(alpha.errors, []);
 });
 
