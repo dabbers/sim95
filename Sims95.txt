@@ -1,0 +1,52 @@
+======================================================================
+  SIM95  -  a 1996 networked personal computer, simulated
+======================================================================
+
+Welcome. This is a whole little computer: a desktop, a command line, a
+programming language with its own editor, a web browser, and a network
+shared with everyone else who has this machine open right now.
+
+GETTING STARTED
+  * Double-click icons on the desktop, or use the Start button.
+  * Open Help (Start > Help, or press F1 on the desktop) for the manuals.
+  * Everything you make is saved automatically and survives a refresh.
+
+THE ONE THING TO TRY
+  1. Open SPARK (Start > Programs > SPARK).
+  2. Open C:\SAMPLES\CALC.SPK and press F5. A real calculator.
+  3. Now open C:\PROGRAMS\HTTPD.SPK - that is the web server, written
+     in SPARK. Read it. It is 90 lines.
+  4. Have a friend open this same page in another browser tab or on
+     another computer. Open Network to see their machine.
+  5. In their Voyager, they type http://yourname/ and your web server
+     logs the hit. You just served a friend a web page from a program
+     you can edit.
+
+A WORD OF WARNING (this is 1996)
+  There is almost no security. Your entire disk is shared, read and
+  write, to anyone on the network who knows your user name and password
+  - the ones you chose in Setup. They are stored in plain text in
+  C:\SYSTEM\USERS.INI. Try it: NET USE \\theirmachine in a Terminal,
+  type their name and password, then DIR. Anything on their disk is
+  yours to change.
+
+  Deleting C:\SYSTEM\CORE.SYS stops the machine from starting. Anything
+  dropped into C:\SYSTEM\STARTUP runs the next time the machine starts.
+  Both of those are real. If a machine will not start, the error screen
+  has a Reinstall System button that restores everything except your
+  own files in C:\MYFILES. Start > Recovery goes further: it erases the
+  whole disk and sets the computer up again as new, Setup and all, with
+  a new name and a new address.
+
+WHAT IS WHERE
+  C:\SYSTEM      the system's own files (do not delete CORE.SYS)
+  C:\PROGRAMS    Notes, Chat and the web server - all SPARK source
+  C:\SAMPLES     small programs to read and run
+  C:\DOCS        the manuals: SPARK.TXT, SHELL.TXT, NETWORK.TXT
+  C:\WEB         the pages your web server serves: INDEX.HTM, HELLO.HTM
+                 (a page with a SPARK script in it), HELLO.ASP (a
+                 page SPARK builds on the server, with SITE.SPK) and
+                 DOCS\, the SPARK reference as a web site
+  C:\MYFILES     yours; kept even when you reinstall
+
+Have fun. Break things. Reinstall. Break them again.
