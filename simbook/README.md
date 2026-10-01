@@ -63,6 +63,26 @@ the pages without touching anyone's data.
   out while a box holds too much. This is a SPARK page script, which Voyager
   runs on every keystroke. The server checks the limits again anyway.
 
+## Passwords
+
+* **Change it:** Edit Profile > *Change my password* asks for the current one
+  and then the new one twice. Your sign-ins elsewhere end; this one stays.
+* **Forgot it? By e-mail:** put an e-mail address on your profile (only you
+  see it). On the login page, *Forgot your password?* sends a link there.
+  The link works once and for an hour, and asking again cancels the old one.
+  The page gives the same answer whether or not the member has an address, so
+  it can't be used to find out who does.
+  * SimBook pages can't open connections, so the letter goes the way
+    ColdMail's own do: into `C:\MAILDATA\SPOOL` for the mail server to
+    deliver, from `simbook@<machine>`. That needs ColdMail on the same
+    machine, which a [SimHost](../simhost/) machine has.
+* **Forgot it? Ask the owner:** on the same page, whoever runs the machine
+  can give any member a new password. It takes the machine's user name and
+  password from `C:\SYSTEM\USERS.INI`, the same ones the Files service
+  takes.
+
+Every reset ends all of that member's sign-ins.
+
 ## Pictures and the 64K limit
 
 SIM95 carries at most 65,536 characters in one network message. Voyager sends
@@ -118,6 +138,7 @@ C:\BOOKDATA\REPLIES\<post>.TXT  number|date|author|name|text, one reply per line
 C:\BOOKDATA\NOTES\<user>.TXT    notifications (.SEE: the last one read)
 C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them
 C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos
+C:\BOOKDATA\RESETS\<id>.TXT     an e-mailed reset link: user, when (TIME.Now), secret
 C:\WEB\PHOTOS\<post>.PIC        photos
 C:\WEB\PICS\<user>.PIC          profile pictures
 ```

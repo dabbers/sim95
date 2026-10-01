@@ -107,6 +107,32 @@ await test("ColdMail in its folder: sign up, send mail, and hand it on with GETM
   assert.equal(guest.read("C:\\WEB\\MAIL.SPK"), host.read("C:\\WEB\\MAIL\\MAIL.SPK"));
 });
 
+await test("SimBook e-mails a password reset link through ColdMail on the same machine", async () => {
+  // Ann (SimBook, in /book/) gives her ColdMail address, bob@host, and forgets her password
+  const ann = browser(host);
+  ok(await ann.post("/book/login.asp", { u: "ann", pw: "secret" }));
+  const t = /name="t" value="([0-9A-F]+)"/.exec(ok(await ann.get("/book/edit.asp")).body)[1];
+  ok(await ann.post("/book/edit.asp", { t, name: "Ann Host", email: "bob@host" }));
+  assert.match(host.read("C:\\BOOKDATA\\USERS\\ANN.TXT"), /^email=bob@host$/m);
+  const r = ok(await browser(host).post("/book/reset.asp", { do: "mail", u: "ann" }));
+  assert.match(r.body, /a link to reset the password is on its way/);
+  const box = "C:\\MAILDATA\\BOX\\BOB";
+  await wait(() => /Your SimBook password/.test(host.read(box + "\\INBOX.TXT")), "the reset letter in bob's inbox", 30000);
+  const n = host.read(box + "\\INBOX.TXT").trim().split("\n").find((l) => l.includes("Your SimBook password")).split("|")[0];
+  const letter = host.read(box + "\\" + n + ".MSG");
+  assert.match(letter, /^From: SimBook <simbook@host>/m);
+  const link = /http:\/\/host(\/book\/reset\.asp\?k=[0-9A-F]{24})/.exec(letter)[1];
+  assert.match(ok(await browser(host).get(link)).body, /Pick a New Password for ann/);
+  ok(await browser(host).post("/book/reset.asp", { k: link.split("=")[1], pw: "mailed1", pw2: "mailed1" }));
+  assert.match(ok(await browser(host).post("/book/login.asp", { u: "ann", pw: "mailed1" })).url, /home\.asp$/);
+  // back as it was, for the tests after this one
+  const desk = browser(host);
+  if (!host.exists("C:\\SYSTEM\\USERS.INI")) host.write("C:\\SYSTEM\\USERS.INI", "name=dab\npassword=hostpw\n");
+  const users = host.read("C:\\SYSTEM\\USERS.INI");
+  ok(await desk.post("/book/reset.asp", { u: "ann", pw: "secret", pw2: "secret", owner: /name=(.*)/i.exec(users)[1].trim(), opw: /password=(.*)/i.exec(users)[1] }));
+  assert.match(ok(await browser(host).post("/book/login.asp", { u: "ann", pw: "secret" })).url, /home\.asp$/, "the owner's reset");
+});
+
 await test("AskSim and ELIZA-95 install straight into their folders", async () => {
   const ask = await install(host, "asksim");
   assert.match(ask, /Open http:\/\/host\/ask\/ in Voyager/);

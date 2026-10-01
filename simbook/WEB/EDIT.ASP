@@ -13,7 +13,10 @@ IF REQUEST.Method = "POST" THEN
     RequireToken()
     IF REQUEST.Form("name").Trim() = "" THEN
         problem = "Your name cannot be empty."
+    ELSEIF REQUEST.Form("email").Trim() <> "" AND NOT ValidEmail(REQUEST.Form("email").Trim().Lower()) THEN
+        problem = "'" + REQUEST.Form("email").Trim() + "' is not an e-mail address. They look like ann@alpha."
     ELSE
+        SetField(rec, "email", REQUEST.Form("email").Trim().Lower())
         ' Short fields and long ones; Clip keeps every page under the 64K a message can carry.
         keys = ["sex", "birthday", "hometown", "status"]
         FOR EACH key IN keys
@@ -49,7 +52,8 @@ END IF
 <tr><td valign="top"><font size="2">Interests:</font></td><td><%= LimitedBox("interests", Field(rec, "interests"), 3, 40, LONGFIELD) %></td></tr>
 <tr><td valign="top"><font size="2">Favorite Music:</font></td><td><%= LimitedBox("music", Field(rec, "music"), 3, 40, LONGFIELD) %></td></tr>
 <tr><td valign="top"><font size="2">About Me:</font></td><td><%= LimitedBox("about", Field(rec, "about"), 5, 40, LONGFIELD) %></td></tr>
-<tr><td valign="top"><font size="2">Picture:</font></td><td><font size="2"><a href="picture.asp">Change my picture</a></font></td></tr>
+<tr><td valign="top"><font size="2">E-mail:</font></td><td><input name="email" size="30" maxlength="60" value="<%= H(Field(rec, "email")) %>"><br><font size="1" color="#808080">Only you see this. If you forget your password, a reset link goes here<% IF NOT CanMail() THEN %> (once this machine has ColdMail to send it)<% END IF %>.</font></td></tr>
+<tr><td valign="top"><font size="2">Picture:</font></td><td><font size="2"><a href="picture.asp">Change my picture</a> &middot; <a href="password.asp">Change my password</a></font></td></tr>
 <tr><td></td><td><input type="submit" id="go" value="Save Changes"></td></tr>
 </table>
 </form>

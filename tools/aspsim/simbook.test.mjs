@@ -684,5 +684,104 @@ await test("every page stays well inside the time limit on a busy network", asyn
   console.log("      yields used (of 20000): " + report.join(", "));
 });
 
+await test("changing your password: the old one first; other sign-ins end, this one stays", async () => {
+  const pm = await fresh();
+  const here = await join(pm, "pat", "Pat Doe", "oldpass");
+  const elsewhere = browser(pm);
+  ok(await elsewhere.post("/login.asp", { u: "pat", pw: "oldpass" }));
+  assert.match(ok(await here.get("/edit.asp")).body, /<a href="password.asp">Change my password<\/a>/);
+  let r = ok(await here.post("/password.asp", { old: "wrong", pw: "newpass", pw2: "newpass" }));
+  assert.match(r.body, /That is not your password now/);
+  r = ok(await here.post("/password.asp", { old: "oldpass", pw: "newpass", pw2: "other" }));
+  assert.match(r.body, /The two new passwords are different/);
+  r = ok(await here.post("/password.asp", { old: "oldpass", pw: "newpass", pw2: "newpass" }));
+  assert.match(r.body, /Your password is changed/);
+  assert.equal(ok(await here.get("/home.asp")).url, "/home.asp", "still signed in here");
+  assert.equal(ok(await elsewhere.get("/home.asp")).url, "/index.asp", "signed out elsewhere");
+  assert.equal(ok(await rawBrowser(pm).post("/login.asp", { u: "pat", pw: "oldpass" })).url, "/index.asp?e=login");
+  assert.equal(ok(await rawBrowser(pm).post("/login.asp", { u: "pat", pw: "newpass" })).url, "/home.asp");
+  // without the form token, nothing changes
+  const before = pm.read("C:\\BOOKDATA\\USERS\\PAT.TXT");
+  ok(await rawBrowser(pm).post("/password.asp", { old: "newpass", pw: "hacked", pw2: "hacked" }));
+  assert.equal(pm.read("C:\\BOOKDATA\\USERS\\PAT.TXT"), before);
+});
+
+await test("a forgotten password: the machine's owner sets a new one", async () => {
+  const pm = await fresh();
+  pm.write("C:\\SYSTEM\\USERS.INI", "[user]\nname=Dab\npassword=Owner99\n");
+  const old = await join(pm, "lee", "Lee Lost", "forgotten");
+  assert.match(ok(await rawBrowser(pm).get("/index.asp")).body, /<a href="reset.asp">Forgot your password\?<\/a>/);
+  const desk = rawBrowser(pm);
+  let r = ok(await desk.post("/reset.asp", { u: "lee", pw: "found1", pw2: "found1", owner: "dab", opw: "wrong" }));
+  assert.match(r.body, /not this machine's user name and password/);
+  r = ok(await desk.post("/reset.asp", { u: "nobody", pw: "found1", pw2: "found1", owner: "dab", opw: "Owner99" }));
+  assert.match(r.body, /There is no member called nobody here/);
+  r = ok(await desk.post("/reset.asp", { u: "lee", pw: "abc", pw2: "abc", owner: "dab", opw: "Owner99" }));
+  assert.match(r.body, /at least 4 characters/);
+  r = ok(await desk.post("/reset.asp", { u: "LEE", pw: "found1", pw2: "found1", owner: "DAB", opw: "Owner99" }));
+  assert.match(r.body, /lee has a new password/);
+  assert.equal(ok(await old.get("/home.asp")).url, "/index.asp", "their old sign-in ended");
+  assert.equal(ok(await rawBrowser(pm).post("/login.asp", { u: "lee", pw: "forgotten" })).url, "/index.asp?e=login");
+  assert.equal(ok(await rawBrowser(pm).post("/login.asp", { u: "lee", pw: "found1" })).url, "/home.asp");
+  // a machine with no owner password set: nobody can reset
+  pm.write("C:\\SYSTEM\\USERS.INI", "[user]\nname=Dab\npassword=\n");
+  r = ok(await desk.post("/reset.asp", { u: "lee", pw: "found2", pw2: "found2", owner: "dab", opw: "" }));
+  assert.match(r.body, /not this machine's user name and password/);
+});
+
+await test("a forgotten password by e-mail: the link goes through ColdMail's spool, works once, for an hour", async () => {
+  const pm = await fresh();
+  const kim = await join(pm, "kim", "Kim Mail", "forgotten");
+  // no ColdMail here: no e-mail, but you can still give an address
+  assert.match(ok(await rawBrowser(pm).get("/reset.asp")).body, /has no mail server \(ColdMail\)/);
+  let r = ok(await kim.post("/edit.asp", { name: "Kim Mail", email: "not an address" }));
+  assert.match(r.body, /is not an e-mail address/);
+  r = ok(await kim.post("/edit.asp", { name: "Kim Mail", email: "Kim@Bravo" }));
+  assert.match(pm.read("C:\\BOOKDATA\\USERS\\KIM.TXT"), /^email=kim@bravo$/m);
+  assert.match(ok(await kim.get("/edit.asp")).body, /value="kim@bravo"/);
+  assert.doesNotMatch(ok(await rawBrowser(pm).get("/profile.asp?u=kim")).body, /kim@bravo/, "nobody else sees it");
+
+  pm.mkdir("C:\\MAILDATA");
+  pm.mkdir("C:\\MAILDATA\\SPOOL");
+  const spool = () => pm.list("C:\\MAILDATA\\SPOOL").sort((a, b) => parseInt(a.name) - parseInt(b.name)).map((f) => pm.read(f.path));
+  const desk = rawBrowser(pm);
+  r = ok(await desk.post("/reset.asp", { do: "mail", u: "nobody" }));
+  assert.match(r.body, /If nobody has an e-mail address on their profile, a link/);
+  assert.equal(spool().length, 0);
+  r = ok(await desk.post("/reset.asp", { do: "mail", u: "kim" }));
+  assert.match(r.body, /If kim has an e-mail address on their profile, a link/);
+  assert.equal(spool().length, 1);
+  const letter = spool()[0];
+  assert.match(letter, /^X-Sender: simbook@testbox\nX-Recipient: kim@bravo\n/);
+  assert.match(letter, /\nSubject: Your SimBook password\n/);
+  const link = /http:\/\/testbox(\/reset\.asp\?k=[0-9A-F]{24})/.exec(letter)[1];
+
+  // a second request: the first link stops working
+  ok(await desk.post("/reset.asp", { do: "mail", u: "kim" }));
+  assert.match(ok(await desk.get(link)).body, /That reset link has been used/);
+  const link2 = /http:\/\/testbox(\/reset\.asp\?k=[0-9A-F]{24})/.exec(spool()[1])[1];
+  r = ok(await desk.get(link2));
+  assert.match(r.body, /Pick a New Password for kim/);
+  // a guessed link with the right id and the wrong secret doesn't work
+  assert.match(ok(await desk.get(link2.slice(0, -1) + (link2.endsWith("0") ? "1" : "0"))).body, /That reset link has been used/);
+  const k = link2.split("=")[1];
+  r = ok(await desk.post("/reset.asp", { k, pw: "fresh1", pw2: "fresh2" }));
+  assert.match(r.body, /The two new passwords are different/);
+  r = ok(await desk.post("/reset.asp", { k, pw: "fresh1", pw2: "fresh1" }));
+  assert.match(r.body, /Your password is changed/);
+  assert.equal(ok(await kim.get("/home.asp")).url, "/index.asp", "their old sign-in ended");
+  assert.equal(ok(await rawBrowser(pm).post("/login.asp", { u: "kim", pw: "fresh1" })).url, "/home.asp");
+  assert.match(ok(await desk.get(link2)).body, /That reset link has been used/, "it works once");
+
+  // an hour later, a link is no good
+  ok(await desk.post("/reset.asp", { do: "mail", u: "kim" }));
+  const link3 = /http:\/\/testbox(\/reset\.asp\?k=[0-9A-F]{24})/.exec(spool()[2])[1];
+  const file = "C:\\BOOKDATA\\RESETS\\" + link3.split("=")[1].slice(0, 8) + ".TXT";
+  const lines = pm.read(file).split("\n");
+  pm.write(file, [lines[0], String(+lines[1] - 3601), lines[2]].join("\n"));
+  assert.match(ok(await desk.get(link3)).body, /more than an hour old/);
+  assert.ok(!pm.exists(file));
+});
+
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

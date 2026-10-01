@@ -18,6 +18,7 @@
 '   C:\BOOKDATA\NOTES\<user>.TXT    their notifications (and .SEE: how far they read)
 '   C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them
 '   C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos
+'   C:\BOOKDATA\RESETS\<id>.TXT     a password reset link sent by e-mail: user, when, secret
 '   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)
 '   C:\WEB\PHOTOS\<post>.PIC        photos
 '
@@ -75,7 +76,7 @@ VAR formToken AS String       ' their session's form token; see RequireToken
 SUB EnsureDisk ()
     VAR dir AS String
     VAR dirs AS Array OF String
-    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES", "\LOG", "\NOTES", "\POKES", "\ALBUMS"]
+    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES", "\LOG", "\NOTES", "\POKES", "\ALBUMS", "\RESETS"]
     FOR EACH dir IN dirs
         IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
     NEXT
@@ -223,6 +224,137 @@ FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
     IF NOT UserExists(u) THEN RETURN FALSE
     rec = LoadUser(u)
     RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+' A new password: a new salt and hash, and every other sign-in of theirs
+' ends (keep is the session file to leave alone, or ""). Returns "" or what
+' is wrong.
+FUNCTION SetPassword (u AS String, pw AS String, keep AS String) AS String
+    VAR rec AS Array OF String
+    VAR salt AS String
+    VAR f AS String
+    IF NOT UserExists(u) THEN RETURN "There is nobody called " + u + " here."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    rec = LoadUser(u)
+    salt = NewToken()
+    SetField(rec, "salt", salt)
+    SetField(rec, "pass", Hash(salt, pw))
+    SaveUser(u, rec)
+    EnsureDisk()
+    DropResets(u)
+    FOR EACH f IN FS.List(DATADIR + "\SESSIONS")
+        IF f.EndsWith("\") OR (DATADIR + "\SESSIONS\" + f).Upper() = keep.Upper() THEN CONTINUE
+        IF (ReadOr(DATADIR + "\SESSIONS\" + f, "") + Chr(10)).Split(Chr(10))[0].Trim() = u THEN FS.Delete(DATADIR + "\SESSIONS\" + f)
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' ---------------------------------------------------------------- reset by e-mail
+' A member who gives an e-mail address (only they see it) can have a reset
+' link sent there. Server pages can't open connections, so the letter goes
+' the way ColdMail's own do: into C:\MAILDATA\SPOOL, for this machine's mail
+' server (MAILD.SPK) to deliver. No ColdMail here, no e-mail resets.
+
+CONST MAILSPOOL = "C:\MAILDATA\SPOOL"
+CONST RESETLIFE = 3600         ' seconds a reset link works
+
+FUNCTION CanMail () AS Bool
+    RETURN FS.Exists(MAILSPOOL)
+END FUNCTION
+
+' ann@alpha, the way ColdMail writes addresses
+FUNCTION ValidEmail (a AS String) AS Bool
+    VAR at AS Integer
+    at = a.IndexOf("@")
+    IF at < 1 OR at > 20 OR a.Length > 60 THEN RETURN FALSE
+    IF NOT OnlyFrom(a.Substring(0, at), "abcdefghijklmnopqrstuvwxyz0123456789._-") THEN RETURN FALSE
+    IF a.Length - at - 1 < 1 THEN RETURN FALSE
+    RETURN OnlyFrom(a.Substring(at + 1, a.Length - at - 1), "abcdefghijklmnopqrstuvwxyz0123456789.-")
+END FUNCTION
+
+' Where SimBook is on the web: http://host/ or http://host/book/
+FUNCTION SiteUrl () AS String
+    IF AppDir().Upper() = "C:\WEB" THEN RETURN "http://" + SERVER.Name.Lower() + "/"
+    RETURN "http://" + SERVER.Name.Lower() + "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
+SUB SendMail (rcpt AS String, subject AS String, text AS String)
+    VAR n AS Integer
+    VAR from AS String
+    VAR letter AS String
+    from = "simbook@" + SERVER.Name.Lower()
+    letter = "From: SimBook <" + from + ">" + Chr(10) _
+           + "To: " + rcpt + Chr(10) _
+           + "Subject: " + subject + Chr(10) _
+           + "Date: " + TIME.Date + " " + TIME.Clock + Chr(10) _
+           + "X-Mailer: SimBook (SIM95)" + Chr(10) + Chr(10) + text
+    n = Int(Val(ReadOr("C:\MAILDATA\SPOOLID.TXT", "0"))) + 1
+    FS.Write("C:\MAILDATA\SPOOLID.TXT", Str(n))
+    FS.Write(MAILSPOOL + "\" + Str(n) + ".MSG", "X-Sender: " + from + Chr(10) + "X-Recipient: " + rcpt + Chr(10) + "X-Tries: 0" + Chr(10) + "X-Next: 0" + Chr(10) + Chr(10) + letter)
+END SUB
+
+' Sends u a reset link, if they have an address and this machine can mail.
+' Any older link of theirs stops working. Returns TRUE if a letter went.
+FUNCTION MailReset (u AS String) AS Bool
+    VAR email AS String
+    VAR id AS String
+    VAR secret AS String
+    IF NOT UserExists(u) OR NOT CanMail() THEN RETURN FALSE
+    email = Field(LoadUser(u), "email")
+    IF email = "" THEN RETURN FALSE
+    EnsureDisk()
+    DropResets(u)
+    id = NewToken()
+    secret = NewToken() + NewToken()
+    FS.Write(DATADIR + "\RESETS\" + id + ".TXT", u + Chr(10) + Str(TIME.Now) + Chr(10) + secret)
+    SendMail(email, "Your SimBook password", "Somebody (we hope you) asked to reset the password for " + u + " on SimBook at " + SERVER.Name.Lower() + "." + Chr(10) + Chr(10) _
+        + "To pick a new one, open this within the hour:" + Chr(10) + Chr(10) _
+        + "  " + SiteUrl() + "reset.asp?k=" + id + secret + Chr(10) + Chr(10) _
+        + "If it wasn't you, do nothing: your password stays as it is.")
+    RETURN TRUE
+END FUNCTION
+
+' Whose reset link k is, or "" if it is not one, is used up, or is too old.
+FUNCTION ResetUser (k AS String) AS String
+    VAR lines AS Array OF String
+    VAR path AS String
+    IF k.Length <> 24 OR NOT OnlyFrom(k, "0123456789ABCDEF") THEN RETURN ""
+    path = DATADIR + "\RESETS\" + k.Substring(0, 8) + ".TXT"
+    IF NOT FS.Exists(path) THEN RETURN ""
+    lines = FS.Read(path).Lines()
+    IF lines.Count < 3 THEN RETURN ""
+    IF lines[2].Trim() <> k.Substring(8, 16) THEN RETURN ""
+    IF TIME.Now - Int(Val(lines[1])) > RESETLIFE OR TIME.Now < Int(Val(lines[1])) THEN
+        FS.Delete(path)
+        RETURN ""
+    END IF
+    IF NOT UserExists(lines[0].Trim()) THEN RETURN ""
+    RETURN lines[0].Trim()
+END FUNCTION
+
+' Every reset link of u's stops working.
+SUB DropResets (u AS String)
+    VAR f AS String
+    IF NOT FS.Exists(DATADIR + "\RESETS") THEN RETURN
+    FOR EACH f IN FS.List(DATADIR + "\RESETS")
+        IF f.EndsWith("\") THEN CONTINUE
+        IF (ReadOr(DATADIR + "\RESETS\" + f, "") + Chr(10)).Split(Chr(10))[0].Trim() = u THEN FS.Delete(DATADIR + "\RESETS\" + f)
+    NEXT
+END SUB
+
+' The machine's owner: the user name and password in C:\SYSTEM\USERS.INI,
+' the same ones the Files service asks for. They can reset anybody's password.
+FUNCTION IsOwner (name AS String, pw AS String) AS Bool
+    VAR line AS String
+    VAR owner AS String
+    VAR pass AS String
+    FOR EACH line IN ReadOr("C:\SYSTEM\USERS.INI", "").Lines()
+        line = line.Trim()
+        IF line.Lower().StartsWith("name=") THEN owner = line.Substring(5, line.Length - 5).Trim()
+        IF line.Lower().StartsWith("password=") THEN pass = line.Substring(9, line.Length - 9)
+    NEXT
+    IF owner = "" OR pw = "" THEN RETURN FALSE
+    RETURN owner.Lower() = name.Trim().Lower() AND pass = pw
 END FUNCTION
 
 ' Keep the member directory in step when someone changes their name.

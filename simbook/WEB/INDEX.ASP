@@ -38,6 +38,7 @@ disk in C:\BOOKDATA, one plain text file at a time.</font></p>
 <tr><td></td><td><input type="submit" value="Login"></td></tr>
 </table>
 </form>
+<p><font size="1"><a href="reset.asp">Forgot your password?</a></font></p>
 <%= BoxTop("Register") %>
 <form action="join.asp" method="post">
 <table cellpadding="3">
