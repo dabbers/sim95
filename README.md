@@ -16,8 +16,8 @@ A series of programs for the sim95 playground
 * [`geosimies/`](geosimies/) – GeoSimies, free GeoCities-style homepages in
   neighborhoods, with a page editor, clip art, hit counters, guestbooks and
   webrings.
-* [`wikisim/`](wikisim/) – WikiSim, a 1996 CD-ROM-style encyclopedia: about a
-  thousand Wikipedia articles, cut back to what was known in 1996.
+* [`wikisim/`](wikisim/) – WikiSim, a 1996 CD-ROM-style encyclopedia: 619
+  Wikipedia articles, cut back to what was known in 1996.
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with Language-Model-of-Certain-Size
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
