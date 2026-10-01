@@ -245,6 +245,27 @@ const apps = {
     done: `Print("Open http://" + NET.HostName.Lower() + "/ in Voyager. Then install the web apps (in any order), and run C:\\PROGRAMS\\MOVEIN.SPK to bring your other machines' data here.")`,
     code: () => moveHomePage + "\n" + read("simhost/SETUP.SPK") + relocateCode(),
   },
+  simsh: {
+    vapor: { id: "SIMSH", name: "Sim Shell", kind: "program", category: "System", run: "C:\\PROGRAMS\\SIMSH.SPK", tasks: "SIMSH;SSHD", startup: "SSHD.RUN", about: "A bash-like shell for SIM95: ls, cd, cat, grep, pipes, redirects, variables, aliases and .SH scripts, plus ssh/scp over the network (rsh with a password; not secure) and sim-get, an apt-like front end to the Vapor store. Installs the sshd server too." },
+    title: "Sim Shell",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes the Sim
+' Shell to C:\\PROGRAMS\\SIMSH.SPK and its remote-shell server to
+' C:\\PROGRAMS\\SSHD.SPK, both sharing one shell engine, starts the server, and
+' adds it to C:\\SYSTEM\\STARTUP\\SSHD.RUN so it runs whenever the machine does.
+' It writes an example C:\\SYSTEM\\SIMSHRC.SH the first time only. The shell
+' then opens. SSHD is rsh with a password: not secure (see README.md).`,
+    copy: [],
+    // the shell engine (CORE.SPK) is built into both programs by the builder
+    generated: [
+      { dest: "C:\\PROGRAMS\\SIMSH.SPK", text: () => read("simsh/src/CORE.SPK") + "\n" + read("simsh/src/NETJOB.SPK") + "\n" + read("simsh/src/WINDOW.SPK") },
+      { dest: "C:\\PROGRAMS\\SSHD.SPK", text: () => read("simsh/src/CORE.SPK") + "\n" + read("simsh/src/SSHD.SPK") },
+    ],
+    dirs: [],
+    first: ["MakeRc()"],
+    last: [`StartService("SSHD", "C:\\PROGRAMS\\SSHD.SPK", "SSHD.RUN")`, `SYS.Start("C:\\PROGRAMS\\SIMSH.SPK", "")`],
+    done: `Print("The Sim Shell is open, and sshd is listening on port 22. Next time, start C:\\PROGRAMS\\SIMSH.SPK from Files.")`,
+    code: () => startService + read("simsh/src/SIMSHRC.SPK"),
+  },
   eliza: {
     folder: "ELIZA",
     vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },

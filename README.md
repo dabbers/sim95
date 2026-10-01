@@ -19,6 +19,8 @@ A series of programs for the sim95 playground
   program with a JavaScript interpreter written in SPARK.
 * [`simhost/`](simhost/) – SimHost: every web app on one machine, each in a
   folder of its own, and Move In to bring the other machines' data over.
+* [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
+  scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
   programs and `.ASP` pages from Node, including several machines on a
   pretend network running real programs.
@@ -35,4 +37,4 @@ machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird, clippy, vapor, simhost). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy, vapor, simhost, simsh). Rebuild the installers with `node tools/build-installer.mjs`.
