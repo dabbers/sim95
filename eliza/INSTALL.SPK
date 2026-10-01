@@ -774,7 +774,28 @@ SUB File0 ()
     t = t + "         + ""    PAGE.Get(""""answer"""").Text = full"" + Chr(10) _" + NL
     t = t + "         + ""    PAGE.Status = """"Done. ("""" + Str(full.Split("""" """").Count) + """" tokens)"""""" + Chr(10) _" + NL
     t = t + "         + ""END SUB"" + Chr(10) _" + NL
+    t = t + "         + ""</script>"" + Chr(10) _" + NL
+    t = t + "         + ""<script language=""""JavaScript"""">"" + Chr(10) _" + NL
+    t = t + "         + ""// The same for Internet Explorer, which runs JavaScript instead"" + Chr(10) _" + NL
+    t = t + "         + ""var full = """""" + JsQuote(Wrapped(text)) + """""", upTo = 0;"" + Chr(10) _" + NL
+    t = t + "         + ""function typeIt() {"" + Chr(10) _" + NL
+    t = t + "         + ""  upTo += 12;"" + Chr(10) _" + NL
+    t = t + "         + ""  if (upTo >= full.length) {"" + Chr(10) _" + NL
+    t = t + "         + ""    document.getElementById(""""answer"""").innerText = full;"" + Chr(10) _" + NL
+    t = t + "         + ""    window.status = """"Done. ("""" + full.split("""" """").length + """" tokens)"""";"" + Chr(10) _" + NL
+    t = t + "         + ""  } else {"" + Chr(10) _" + NL
+    t = t + "         + ""    document.getElementById(""""answer"""").innerText = full.substring(0, upTo) + """"_"""";"" + Chr(10) _" + NL
+    t = t + "         + ""    window.status = """"ELIZA-95 is typing..."""";"" + Chr(10) _" + NL
+    t = t + "         + ""    setTimeout(typeIt, 20);"" + Chr(10) _" + NL
+    t = t + "         + ""  }"" + Chr(10) _" + NL
+    t = t + "         + ""}"" + Chr(10) _" + NL
+    t = t + "         + ""setTimeout(typeIt, 20);"" + Chr(10) _" + NL
     t = t + "         + ""</script>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Text as a JavaScript string literal's insides." + NL
+    t = t + "FUNCTION JsQuote (s AS String) AS String" + NL
+    t = t + "    RETURN s.Replace(""\"", ""\\"").Replace("""""""", ""\"""""").Replace(Chr(13), """").Replace(Chr(10), ""\n"").Replace(""</"", ""<\/"")" + NL
     t = t + "END FUNCTION" + NL
     Put("C:\WEB\BOT.SPK")
 END SUB

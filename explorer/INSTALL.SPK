@@ -3358,6 +3358,9 @@ SUB File0 ()
     t = t + "VAR hHref AS Array OF String       ' for a link, where it goes afterwards" + NL
     t = t + "VAR hAfter AS Array OF String      ' ""submit:form:field"" to send a form afterwards" + NL
     t = t + "VAR hThis AS Array OF String       ' the element's id, for this" + NL
+    t = t + "VAR hTyped AS Array OF Bool        ' on a text box: onchange waits for a pause in the typing" + NL
+    t = t + "VAR changeWait AS Integer = -1     ' that handler, and when it is due" + NL
+    t = t + "VAR changeAt AS Integer" + NL
     t = t + "VAR fmAction AS Array OF String" + NL
     t = t + "VAR fmMethod AS Array OF String" + NL
     t = t + "VAR fmName AS Array OF String" + NL
@@ -3903,6 +3906,7 @@ SUB File0 ()
     t = t + "            IF fetching AND (fDone OR SYS.Ticks - fSince > PATIENCE) THEN Arrived()" + NL
     t = t + "            IF pPending AND NOT fetching AND NOT pUrl.Lower().StartsWith(""http:"") THEN ShowLocal()" + NL
     t = t + "            IF NOT busy THEN RunTimers()" + NL
+    t = t + "            IF changeWait >= 0 AND SYS.Ticks >= changeAt AND NOT busy THEN FlushChange()" + NL
     t = t + "            IF refreshAt > 0 AND SYS.Ticks >= refreshAt AND NOT pPending AND NOT busy THEN" + NL
     t = t + "                refreshAt = 0" + NL
     t = t + "                GoWith(refreshUrl, """", FALSE, refreshUrl <> curUrl)" + NL
@@ -4401,6 +4405,7 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "' A js:N handler for an element." + NL
     t = t + "FUNCTION Handler (code AS String, href AS String, after AS String, thisId AS String) AS String" + NL
+    t = t + "    hTyped.Add(FALSE)" + NL
     t = t + "    hCode.Add(code)" + NL
     t = t + "    hHref.Add(href)" + NL
     t = t + "    hAfter.Add(after)" + NL
@@ -4516,6 +4521,9 @@ SUB File0 ()
     t = t + "                    tag = WithAttr(tag, ev, Handler(code, """", after, id))" + NL
     t = t + "                ELSE" + NL
     t = t + "                    tag = WithAttr(tag, ev, Handler(code, """", """", id))" + NL
+    t = t + "                    ' the view says onchange at every key; Internet Explorer said" + NL
+    t = t + "                    ' it once, on leaving the box" + NL
+    t = t + "                    IF ev = ""onchange"" AND (name = ""textarea"" OR (name = ""input"" AND (kind = ""text"" OR kind = ""password""))) THEN hTyped[hTyped.Count - 1] = TRUE" + NL
     t = t + "                END IF" + NL
     t = t + "            ELSEIF ev = ""onclick"" AND after <> """" THEN" + NL
     t = t + "                tag = WithAttr(tag, ev, Handler("""", """", after, id))" + NL
@@ -4556,6 +4564,8 @@ SUB File0 ()
     t = t + "    hHref.Clear()" + NL
     t = t + "    hAfter.Clear()" + NL
     t = t + "    hThis.Clear()" + NL
+    t = t + "    hTyped.Clear()" + NL
+    t = t + "    changeWait = -1" + NL
     t = t + "    fmAction.Clear()" + NL
     t = t + "    fmMethod.Clear()" + NL
     t = t + "    fmName.Clear()" + NL
@@ -4788,6 +4798,26 @@ SUB File0 ()
     t = t + "    IF busy OR NOT code.StartsWith(""js:"") THEN RETURN" + NL
     t = t + "    n = Int(Val(code.Substring(3, code.Length - 3)))" + NL
     t = t + "    IF n < 0 OR n >= hCode.Count THEN RETURN" + NL
+    t = t + "    IF ev = ""onchange"" AND hTyped[n] THEN" + NL
+    t = t + "        changeWait = n" + NL
+    t = t + "        changeAt = SYS.Ticks + 800" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    FlushChange()" + NL
+    t = t + "    IF n < hCode.Count THEN RunHandler(n)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' A click or a submit leaves the text box: its onchange comes first." + NL
+    t = t + "SUB FlushChange ()" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    IF changeWait < 0 THEN RETURN" + NL
+    t = t + "    n = changeWait" + NL
+    t = t + "    changeWait = -1" + NL
+    t = t + "    RunHandler(n)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB RunHandler (n AS Integer)" + NL
+    t = t + "    VAR parts AS Array OF String" + NL
     t = t + "    IF hCode[n] <> """" AND scriptsOn THEN" + NL
     t = t + "        IF hThis[n] = """" THEN" + NL
     t = t + "            IF NOT RunCode(hCode[n], """", """") THEN RETURN" + NL
@@ -4805,6 +4835,7 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "SUB View_OnNavigate (url AS String)" + NL
     t = t + "    IF busy THEN RETURN" + NL
+    t = t + "    FlushChange()" + NL
     t = t + "    IF url.Contains(""iesubmit:"") THEN" + NL
     t = t + "        url = url.Substring(url.IndexOf(""iesubmit:"") + 9, url.Length - url.IndexOf(""iesubmit:"") - 9)" + NL
     t = t + "        IF url.Contains(""?"") THEN" + NL
@@ -4837,6 +4868,7 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "SUB View_OnSubmit (url AS String, body AS String, files AS String)" + NL
     t = t + "    IF busy THEN RETURN" + NL
+    t = t + "    FlushChange()" + NL
     t = t + "    IF url.Contains(""iesubmit:"") THEN" + NL
     t = t + "        FormSent(Int(Val(url.Substring(url.IndexOf(""iesubmit:"") + 9, url.Length - url.IndexOf(""iesubmit:"") - 9))), body, files)" + NL
     t = t + "        RETURN" + NL

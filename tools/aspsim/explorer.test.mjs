@@ -82,6 +82,11 @@ page("both.htm", `<html><head><title>Both</title>
 END SUB</script>
 <script language="JavaScript">document.title = "IE was here";</script>
 </head><body onload="Page_Load"><p>Works in both browsers.</p></body></html>`);
+page("change.htm", `<html><head><title>Changes</title></head><body>
+<input id="shout" onchange="runs++; document.getElementById('runs').innerText = runs; document.getElementById('echo').innerText = this.value.toUpperCase()">
+<span id="echo"></span> <span id="runs">0</span> <span id="order"></span>
+<input type="button" value="Done" onclick="document.getElementById('order').innerText = document.getElementById('echo').innerText + ' then click'">
+<script>var runs = 0;</script></body></html>`);
 page("prompt.htm", `<html><head><title>Asking</title></head><body><script>
 var n = prompt("What is your name?", "Bob");
 document.write(n == null ? "You said nothing." : "Hi " + n + "!");
@@ -95,7 +100,7 @@ await test("the installer writes IEXPLORE.SPK and starts it", async () => {
   const pid = alpha.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !alpha.running(pid), 60000, "the installer");
   assert.match(alpha.output(pid), /Internet Explorer is installed \(1 files\)\.\n  wrote|wrote C:\\PROGRAMS\\IEXPLORE.SPK[\s\S]*Internet Explorer is running/);
-  assert.equal(alpha.read("C:\\PROGRAMS\\IEXPLORE.SPK"), fs.readFileSync(path.join(root, "explorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "explorer/src/BROWSER.SPK"), "utf8"));
+  assert.ok(alpha.read("C:\\PROGRAMS\\IEXPLORE.SPK") === fs.readFileSync(path.join(root, "explorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "explorer/src/BROWSER.SPK"), "utf8"), "explorer/INSTALL.SPK is out of date: node tools/build-installer.mjs explorer");
   const started = () => alpha.kernel.ps().find((p) => p.name === "IEXPLORE");
   await net.until(() => started() && alpha.widgets(started().pid, "HtmlView").length, 30000, "Internet Explorer");
   assert.deepEqual(alpha.errors, []);
@@ -117,6 +122,7 @@ const dialogs = () => alpha.ui.dialogs.splice(0);
 const fireScript = async (id) => { const e = el(id) || [...view().elements.values()].find((x) => x.Value === id); view().fire("onScript", "onclick", /onclick="([^"]*)"/.exec(e.attrs)[1]); };
 // the js:N an element's onclick became, found by something in its tag
 const onclickOf = (bit) => { const tag = html().split("<").find((t) => t.includes(bit) && /onclick="js:\d+"/.test(t)); assert.ok(tag, "no handler on " + bit); return /onclick="(js:\d+)"/.exec(tag)[1]; };
+const onChangeOf = (id) => /onchange="(js:\d+)"/.exec(html().split("<").find((t) => t.includes(`id="${id}"`)))[1];
 const button = (name) => alpha.button(ie, name);
 await net.until(() => alpha.widgets(ie, "HtmlView").length > 0 || alpha.errors.length, 30000, "the window");
 const go = async (url) => { addressBox().set("Text", url); addressBox().fire("onEnter"); };
@@ -149,6 +155,21 @@ await test("onclick runs JavaScript that changes the page, and alert() shows a b
   view().fire("onScript", "onclick", onclickOf('value="Hello"'));
   await wait(() => alpha.ui.dialogs.length === 1, "the alert");
   assert.deepEqual(dialogs().map((d) => [d.title, d.kind, d.text]), [["Microsoft Internet Explorer", "warn", "Hello from bravo"]]);
+});
+
+await test("a text box's onchange waits for the typing to stop, as leaving the box did", async () => {
+  await go("bravo/change.htm");
+  await loaded("Changes");
+  const box = onChangeOf("shout");
+  for (const text of ["h", "he", "hello"]) { view().call("SetElement", "shout", "Value", text); view().fire("onScript", "onchange", box); }
+  await wait(() => el("echo").Text === "HELLO", "the handler");
+  assert.equal(el("runs").Text, "1", "once, not three times");
+  view().call("SetElement", "shout", "Value", "bye");
+  view().fire("onScript", "onchange", box);
+  view().fire("onScript", "onclick", onclickOf('value="Done"'));
+  await wait(() => el("order").Text === "BYE then click", "change before click");
+  await go("bravo/script.htm");
+  await loaded("Scripted");
 });
 
 await test("a link's onclick can stop it; javascript: links run", async () => {
@@ -335,7 +356,7 @@ await test("SimBook in Internet Explorer: join, post, and its SPARK counter left
   assert.deepEqual(alpha.errors, []);
 });
 
-await test("ELIZA-95 in Internet Explorer: the answer is there without Voyager's typing", async () => {
+await test("ELIZA-95 in Internet Explorer: the answer types itself out in JavaScript", async () => {
   delta.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "eliza/INSTALL.SPK"), "utf8"));
   const pid = delta.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !delta.running(pid), 30000, "ELIZA's installer");
@@ -343,7 +364,9 @@ await test("ELIZA-95 in Internet Explorer: the answer is there without Voyager's
   await go("delta");
   await wait(() => /name="say"/.test(html()) && status().startsWith("Done"), "ELIZA");
   await submit(0, { say: "build me a website about modems" });
-  await wait(() => /import website/.test(el("answer")?.Text || ""), "the answer");
+  await wait(() => /_$/.test(el("answer")?.Text || ""), "the answer typing itself out (in JavaScript, for IE)");
+  await wait(() => /^Done\. \(\d+ tokens\)$/.test(status()), "the typing to finish");
+  assert.match(el("answer").Text, /import website/);
   assert.deepEqual(dialogs(), []);
 });
 

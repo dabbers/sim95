@@ -39,8 +39,8 @@ The JavaScript of 1996, with a few later conveniences.
 
 * **Language:**
   * `var`, functions, closures, `this`, `new` and prototypes.
-  * `if`, `while`, `do`, `for`, `for-in`, `switch`, `try`/`catch`/`finally`
-    and labels-free `break`/`continue`.
+  * `if`, `while`, `do`, `for`, `for-in`, `switch`, `try`/`catch`/`finally`,
+    `break` and `continue`.
   * `typeof`, `in`, `instanceof` and `eval`.
 * **Built-in objects:** `Math`, `Date` (with IE's `getYear()` quirk),
   `String`, `Array`, `Number`, `parseInt`, `escape` and `unescape`.

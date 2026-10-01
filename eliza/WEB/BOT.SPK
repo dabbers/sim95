@@ -742,5 +742,26 @@ FUNCTION TypeScript (text AS String) AS String
          + "    PAGE.Get(""answer"").Text = full" + Chr(10) _
          + "    PAGE.Status = ""Done. ("" + Str(full.Split("" "").Count) + "" tokens)""" + Chr(10) _
          + "END SUB" + Chr(10) _
+         + "</script>" + Chr(10) _
+         + "<script language=""JavaScript"">" + Chr(10) _
+         + "// The same for Internet Explorer, which runs JavaScript instead" + Chr(10) _
+         + "var full = """ + JsQuote(Wrapped(text)) + """, upTo = 0;" + Chr(10) _
+         + "function typeIt() {" + Chr(10) _
+         + "  upTo += 12;" + Chr(10) _
+         + "  if (upTo >= full.length) {" + Chr(10) _
+         + "    document.getElementById(""answer"").innerText = full;" + Chr(10) _
+         + "    window.status = ""Done. ("" + full.split("" "").length + "" tokens)"";" + Chr(10) _
+         + "  } else {" + Chr(10) _
+         + "    document.getElementById(""answer"").innerText = full.substring(0, upTo) + ""_"";" + Chr(10) _
+         + "    window.status = ""ELIZA-95 is typing..."";" + Chr(10) _
+         + "    setTimeout(typeIt, 20);" + Chr(10) _
+         + "  }" + Chr(10) _
+         + "}" + Chr(10) _
+         + "setTimeout(typeIt, 20);" + Chr(10) _
          + "</script>"
+END FUNCTION
+
+' Text as a JavaScript string literal's insides.
+FUNCTION JsQuote (s AS String) AS String
+    RETURN s.Replace("\", "\\").Replace("""", "\""").Replace(Chr(13), "").Replace(Chr(10), "\n").Replace("</", "<\/")
 END FUNCTION

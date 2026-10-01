@@ -108,6 +108,9 @@ VAR hCode AS Array OF String       ' js:N handlers: the code
 VAR hHref AS Array OF String       ' for a link, where it goes afterwards
 VAR hAfter AS Array OF String      ' "submit:form:field" to send a form afterwards
 VAR hThis AS Array OF String       ' the element's id, for this
+VAR hTyped AS Array OF Bool        ' on a text box: onchange waits for a pause in the typing
+VAR changeWait AS Integer = -1     ' that handler, and when it is due
+VAR changeAt AS Integer
 VAR fmAction AS Array OF String
 VAR fmMethod AS Array OF String
 VAR fmName AS Array OF String
@@ -653,6 +656,7 @@ SUB Tick ()
             IF fetching AND (fDone OR SYS.Ticks - fSince > PATIENCE) THEN Arrived()
             IF pPending AND NOT fetching AND NOT pUrl.Lower().StartsWith("http:") THEN ShowLocal()
             IF NOT busy THEN RunTimers()
+            IF changeWait >= 0 AND SYS.Ticks >= changeAt AND NOT busy THEN FlushChange()
             IF refreshAt > 0 AND SYS.Ticks >= refreshAt AND NOT pPending AND NOT busy THEN
                 refreshAt = 0
                 GoWith(refreshUrl, "", FALSE, refreshUrl <> curUrl)
@@ -1151,6 +1155,7 @@ END FUNCTION
 
 ' A js:N handler for an element.
 FUNCTION Handler (code AS String, href AS String, after AS String, thisId AS String) AS String
+    hTyped.Add(FALSE)
     hCode.Add(code)
     hHref.Add(href)
     hAfter.Add(after)
@@ -1266,6 +1271,9 @@ FUNCTION ProcessTags (html AS String) AS String
                     tag = WithAttr(tag, ev, Handler(code, "", after, id))
                 ELSE
                     tag = WithAttr(tag, ev, Handler(code, "", "", id))
+                    ' the view says onchange at every key; Internet Explorer said
+                    ' it once, on leaving the box
+                    IF ev = "onchange" AND (name = "textarea" OR (name = "input" AND (kind = "text" OR kind = "password"))) THEN hTyped[hTyped.Count - 1] = TRUE
                 END IF
             ELSEIF ev = "onclick" AND after <> "" THEN
                 tag = WithAttr(tag, ev, Handler("", "", after, id))
@@ -1306,6 +1314,8 @@ SUB NewPage ()
     hHref.Clear()
     hAfter.Clear()
     hThis.Clear()
+    hTyped.Clear()
+    changeWait = -1
     fmAction.Clear()
     fmMethod.Clear()
     fmName.Clear()
@@ -1538,6 +1548,26 @@ SUB View_OnScript (ev AS String, code AS String)
     IF busy OR NOT code.StartsWith("js:") THEN RETURN
     n = Int(Val(code.Substring(3, code.Length - 3)))
     IF n < 0 OR n >= hCode.Count THEN RETURN
+    IF ev = "onchange" AND hTyped[n] THEN
+        changeWait = n
+        changeAt = SYS.Ticks + 800
+        RETURN
+    END IF
+    FlushChange()
+    IF n < hCode.Count THEN RunHandler(n)
+END SUB
+
+' A click or a submit leaves the text box: its onchange comes first.
+SUB FlushChange ()
+    VAR n AS Integer
+    IF changeWait < 0 THEN RETURN
+    n = changeWait
+    changeWait = -1
+    RunHandler(n)
+END SUB
+
+SUB RunHandler (n AS Integer)
+    VAR parts AS Array OF String
     IF hCode[n] <> "" AND scriptsOn THEN
         IF hThis[n] = "" THEN
             IF NOT RunCode(hCode[n], "", "") THEN RETURN
@@ -1555,6 +1585,7 @@ END SUB
 
 SUB View_OnNavigate (url AS String)
     IF busy THEN RETURN
+    FlushChange()
     IF url.Contains("iesubmit:") THEN
         url = url.Substring(url.IndexOf("iesubmit:") + 9, url.Length - url.IndexOf("iesubmit:") - 9)
         IF url.Contains("?") THEN
@@ -1587,6 +1618,7 @@ END SUB
 
 SUB View_OnSubmit (url AS String, body AS String, files AS String)
     IF busy THEN RETURN
+    FlushChange()
     IF url.Contains("iesubmit:") THEN
         FormSent(Int(Val(url.Substring(url.IndexOf("iesubmit:") + 9, url.Length - url.IndexOf("iesubmit:") - 9))), body, files)
         RETURN
