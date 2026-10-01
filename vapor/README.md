@@ -72,7 +72,8 @@ that store, and starts it.
   `C:\GAMES\<ID>\<ID>.SPK`. A program or web app downloads its installer,
   which Vapor runs.
   * A web app asks first: it becomes this machine's home page, and a machine
-    has room for one.
+    has room for one. On a [SimHost](../simhost/) machine, it goes into a
+    folder of its own (`/book/`, `/mail/`...) without asking.
 * **Library:** **Play** a game, or **Open** a program (a web app opens in the
   browser). Games count play time and show their achievements, which they
   keep in `C:\GAMES\<ID>\ACHIEVE.TXT`.

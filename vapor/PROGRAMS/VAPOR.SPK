@@ -34,6 +34,7 @@ CONST STOREDIR = "C:\WEB\VAPOR"
 CONST BROWSER = "C:\PROGRAMS\SIMXPLOR.SPK"
 CONST PATIENCE = 8000
 CONST PART = 15000
+CONST WEBAPPS = "C:\SYSTEM\WEBAPPS.INI"
 
 VAR EOL AS String
 VAR win AS GUI_Window
@@ -490,7 +491,7 @@ SUB Want (line AS String)
     VAR other AS String
     VAR l AS String
     IF Busy(Field(line, 0)) THEN RETURN
-    IF Field(line, 7) = "web" AND NOT Installed(Field(line, 0)) THEN
+    IF Field(line, 7) = "web" AND NOT Installed(Field(line, 0)) AND NOT (Folders() AND Field(line, 13) <> "") THEN
         FOR EACH l IN Library()
             IF Field(l, 7) = "web" THEN other = Field(l, 1)
         NEXT
@@ -522,7 +523,7 @@ SUB Launch (id AS String)
         run = Field(lib, 8)
     END IF
     IF kind = "web" THEN
-        url = "http://" + NET.HostName.Lower() + "/"
+        url = WebUrl(Field(lib, 12))
         IF FS.Exists(BROWSER) THEN
             SYS.Start(BROWSER, url)
         ELSE
@@ -592,11 +593,11 @@ SUB Uninstall (lib AS String)
     NEXT
     FOR EACH f IN Field(lib, 9).Split(";")
         IF f <> "" AND f.Upper() <> ME THEN
-            IF FS.Exists(f) THEN FS.Delete(f)
+            IF FS.Exists(Where(f, Field(lib, 12))) THEN FS.Delete(Where(f, Field(lib, 12)))
         END IF
     NEXT
-    ' a web app gives the home page back
-    IF Field(lib, 7) = "web" AND NOT FS.Exists("C:\WEB\INDEX.HTM") AND FS.Exists("C:\WEB\WELCOME.HTM") THEN FS.Rename("C:\WEB\WELCOME.HTM", "C:\WEB\INDEX.HTM")
+    ' a web app gives the home page back (unless it had a folder of its own)
+    IF Field(lib, 7) = "web" AND (Field(lib, 12) = "" OR NOT Folders()) AND NOT FS.Exists("C:\WEB\INDEX.HTM") AND FS.Exists("C:\WEB\WELCOME.HTM") THEN FS.Rename("C:\WEB\WELCOME.HTM", "C:\WEB\INDEX.HTM")
     IF FS.Exists(HOME + "\" + id) THEN
         FOR EACH f IN FS.List(HOME + "\" + id)
             IF NOT f.EndsWith("\") THEN FS.Delete(HOME + "\" + id + "\" + f)
@@ -631,7 +632,7 @@ SUB Keep (line AS String)
             found = TRUE
         END IF
     NEXT
-    l = Field(line, 0) + "|" + Field(line, 1) + "|" + first + "|" + seconds + "|" + Field(line, 5) + "|" + Field(line, 6) + "|" + Field(line, 8) + "|" + Field(line, 7) + "|" + Field(line, 9) + "|" + Field(line, 10) + "|" + Field(line, 11) + "|" + Field(line, 12)
+    l = Field(line, 0) + "|" + Field(line, 1) + "|" + first + "|" + seconds + "|" + Field(line, 5) + "|" + Field(line, 6) + "|" + Field(line, 8) + "|" + Field(line, 7) + "|" + Field(line, 9) + "|" + Field(line, 10) + "|" + Field(line, 11) + "|" + Field(line, 12) + "|" + Field(line, 13)
     FOR EACH line IN Library()
         IF Field(line, 0) = Field(l, 0) THEN
             out.Add(l)
@@ -698,7 +699,7 @@ SUB Tick ()
     ' that has printed keeps its console open. So it is done when every file
     ' it writes is there, or when it ends.)
     IF setupLine <> "" THEN
-        IF NOT Alive(setupPid) OR (SYS.Ticks - setupSince > 300 AND AllThere(Field(setupLine, 10))) OR SYS.Ticks - setupSince > 60000 THEN
+        IF NOT Alive(setupPid) OR (SYS.Ticks - setupSince > 300 AND AllThere(Field(setupLine, 10), Field(setupLine, 13))) OR SYS.Ticks - setupSince > 60000 THEN
             Keep(setupLine)
             win.Status = Field(setupLine, 1) + " is installed."
             note.Text = Field(setupLine, 1) + " is ready."
@@ -734,13 +735,32 @@ SUB Tick ()
     END IF
 END SUB
 
-FUNCTION AllThere (files AS String) AS Bool
+FUNCTION AllThere (files AS String, folder AS String) AS Bool
     VAR f AS String
     IF files = "" THEN RETURN FALSE
     FOR EACH f IN files.Split(";")
-        IF f <> "" AND NOT FS.Exists(f) THEN RETURN FALSE
+        IF f <> "" AND NOT FS.Exists(Where(f, folder)) THEN RETURN FALSE
     NEXT
     RETURN TRUE
+END FUNCTION
+
+' A machine set up for several web apps (SimHost's C:\SYSTEM\WEBAPPS.INI says
+' mode=folders) keeps each in its own folder, C:\WEB\BOOK and so on.
+FUNCTION Folders () AS Bool
+    RETURN ReadOr(WEBAPPS, "").Contains("mode=folders")
+END FUNCTION
+
+' Where a web app's file really is: C:\WEB\BOOK.SPK -> C:\WEB\BOOK\BOOK.SPK
+FUNCTION Where (f AS String, folder AS String) AS String
+    IF folder = "" OR NOT Folders() THEN RETURN f
+    IF NOT f.Upper().StartsWith("C:\WEB\") THEN RETURN f
+    RETURN "C:\WEB\" + folder + "\" + f.Substring(7, f.Length - 7)
+END FUNCTION
+
+' The address of a web app: the machine, or its folder there.
+FUNCTION WebUrl (folder AS String) AS String
+    IF folder <> "" AND Folders() THEN RETURN "http://" + NET.HostName.Lower() + "/" + folder.Lower() + "/"
+    RETURN "http://" + NET.HostName.Lower() + "/"
 END FUNCTION
 
 SUB AddTime (id AS String, seconds AS Integer)
@@ -893,14 +913,18 @@ SUB Finish ()
         ShowTab(tab)
         RETURN
     END IF
-    ' an installer: clear away the old files it writes, run it, and wait for them
+    ' an installer: clear away the old files it writes (an update: a new
+    ' install may need what is there, as SimHost moves web apps), run it, and
+    ' wait for them
     FS.Write(dir + "\INSTALL.SPK", dlText)
     dlText = ""
-    FOR EACH f IN Field(line, 10).Split(";")
-        IF f <> "" AND f.Upper() <> ME THEN
-            IF FS.Exists(f) THEN FS.Delete(f)
-        END IF
-    NEXT
+    IF Installed(Field(line, 0)) THEN
+        FOR EACH f IN Field(line, 10).Split(";")
+            IF f <> "" AND f.Upper() <> ME THEN
+                IF FS.Exists(Where(f, Field(line, 13))) THEN FS.Delete(Where(f, Field(line, 13)))
+            END IF
+        NEXT
+    END IF
     setupLine = line
     setupSince = SYS.Ticks
     setupPid = SYS.Run(dir + "\INSTALL.SPK")
@@ -991,7 +1015,7 @@ FUNCTION PublishOne (text AS String) AS String
         n = n + 1
         FS.Write(dir + "\" + Str(n) + ".TXT", chunk)
     END IF
-    entry = id + "|" + Meta(header, "name") + "|" + Str(n) + "|" + Str(text.Length) + "|ok|" + Meta(header, "category") + "|" + Meta(header, "about") + "|" + Meta(header, "kind") + "|" + Meta(header, "version") + "|" + Meta(header, "run") + "|" + Meta(header, "files") + "|" + Meta(header, "tasks") + "|" + Meta(header, "startup")
+    entry = id + "|" + Meta(header, "name") + "|" + Str(n) + "|" + Str(text.Length) + "|ok|" + Meta(header, "category") + "|" + Meta(header, "about") + "|" + Meta(header, "kind") + "|" + Meta(header, "version") + "|" + Meta(header, "run") + "|" + Meta(header, "files") + "|" + Meta(header, "tasks") + "|" + Meta(header, "startup") + "|" + Meta(header, "folder").Upper()
     FOR EACH line IN ReadOr(STOREDIR + "\CATALOG.TXT", "").Lines()
         IF line = "" THEN CONTINUE
         IF Field(line, 0) = id THEN

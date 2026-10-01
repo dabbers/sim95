@@ -279,7 +279,9 @@ SUB LoadSettings ()
         ' this machine's AskSim and ColdMail when it has them.
         optHome = here
         IF FS.Exists("C:\WEB\ASK.SPK") THEN optSearch = here + "index.asp?q=%s"
+        IF FS.Exists("C:\WEB\ASK\ASK.SPK") THEN optSearch = here + "ask/index.asp?q=%s"
         IF FS.Exists("C:\WEB\MAIL.SPK") THEN optMail = here
+        IF FS.Exists("C:\WEB\MAIL\MAIL.SPK") THEN optMail = here + "mail/"
         SaveSettings()
         IF NOT FS.Exists(FAVFILE) THEN ImportBookmarks()
         RETURN

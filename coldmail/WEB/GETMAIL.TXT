@@ -8,10 +8,12 @@
 ' to the next person in the same way. Your mail in C:\MAILDATA is never touched.
 
 CONST FROM = "%HOST%"
+CONST BASE = "%BASE%"          ' where ColdMail's pages are on FROM: "/" or "/mail/"
 
 VAR web AS NET_Socket
 VAR parts AS Array OF String
 VAR done AS Bool
+VAR intoDir AS String         ' "" for the web root, or MAIL on a machine that keeps web apps in folders
 
 SUB Main ()
     ' A failed Connect spoils the handler it happens in (see Fetch), so all of
@@ -33,29 +35,43 @@ SUB Install ()
     web.onMessage = Web_OnMessage
     web.onClose = Web_OnClose
     Print("Fetching ColdMail from " + FROM + "...")
-    manifest = Fetch("/dist/manifest.txt")
+    manifest = Fetch(BASE + "dist/manifest.txt")
     IF manifest = "" THEN RETURN
-    IF NOT FS.Exists("C:\WEB\DIST") THEN FS.MakeDir("C:\WEB\DIST")
-    MoveHomePage()
+    IF FS.Exists("C:\SYSTEM\WEBAPPS.INI") THEN
+        IF FS.Read("C:\SYSTEM\WEBAPPS.INI").Contains("mode=folders") THEN intoDir = "MAIL"
+    END IF
+    IF intoDir <> "" AND NOT FS.Exists("C:\WEB\MAIL") THEN FS.MakeDir("C:\WEB\MAIL")
+    IF NOT FS.Exists(Dest("C:\WEB\DIST")) THEN FS.MakeDir(Dest("C:\WEB\DIST"))
+    IF intoDir = "" THEN MoveHomePage()
     FOR EACH line IN manifest.Lines()
         IF line.Split("|").Count < 2 THEN CONTINUE
-        text = Fetch("/dist/" + line.Split("|")[0] + ".txt")
+        text = Fetch(BASE + "dist/" + line.Split("|")[0] + ".txt")
         IF text = "" THEN RETURN
-        FS.Write(line.Split("|")[1], text)
-        FS.Write("C:\WEB\DIST\" + line.Split("|")[0] + ".TXT", text)
+        FS.Write(Dest(line.Split("|")[1]), text)
+        FS.Write(Dest("C:\WEB\DIST\" + line.Split("|")[0] + ".TXT"), text)
         shared = shared + line + Chr(10)
-        Print("  wrote " + line.Split("|")[1])
+        Print("  wrote " + Dest(line.Split("|")[1]))
         n = n + 1
     NEXT
-    FS.Write("C:\WEB\DIST\MANIFEST.TXT", shared)
+    FS.Write(Dest("C:\WEB\DIST\MANIFEST.TXT"), shared)
     FS.Write("C:\SYSTEM\STARTUP\MAIL.RUN", "C:\PROGRAMS\MAILD.SPK")
     FOR EACH task IN SYS.Tasks()
         IF task.Split("|")[1].Upper() = "MAILD" THEN SYS.Kill(Int(Val(task.Split("|")[0])))
     NEXT
     SYS.Run("C:\PROGRAMS\MAILD.SPK")
     Print("ColdMail is installed (" + Str(n) + " files) and your mail server is running.")
-    Print("Open http://" + NET.HostName.Lower() + "/ in Voyager and sign up.")
+    IF intoDir = "" THEN
+        Print("Open http://" + NET.HostName.Lower() + "/ in Voyager and sign up.")
+    ELSE
+        Print("Open http://" + NET.HostName.Lower() + "/mail/ in Voyager and sign up.")
+    END IF
 END SUB
+
+' Where a file goes: in C:\WEB\MAIL, on a machine that keeps web apps in folders.
+FUNCTION Dest (path AS String) AS String
+    IF intoDir <> "" AND path.Upper().StartsWith("C:\WEB\") THEN RETURN "C:\WEB\" + intoDir + "\" + path.Substring(7, path.Length - 7)
+    RETURN path
+END FUNCTION
 
 ' One file over the web. Answers come in through the socket's events; there is
 ' no Receive, because a Receive that ends in "connection closed" would spoil

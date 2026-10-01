@@ -29,8 +29,21 @@
 ' stop after a screenful, and the feed only looks back through recent posts.
 
 CONST DATADIR = "C:\BOOKDATA"
-CONST PICDIR = "C:\WEB\PICS"
-CONST PHOTODIR = "C:\WEB\PHOTOS"
+' Pictures and photos live beside the pages (C:\WEB\PICS, or C:\WEB\BOOK\PICS
+' when SimBook is in a folder of its own), so the pages can link to them as pics/...
+FUNCTION AppDir () AS String
+    VAR page AS String
+    page = SERVER.ScriptName
+    RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
+END FUNCTION
+
+FUNCTION PicDir () AS String
+    RETURN AppDir() + "\PICS"
+END FUNCTION
+
+FUNCTION PhotoDir () AS String
+    RETURN AppDir() + "\PHOTOS"
+END FUNCTION
 CONST COOKIE = "simbook"
 CONST FEEDSIZE = 25
 CONST LOGSIZE = 500           ' posts to a log file; MIGRATE.SPK knows this too
@@ -66,8 +79,8 @@ SUB EnsureDisk ()
     FOR EACH dir IN dirs
         IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
     NEXT
-    IF NOT FS.Exists(PICDIR) THEN FS.MakeDir(PICDIR)
-    IF NOT FS.Exists(PHOTODIR) THEN FS.MakeDir(PHOTODIR)
+    IF NOT FS.Exists(PicDir()) THEN FS.MakeDir(PicDir())
+    IF NOT FS.Exists(PhotoDir()) THEN FS.MakeDir(PhotoDir())
 END SUB
 
 FUNCTION ReadOr (path AS String, fallback AS String) AS String
@@ -224,7 +237,7 @@ SUB RenamePerson (u AS String, name AS String)
 END SUB
 
 FUNCTION HasPicture (u AS String) AS Bool
-    RETURN FS.Exists(PICDIR + "\" + u + ".PIC")
+    RETURN FS.Exists(PicDir() + "\" + u + ".PIC")
 END FUNCTION
 
 ' A picture is a SIM95PIC file: "SIM95PIC width height", then a row of hex digits
@@ -243,7 +256,7 @@ FUNCTION SavePicture (u AS String, pic AS String) AS String
     problem = CheckPicture(pic, PICSIZE, MAXPIC)
     IF problem <> "" THEN RETURN problem
     EnsureDisk()
-    FS.Write(PICDIR + "\" + u + ".PIC", pic)
+    FS.Write(PicDir() + "\" + u + ".PIC", pic)
     RETURN ""
 END FUNCTION
 
@@ -499,7 +512,7 @@ SUB DeletePost (line AS String)
     path = DATADIR + "\REPLIES\" + p[0] + ".TXT"
     IF FS.Exists(path) THEN FS.Delete(path)
     IF IsPhoto(p[0]) THEN
-        FS.Delete(PHOTODIR + "\" + p[0] + ".PIC")
+        FS.Delete(PhotoDir() + "\" + p[0] + ".PIC")
         path = DATADIR + "\ALBUMS\" + p[2] + ".TXT"
         IF FS.Exists(path) THEN FS.Write(path, FS.Read(path).Replace("|" + p[0] + "|", "|"))
     END IF
@@ -723,7 +736,7 @@ END SUB
 ' C:\BOOKDATA\ALBUMS\<user>.TXT lists their photos: |12|40|
 
 FUNCTION IsPhoto (id AS String) AS Bool
-    RETURN FS.Exists(PHOTODIR + "\" + id + ".PIC")
+    RETURN FS.Exists(PhotoDir() + "\" + id + ".PIC")
 END FUNCTION
 
 FUNCTION Album (u AS String) AS Array OF String
@@ -745,7 +758,7 @@ FUNCTION AddPhoto (u AS String, pic AS String, caption AS String) AS String
     problem = CheckPicture(pic, PHOTOSIZE, MAXPHOTO)
     IF problem <> "" THEN RETURN problem
     id = WritePost(u, u, caption)
-    FS.Write(PHOTODIR + "\" + Str(id) + ".PIC", pic)
+    FS.Write(PhotoDir() + "\" + Str(id) + ".PIC", pic)
     FS.Write(DATADIR + "\ALBUMS\" + u + ".TXT", ReadOr(DATADIR + "\ALBUMS\" + u + ".TXT", "|") + Str(id) + "|")
     RETURN ""
 END FUNCTION

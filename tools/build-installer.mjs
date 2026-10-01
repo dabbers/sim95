@@ -77,13 +77,13 @@ function cut(text) {
 const version = (text) => crypto.createHash("sha1").update(text).digest("hex").slice(0, 8);
 function header(meta) {
   const clean = (v) => String(v ?? "").replace(/[|\r\n]/g, " ");
-  return "' VAPOR|" + ["id", "name", "kind", "version", "category", "run", "files", "tasks", "startup", "about"].map((k) => k + "=" + clean(meta[k])).join("|");
+  return "' VAPOR|" + ["id", "name", "kind", "version", "category", "run", "files", "tasks", "startup", "folder", "about"].map((k) => k + "=" + clean(meta[k])).join("|");
 }
 // A catalog line for a file with a header:
-//   id|name|parts|bytes|status|category|about|kind|version|run|files|tasks|startup
+//   id|name|parts|bytes|status|category|about|kind|version|run|files|tasks|startup|folder
 function catalogLine(text, parts) {
   const m = Object.fromEntries(text.split("\n")[0].slice("' VAPOR|".length).split("|").map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
-  return [m.id, m.name, parts, text.length, "ok", m.category, m.about, m.kind, m.version, m.run, m.files, m.tasks, m.startup].join("|");
+  return [m.id, m.name, parts, text.length, "ok", m.category, m.about, m.kind, m.version, m.run, m.files, m.tasks, m.startup, m.folder ?? ""].join("|");
 }
 const withHeader = (meta, body) => header({ ...meta, version: version(body) }) + "\n" + body;
 const vaporClient = () => withHeader({ id: "VAPOR", name: "Vapor", kind: "client", category: "Vapor", run: "C:\\PROGRAMS\\VAPOR.SPK", files: "C:\\PROGRAMS\\VAPOR.SPK", tasks: "VAPOR", about: "The Vapor program itself." }, read("vapor/PROGRAMS/VAPOR.SPK"));
@@ -109,7 +109,8 @@ function vaporStore() {
 
 const apps = {
   simbook: {
-    vapor: { id: "SIMBOOK", name: "SimBook", kind: "web", category: "Social", run: "/", tasks: "", startup: "", about: "The social network for the SIM95 network: profiles, friends, a news feed, walls, photos and pokes. Becomes this machine's home page." },
+    folder: "BOOK",
+    vapor: { folder: "BOOK", id: "SIMBOOK", name: "SimBook", kind: "web", category: "Social", run: "/", tasks: "", startup: "", about: "The social network for the SIM95 network: profiles, friends, a news feed, walls, photos and pokes. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "SimBook",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimBook becomes
 ' this machine's home page: its pages go into C:\\WEB, and the stock INDEX.HTM is
@@ -118,13 +119,15 @@ const apps = {
 ' SimBook without losing anybody. Then open http://YOURNAME/ in Voyager.`,
     copy: [["simbook/WEB", "C:\\WEB"]],
     dirs: ["C:\\WEB\\PICS"],
+    moreDirs: ["C:\\WEB\\PHOTOS"],
     first: ["MoveHomePage()", "Migrate()"],
     last: [],
     url: "/",
     code: () => moveHomePage + "\n" + read("simbook/MIGRATE.SPK"),
   },
   coldmail: {
-    vapor: { id: "COLDMAIL", name: "ColdMail", kind: "web", category: "Internet", run: "/", tasks: "MAILD", startup: "MAIL.RUN", about: "Free webmail and a real mail server: send letters to anybody on any machine. Becomes this machine's home page." },
+    folder: "MAIL",
+    vapor: { folder: "MAIL", id: "COLDMAIL", name: "ColdMail", kind: "web", category: "Internet", run: "/", tasks: "MAILD", startup: "MAIL.RUN", about: "Free webmail and a real mail server: send letters to anybody on any machine. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "ColdMail",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
 ' webmail in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
@@ -143,7 +146,8 @@ const apps = {
     code: () => startService + moveHomePage,
   },
   asksim: {
-    vapor: { id: "ASKSIM", name: "AskSim", kind: "web", category: "Internet", run: "/", tasks: "CRAWLER", startup: "ASKSIM.RUN", about: "A search engine with a real crawler that goes round every machine on the network. Becomes this machine's home page." },
+    folder: "ASK",
+    vapor: { folder: "ASK", id: "ASKSIM", name: "AskSim", kind: "web", category: "Internet", run: "/", tasks: "CRAWLER", startup: "ASKSIM.RUN", about: "A search engine with a real crawler that goes round every machine on the network. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "AskSim",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
 ' search pages in C:\\WEB as this machine's home page (the stock INDEX.HTM moves
@@ -223,8 +227,27 @@ const apps = {
     done: `Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")`,
     code: () => "",
   },
+  simhost: {
+    vapor: { id: "SIMHOST", name: "SimHost", kind: "program", category: "System", run: "C:\\PROGRAMS\\MOVEIN.SPK", tasks: "MOVEIN", startup: "", about: "Run every web app on one machine: SimBook, ColdMail, AskSim and ELIZA-95 each get a folder, the home page lists them, and Move In brings over your other machines' data." },
+    title: "SimHost",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It makes this
+' machine a host for every web app at once: C:\\SYSTEM\\WEBAPPS.INI says
+' mode=folders, so SimBook, ColdMail, AskSim and ELIZA-95 each install into a
+' folder of their own (http://YOURNAME/book/, /mail/, /ask/, /eliza/). Any of
+' them already here as the home page moves into its folder, the stock
+' INDEX.HTM moves aside to WELCOME.HTM, and the home page becomes a list of
+' them all. It also writes C:\\PROGRAMS\\MOVEIN.SPK, which copies another
+' machine's data (posts, mail, saves...) here, so that machine can be closed.`,
+    copy: [["simhost/WEB", "C:\\WEB"], ["simhost/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
+    first: ["SetUpHost()"],
+    last: [],
+    done: `Print("Open http://" + NET.HostName.Lower() + "/ in Voyager. Then install the web apps (in any order), and run C:\\PROGRAMS\\MOVEIN.SPK to bring your other machines' data here.")`,
+    code: () => moveHomePage + "\n" + read("simhost/SETUP.SPK") + relocateCode(),
+  },
   eliza: {
-    vapor: { id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page." },
+    folder: "ELIZA",
+    vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "ELIZA-95",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95
 ' in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
@@ -240,6 +263,23 @@ const apps = {
   },
 };
 
+// SimHost moves web apps that were installed as the home page into their
+// folders. It knows what each one wrote in C:\WEB from the lists above.
+function relocateCode() {
+  const web = (key) => apps[key].copy.filter(([, to]) => to === "C:\\WEB").flatMap(([from]) => fs.readdirSync(path.join(root, from)).map((f) => f.toUpperCase()));
+  const keys = Object.keys(apps).filter((k) => apps[k].folder);
+  const count = {};
+  for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", eliza: "BOT.SPK" };
+  const calls = keys.map((k) => {
+    const a = apps[k];
+    const files = web(k);
+    const dirs = [...a.dirs, ...(a.dist ? [a.dist] : []), ...(a.moreDirs || [])].map((d) => d.slice("C:\\WEB\\".length));
+    return `    MoveApp(${lit(a.title)}, ${lit(a.folder)}, ${lit(marker[k])}, ${lit(files.join(";"))}, ${lit(files.filter((f) => count[f] > 1).join(";"))}, ${lit(dirs.join(";"))})`;
+  });
+  return `\nSUB Relocate ()\n${calls.join("\n")}\nEND SUB\n`;
+}
+
 function build(key) {
   const app = apps[key];
   const files = [];
@@ -252,21 +292,38 @@ ${app.about}
 
 VAR t AS String
 VAR NL AS String
+VAR intoDir AS String   ' "" for the web root, or the folder this web app goes in
 
 SUB Main ()
     NL = Chr(10)
-${app.dirs.map((d) => `    IF NOT FS.Exists(${lit(d)}) THEN FS.MakeDir(${lit(d)})`).join("\n")}
-${app.dist ? `    IF NOT FS.Exists(${lit(app.dist)}) THEN FS.MakeDir(${lit(app.dist)})\n    FS.Write(${lit(app.dist + "\\MANIFEST.TXT")}, "")` : ""}
-${app.first.map((s) => "    " + s).join("\n")}
+${app.folder ? `    ' On a machine set up for several web apps (SimHost: C:\\SYSTEM\\WEBAPPS.INI
+    ' says mode=folders), this one goes in C:\\WEB\\${app.folder} and leaves the home page alone.
+    IF FS.Exists("C:\\SYSTEM\\WEBAPPS.INI") THEN
+        IF FS.Read("C:\\SYSTEM\\WEBAPPS.INI").Contains("mode=folders") THEN intoDir = "${app.folder}"
+    END IF
+    IF intoDir <> "" AND NOT FS.Exists("C:\\WEB\\" + intoDir) THEN FS.MakeDir("C:\\WEB\\" + intoDir)` : ""}
+${app.dirs.map((d) => `    IF NOT FS.Exists(Dest(${lit(d)})) THEN FS.MakeDir(Dest(${lit(d)}))`).join("\n")}
+${app.dist ? `    IF NOT FS.Exists(Dest(${lit(app.dist)})) THEN FS.MakeDir(Dest(${lit(app.dist)}))\n    FS.Write(Dest(${lit(app.dist + "\\MANIFEST.TXT")}), "")` : ""}
+${app.first.map((s) => "    " + (s === "MoveHomePage()" ? `IF intoDir = "" THEN MoveHomePage()` : s)).join("\n")}
 ${files.map((f, i) => `    File${i}()`).join("\n")}
     Print("${app.title} is installed (${files.length} files).")
 ${app.last.map((s) => "    " + s).join("\n")}
-    ${app.done || `Print("Open http://" + NET.HostName.Lower() + "${app.url} in Voyager.")`}
+    ${app.done || (app.folder ? `IF intoDir = "" THEN
+        Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
+    ELSE
+        Print("Open http://" + NET.HostName.Lower() + "/" + intoDir.Lower() + "/ in Voyager.")
+    END IF` : `Print("Open http://" + NET.HostName.Lower() + "${app.url} in Voyager.")`)}
 END SUB
 
+' Where a file goes: in this web app's folder, on a machine that keeps them in folders.
+FUNCTION Dest (path AS String) AS String
+    IF intoDir <> "" AND path.Upper().StartsWith("C:\\WEB\\") THEN RETURN "C:\\WEB\\" + intoDir + "\\" + path.Substring(7, path.Length - 7)
+    RETURN path
+END FUNCTION
+
 SUB Put (path AS String)
-    FS.Write(path, t)
-    Print("  wrote " + path)
+    FS.Write(Dest(path), t)
+    Print("  wrote " + Dest(path))
 END SUB
 `;
   files.forEach((f, i) => {
@@ -275,7 +332,7 @@ END SUB
     out += `\nSUB File${i} ()\n    t = ""\n`;
     for (const l of lines) out += `    t = t + ${lit(l)} + NL\n`;
     out += `    Put(${lit(f.dest)})\n`;
-    if (app.dist) out += `    FS.Write(${lit(app.dist + "\\" + i + ".TXT")}, t)\n    FS.Append(${lit(app.dist + "\\MANIFEST.TXT")}, ${lit(i + "|" + f.dest)} + NL)\n`;
+    if (app.dist) out += `    FS.Write(Dest(${lit(app.dist + "\\" + i + ".TXT")}), t)\n    FS.Append(Dest(${lit(app.dist + "\\MANIFEST.TXT")}), ${lit(i + "|" + f.dest)} + NL)\n`;
     out += `END SUB\n`;
   });
   out += app.code();

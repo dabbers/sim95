@@ -10,7 +10,7 @@ RequireLogin()
 IF REQUEST.Method = "POST" THEN
     RequireToken()
     IF REQUEST.Form("remove") <> "" THEN
-        IF HasPicture(viewer) THEN FS.Delete(PICDIR + "\" + viewer + ".PIC")
+        IF HasPicture(viewer) THEN FS.Delete(PicDir() + "\" + viewer + ".PIC")
         RESPONSE.Redirect("profile.asp?u=" + viewer)
     END IF
     pic = REQUEST.Form("pic")
@@ -37,7 +37,7 @@ Sketch picture first:</font></p>
 (The size 200 makes <tt>PHOTO.PIC</tt>, 200 by 150, for your <a href="photos.asp">photos</a>.)</li>
 <li>Upload <tt>AVATAR.PIC</tt> here.</li>
 </font></ol>
-<form><textarea rows="12" cols="70" readonly><%= H(ReadOr(SERVER.MapPath("/shrink.spk"), "")) %></textarea></form>
+<form><textarea rows="12" cols="70" readonly><%= H(ReadOr(AppDir() + "\SHRINK.SPK", "")) %></textarea></form>
 <% IF HasPicture(viewer) THEN %>
 <%= BoxTop("Remove My Picture") %>
 <form action="picture.asp" method="post"><%= TokenField() %>

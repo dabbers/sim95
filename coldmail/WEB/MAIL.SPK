@@ -39,6 +39,19 @@ FUNCTION Esc (s AS String) AS String
     RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
 END FUNCTION
 
+' Where ColdMail's pages are: C:\WEB (and "/"), or a folder of its own
+' (C:\WEB\MAIL and "/mail/") on a machine that keeps several web apps.
+FUNCTION AppDir () AS String
+    VAR page AS String
+    page = SERVER.ScriptName
+    RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
+END FUNCTION
+
+FUNCTION UrlBase () AS String
+    IF AppDir().Upper() = "C:\WEB" THEN RETURN "/"
+    RETURN "/" + AppDir().Substring(7, AppDir().Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
 FUNCTION Unesc (s AS String) AS String
     RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
 END FUNCTION

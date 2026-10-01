@@ -1,0 +1,43 @@
+' SimHost's setup, run by its installer before it writes anything: from now
+' on this machine keeps every web app in a folder of its own (C:\WEB\BOOK,
+' C:\WEB\MAIL, C:\WEB\ASK, C:\WEB\ELIZA), and the home page lists them.
+SUB SetUpHost ()
+    FS.Write("C:\SYSTEM\WEBAPPS.INI", "mode=folders" + NL)
+    Print("  C:\SYSTEM\WEBAPPS.INI says mode=folders: web apps go in folders from now on")
+    Relocate()
+    MoveHomePage()
+END SUB
+
+' A web app that was installed as the home page moves into its folder. files:
+' what it wrote in C:\WEB. shared: names other web apps write too; one of
+' those moves only if it is this app's (it mentions marker, its SPARK file).
+' dirs: its folders in C:\WEB, which move whole.
+SUB MoveApp (name AS String, folder AS String, marker AS String, files AS String, shared AS String, dirs AS String)
+    VAR f AS String
+    VAR missing AS Array OF String
+    VAR moved AS Integer
+    IF NOT FS.Exists("C:\WEB\" + marker) THEN RETURN
+    IF NOT FS.Exists("C:\WEB\" + folder) THEN FS.MakeDir("C:\WEB\" + folder)
+    FOR EACH f IN files.Split(";")
+        IF f = "" THEN CONTINUE
+        IF FS.Exists("C:\WEB\" + folder + "\" + f) THEN CONTINUE
+        IF NOT FS.Exists("C:\WEB\" + f) THEN
+            missing.Add(f)
+            CONTINUE
+        END IF
+        IF (";" + shared + ";").Contains(";" + f + ";") AND f <> marker THEN
+            IF NOT FS.Read("C:\WEB\" + f).Upper().Contains("""" + marker + """") THEN
+                missing.Add(f)
+                CONTINUE
+            END IF
+        END IF
+        FS.Rename("C:\WEB\" + f, "C:\WEB\" + folder + "\" + f)
+        moved = moved + 1
+    NEXT
+    FOR EACH f IN dirs.Split(";")
+        IF f = "" THEN CONTINUE
+        IF FS.Exists("C:\WEB\" + f) AND NOT FS.Exists("C:\WEB\" + folder + "\" + f) THEN FS.Rename("C:\WEB\" + f, "C:\WEB\" + folder + "\" + f)
+    NEXT
+    Print("  moved " + name + " (" + Str(moved) + " files) into C:\WEB\" + folder + ": http://" + NET.HostName.Lower() + "/" + folder.Lower() + "/")
+    IF missing.Count > 0 THEN Print("  " + name + " is missing " + missing.Join(", ") + " (another web app wrote over them): install " + name + " again and they come back.")
+END SUB

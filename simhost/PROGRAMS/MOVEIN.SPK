@@ -1,0 +1,427 @@
+' MOVEIN.SPK - moves another machine's data onto this one, so one machine can
+' do what several did. It talks to the other machine's Files service (port
+' 139, on by default) with that machine's user name and password, the ones in
+' its C:\SYSTEM\USERS.INI, and copies what you tick:
+'
+'   SimBook    C:\BOOKDATA, and its pictures and photos
+'   ColdMail   C:\MAILDATA (accounts and letters; not sign-ins)
+'   AskSim     C:\ASKDATA, the index
+'   ELIZA-95   C:\BOTDATA
+'   Games      C:\GAMES: Vapor's library, games, saves and achievements
+'   Frostbird  C:\FROST
+'   Favorites  C:\SYSTEM\FAVORITE.TXT
+'
+' Nothing on the other machine is changed or deleted. Where this machine
+' already has some of the same data, it asks first, and then only adds:
+' files it has are kept, and lists (favorites, Vapor's library, SimBook's
+' people) gain the lines they don't have yet.
+
+CONST PORT = 139
+CONST PATIENCE = 10000
+CONST WEBAPPS = "C:\SYSTEM\WEBAPPS.INI"
+
+VAR EOL AS String
+VAR win AS GUI_Window
+VAR hostBox AS GUI_TextBox
+VAR userBox AS GUI_TextBox
+VAR passBox AS GUI_TextBox
+VAR cBook AS GUI_CheckBox
+VAR cMail AS GUI_CheckBox
+VAR cAsk AS GUI_CheckBox
+VAR cBot AS GUI_CheckBox
+VAR cGames AS GUI_CheckBox
+VAR cFrost AS GUI_CheckBox
+VAR cFav AS GUI_CheckBox
+VAR goBtn AS GUI_Button
+VAR log AS GUI_ListBox
+VAR clock AS GUI_Timer
+VAR sock AS NET_Socket
+VAR conn AS NET_Connection
+
+VAR busy AS Bool
+VAR wantRun AS Bool
+VAR host AS String
+VAR sets AS Array OF String       ' what to copy, in order: BOOK, MAIL, ...
+VAR answer AS String
+VAR answered AS Bool
+VAR closed AS Bool
+VAR copied AS Integer
+VAR kept AS Integer
+VAR merged AS Integer
+
+SUB Main ()
+    VAR l AS GUI_Label
+    EOL = Chr(10)
+    win = GUI_Window.New("Move In", 440, 430)
+    win.Icon = "app"
+    win.onClose = Win_OnClose
+    l = GUI_Label.New(win)
+    l.SetBounds(10, 8, 420, 32)
+    l.Text = "Copy another machine's data here, so this one machine can do its job." + EOL + "It uses that machine's Files service, with its user name and password."
+    l = GUI_Label.New(win)
+    l.SetBounds(10, 50, 100, 20)
+    l.Text = "Machine:"
+    hostBox = GUI_TextBox.New(win)
+    hostBox.SetBounds(110, 48, 200, 22)
+    l = GUI_Label.New(win)
+    l.SetBounds(10, 76, 100, 20)
+    l.Text = "User name:"
+    userBox = GUI_TextBox.New(win)
+    userBox.SetBounds(110, 74, 200, 22)
+    l = GUI_Label.New(win)
+    l.SetBounds(10, 102, 100, 20)
+    l.Text = "Password:"
+    passBox = GUI_TextBox.New(win)
+    passBox.SetBounds(110, 100, 200, 22)
+    passBox.Password = TRUE
+    passBox.onEnter = Go_Click
+    cBook = Check("SimBook: people, posts, pictures", 10, 132)
+    cMail = Check("ColdMail: accounts and letters", 10, 152)
+    cAsk = Check("AskSim: the search index", 10, 172)
+    cBot = Check("ELIZA-95: conversations", 10, 192)
+    cGames = Check("Games: Vapor library, saves, achievements", 220, 132)
+    cFrost = Check("Frostbird: your letters", 220, 152)
+    cFav = Check("Simxplorer favorites", 220, 172)
+    goBtn = GUI_Button.New(win)
+    goBtn.SetBounds(330, 48, 100, 26)
+    goBtn.Text = "Move In"
+    goBtn.onClick = Go_Click
+    log = GUI_ListBox.New(win)
+    log.SetBounds(10, 220, 420, 180)
+    clock = GUI_Timer.New(win)
+    clock.Interval = 100
+    clock.onTick = Clock_OnTick
+    clock.Start()
+    sock = NET_Socket.New()
+    sock.onMessage = Sock_OnMessage
+    sock.onClose = Sock_OnClose
+    IF SYS.Args.Count > 0 THEN hostBox.Text = SYS.Args[0]
+    win.Status = "Ready."
+    win.Show()
+    hostBox.Focus()
+END SUB
+
+FUNCTION Check (text AS String, x AS Integer, y AS Integer) AS GUI_CheckBox
+    VAR c AS GUI_CheckBox
+    c = GUI_CheckBox.New(win)
+    c.SetBounds(x, y, 210, 20)
+    c.Text = text
+    c.Checked = TRUE
+    RETURN c
+END FUNCTION
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+SUB Say (text AS String)
+    log.Add(text)
+    log.ScrollToEnd()
+END SUB
+
+FUNCTION Warn (text AS String) AS Bool
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = "Move In"
+    box.Kind = "warn"
+    box.Text = text
+    box.Show()
+    RETURN FALSE
+END FUNCTION
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+' ================================================================ what goes where
+
+FUNCTION SetName (s AS String) AS String
+    SELECT CASE s
+        CASE "BOOK"
+            RETURN "SimBook"
+        CASE "MAIL"
+            RETURN "ColdMail"
+        CASE "ASK"
+            RETURN "AskSim"
+        CASE "BOT"
+            RETURN "ELIZA-95"
+        CASE "GAMES"
+            RETURN "Games"
+        CASE "FROST"
+            RETURN "Frostbird"
+    END SELECT
+    RETURN "Favorites"
+END FUNCTION
+
+' Where a set lives (the same place on both machines).
+FUNCTION SetPath (s AS String) AS String
+    SELECT CASE s
+        CASE "BOOK"
+            RETURN "C:\BOOKDATA"
+        CASE "MAIL"
+            RETURN "C:\MAILDATA"
+        CASE "ASK"
+            RETURN "C:\ASKDATA"
+        CASE "BOT"
+            RETURN "C:\BOTDATA"
+        CASE "GAMES"
+            RETURN "C:\GAMES"
+        CASE "FROST"
+            RETURN "C:\FROST"
+    END SELECT
+    RETURN "C:\SYSTEM\FAVORITE.TXT"
+END FUNCTION
+
+' Lists that two machines' copies can be joined line by line.
+FUNCTION Joinable (path AS String) AS Bool
+    VAR p AS String
+    p = path.Upper()
+    RETURN p = "C:\SYSTEM\FAVORITE.TXT" OR p = "C:\GAMES\LIBRARY.TXT" OR p = "C:\BOOKDATA\PEOPLE.TXT"
+END FUNCTION
+
+' Not worth moving: who is signed in, and the like.
+FUNCTION Skip (path AS String) AS Bool
+    VAR p AS String
+    p = path.Upper()
+    RETURN p = "C:\BOOKDATA\SESSIONS" OR p = "C:\MAILDATA\SESSIONS" OR p = "C:\MAILDATA\ALIVE.TXT"
+END FUNCTION
+
+' Where SimBook keeps its pictures here: beside its pages.
+FUNCTION BookHere () AS String
+    IF FS.Exists("C:\WEB\BOOK\BOOK.SPK") THEN RETURN "C:\WEB\BOOK"
+    IF FS.Exists("C:\WEB\BOOK.SPK") THEN RETURN "C:\WEB"
+    IF ReadOr(WEBAPPS, "").Contains("mode=folders") THEN RETURN "C:\WEB\BOOK"
+    RETURN "C:\WEB"
+END FUNCTION
+
+' Does this machine have anything (a file, not just empty folders) there?
+FUNCTION HasData (path AS String) AS Bool
+    VAR f AS String
+    IF NOT FS.Exists(path) THEN RETURN FALSE
+    IF NOT FS.IsDir(path) THEN RETURN TRUE
+    FOR EACH f IN FS.List(path)
+        IF f.EndsWith("\") THEN
+            IF Skip(path + "\" + f.Substring(0, f.Length - 1)) THEN CONTINUE
+            IF HasData(path + "\" + f.Substring(0, f.Length - 1)) THEN RETURN TRUE
+        ELSE
+            IF NOT Skip(path + "\" + f) THEN RETURN TRUE
+        END IF
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' ================================================================ starting
+
+' Everything that needs asking is asked here; the copying happens in the clock,
+' because a failed Connect spoils the handler it happens in.
+SUB Go_Click ()
+    VAR box AS GUI_MessageBox
+    VAR s AS String
+    VAR all AS Array OF String
+    IF busy THEN RETURN
+    host = hostBox.Text.Trim().Upper()
+    IF host = "" THEN
+        Warn("Type the name of the machine to move in from.")
+        RETURN
+    END IF
+    IF host = NET.HostName.Upper() OR host = NET.HostName.Split(".")[0].Upper() THEN
+        Warn("That is this machine. Type the name of the other one.")
+        RETURN
+    END IF
+    sets.Clear()
+    IF cBook.Checked THEN all.Add("BOOK")
+    IF cMail.Checked THEN all.Add("MAIL")
+    IF cAsk.Checked THEN all.Add("ASK")
+    IF cBot.Checked THEN all.Add("BOT")
+    IF cGames.Checked THEN all.Add("GAMES")
+    IF cFrost.Checked THEN all.Add("FROST")
+    IF cFav.Checked THEN all.Add("FAV")
+    IF all.Count = 0 THEN
+        Warn("Tick what to move in.")
+        RETURN
+    END IF
+    busy = TRUE
+    FOR EACH s IN all
+        IF HasData(SetPath(s)) THEN
+            box = GUI_MessageBox.New(win)
+            box.Title = "Move In"
+            box.Kind = "confirm"
+            box.Buttons = "yesno"
+            box.Text = "This machine already has " + SetName(s) + " data in " + SetPath(s) + "." + EOL + EOL + "Add " + host + "'s to it? Yours stays as it is: only what is not here yet is added." + EOL + EOL + "No skips " + SetName(s) + "."
+            IF NOT box.Show() THEN CONTINUE
+        END IF
+        sets.Add(s)
+    NEXT
+    IF sets.Count = 0 THEN
+        busy = FALSE
+        RETURN
+    END IF
+    goBtn.Enabled = FALSE
+    log.Clear()
+    copied = 0
+    kept = 0
+    merged = 0
+    Say("Connecting to " + host + "...")
+    win.Status = "Connecting to " + host + "..."
+    wantRun = TRUE
+END SUB
+
+SUB Clock_OnTick ()
+    IF NOT wantRun THEN RETURN
+    wantRun = FALSE
+    TRY
+        MoveIn()
+    CATCH err
+        Finished("Stopped: " + err)
+    END TRY
+END SUB
+
+SUB Finished (text AS String)
+    Say(text)
+    win.Status = text
+    goBtn.Enabled = TRUE
+    busy = FALSE
+    IF NOT closed THEN
+        TRY
+            conn.Close()
+        CATCH err
+        END TRY
+    END IF
+END SUB
+
+' ================================================================ copying
+
+SUB MoveIn ()
+    VAR s AS String
+    VAR reply AS String
+    VAR before AS Integer
+    closed = FALSE
+    conn = sock.Connect(host, PORT)
+    reply = Request("AUTH " + userBox.Text.Trim() + "|" + passBox.Text)
+    IF NOT reply.StartsWith("OK") THEN
+        Finished(host + " did not take that user name and password (its Files service said: " + reply + ").")
+        RETURN
+    END IF
+    Say("Signed in to " + host + ".")
+    FOR EACH s IN sets
+        before = copied + merged
+        win.Status = "Moving in " + SetName(s) + "..."
+        IF s = "FAV" THEN
+            CopyFile(SetPath(s), SetPath(s))
+        ELSE
+            CopyTree(SetPath(s), SetPath(s))
+        END IF
+        IF s = "BOOK" THEN
+            ' the pictures are beside SimBook's pages, at the root or in its folder
+            IF ThereHas("C:\WEB\BOOK\BOOK.SPK") THEN
+                CopyTree("C:\WEB\BOOK\PICS", BookHere() + "\PICS")
+                CopyTree("C:\WEB\BOOK\PHOTOS", BookHere() + "\PHOTOS")
+            ELSE
+                CopyTree("C:\WEB\PICS", BookHere() + "\PICS")
+                CopyTree("C:\WEB\PHOTOS", BookHere() + "\PHOTOS")
+            END IF
+        END IF
+        Say(SetName(s) + ": " + Str(copied + merged - before) + " files moved in.")
+    NEXT
+    Finished("Done: " + Str(copied) + " files copied, " + Str(merged) + " lists joined, " + Str(kept) + " kept as they were here.")
+    Say("Nothing on " + host + " was changed. Once you are happy, you can close it.")
+END SUB
+
+' One request to the Files service, and its reply.
+FUNCTION Request (text AS String) AS String
+    VAR since AS Integer
+    answered = FALSE
+    answer = ""
+    IF closed THEN THROW host + " hung up"
+    conn.Send(text)
+    since = SYS.Ticks
+    WHILE NOT answered AND NOT closed AND SYS.Ticks - since < PATIENCE
+        SYS.Sleep(20)
+    END WHILE
+    IF NOT answered THEN THROW host + " stopped answering"
+    RETURN answer
+END FUNCTION
+
+FUNCTION ThereHas (path AS String) AS Bool
+    RETURN Request("STAT " + path).StartsWith("OK")
+END FUNCTION
+
+' A folder there, into a folder here.
+SUB CopyTree (there AS String, here AS String)
+    VAR reply AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR first AS Bool = TRUE
+    IF Skip(there) THEN RETURN
+    reply = Request("LIST " + there)
+    IF NOT reply.StartsWith("OK") THEN
+        Say("  " + host + " has no " + there + ".")
+        RETURN
+    END IF
+    IF NOT FS.Exists(here) THEN FS.MakeDir(here)
+    FOR EACH line IN reply.Lines()
+        IF first THEN
+            first = FALSE
+            CONTINUE
+        END IF
+        p = line.Split("|")
+        IF p.Count < 2 THEN CONTINUE
+        IF p[1] = "D" THEN
+            CopyTree(there + "\" + p[0], here + "\" + p[0])
+        ELSE
+            CopyFile(there + "\" + p[0], here + "\" + p[0])
+        END IF
+    NEXT
+END SUB
+
+SUB CopyFile (there AS String, here AS String)
+    VAR reply AS String
+    VAR text AS String
+    VAR line AS String
+    VAR have AS String
+    VAR added AS Integer
+    IF Skip(there) THEN RETURN
+    IF FS.Exists(here) AND NOT Joinable(here) THEN
+        kept = kept + 1
+        RETURN
+    END IF
+    reply = Request("READ " + there)
+    IF NOT reply.StartsWith("OK") THEN
+        Say("  could not read " + there + ": " + reply)
+        RETURN
+    END IF
+    text = ""
+    IF reply.Contains(EOL) THEN text = reply.Substring(reply.IndexOf(EOL) + 1, reply.Length - reply.IndexOf(EOL) - 1)
+    IF NOT FS.Exists(here) THEN
+        FS.Write(here, text)
+        copied = copied + 1
+        log.Add("  " + here)
+        RETURN
+    END IF
+    ' a list both machines have: add their lines that are not here
+    have = FS.Read(here)
+    IF have <> "" AND NOT have.EndsWith(EOL) THEN have = have + EOL
+    FOR EACH line IN text.Lines()
+        IF line.Trim() = "" THEN CONTINUE
+        IF (EOL + have).Contains(EOL + line + EOL) THEN CONTINUE
+        have = have + line + EOL
+        added = added + 1
+    NEXT
+    IF added > 0 THEN
+        FS.Write(here, have)
+        merged = merged + 1
+        log.Add("  " + here + " (+" + Str(added) + " lines)")
+    ELSE
+        kept = kept + 1
+    END IF
+END SUB
+
+SUB Sock_OnMessage (c AS NET_Connection, message AS String)
+    answer = message
+    answered = TRUE
+END SUB
+
+SUB Sock_OnClose (c AS NET_Connection)
+    closed = TRUE
+END SUB

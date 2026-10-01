@@ -84,3 +84,21 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
 * **Handlers interleave.** While one handler waits (`SYS.Sleep`, a message
   box), others run, including another tick of the same timer. Guard shared
   state with a flag.
+* **One name per machine.** Each browser tab is one connection to SIM95's
+  central server. The kernel registers the machine's single name with it (a
+  `name` packet: `hello` on connect, `rename` when the name changes, which
+  replaces the old one) and asks it to resolve names (`query`). SPARK programs
+  can't send those packets, so a machine can't take extra names or aliases.
+  Names can have an ISP part (`BOB.DIALUP.ZONE`), and a lookup of just `BOB`
+  finds it. To run several web apps on one machine, give each a folder (see
+  `simhost/`).
+* **The Files service** (`C:\PROGRAMS\FILESVC.SPK`, port 139, on by
+  default) lets anyone with the machine's user name and password from
+  `C:\SYSTEM\USERS.INI` read and write all of C:. Commands: `AUTH user|password`,
+  then `LIST`, `READ`, `WRITE path` plus a newline and the text, `DEL`,
+  `MKDIR`, `REN from|to`, `STAT`. Replies start with OK or ERR, one message
+  each, so a file over 64K can't be read through it.
+* **`FS.Rename` moves** files and whole folders, across folders too.
+* **ASP pages in subfolders work:** `<%@ import file="X.SPK" %>` is relative
+  to the page, and `SERVER.ScriptName` is the page's disk path
+  (`C:\WEB\BOOK\HOME.ASP`), so a page can find its own folder from it.

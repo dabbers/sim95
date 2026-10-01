@@ -23,7 +23,7 @@ addresses like <b>you@yourmachine</b>, keep its own mailboxes, and trade letters
 server, and sets it to start whenever your machine does.</li>
 <li>Then open your own webmail at <tt>http://yourmachine/</tt>.</li>
 </font></ol>
-<form><textarea rows="14" cols="76" readonly><%= H(ReadOr(SERVER.MapPath("/getmail.txt"), "").Replace("%HOST%", NET.HostName.Lower())) %></textarea></form>
+<form><textarea rows="14" cols="76" readonly><%= H(ReadOr(AppDir() + "\GETMAIL.TXT", "").Replace("%HOST%", NET.HostName.Lower()).Replace("%BASE%", UrlBase())) %></textarea></form>
 <%= BoxTop("Already running it?") %>
 <form action="host.asp" method="get">
 <p><font size="2">Your machine's name:</font> <input name="go" size="30" maxlength="40">

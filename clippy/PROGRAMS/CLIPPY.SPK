@@ -480,6 +480,7 @@ FUNCTION OpenBrowser (words AS String) AS Bool
     NEXT
     IF words <> "" THEN
         IF search = "" AND FS.Exists("C:\WEB\ASK.SPK") THEN search = "http://" + NET.HostName.Lower() + "/index.asp?q=%s"
+        IF search = "" AND FS.Exists("C:\WEB\ASK\ASK.SPK") THEN search = "http://" + NET.HostName.Lower() + "/ask/index.asp?q=%s"
         IF search <> "" THEN
             url = search.Replace("%s", UrlEnc(words))
         ELSE

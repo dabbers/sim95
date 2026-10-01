@@ -111,7 +111,8 @@ await test("Publish Apps puts the installers in C:\\MYFILES on the shelves", asy
   await wait(() => alpha.ui.dialogs.length, "the report", 30000);
   const report = said(alpha);
   assert.match(report, /^Published:\n  Clippy \(build [0-9a-f]{8}\)\n  ELIZA-95 \(build [0-9a-f]{8}\)\n  Frostbird \(build [0-9a-f]{8}\)$/);
-  assert.match(entry("FROSTBRD"), /^FROSTBRD\|Frostbird\|\d+\|\d+\|ok\|Internet\|.*\|program\|[0-9a-f]{8}\|C:\\PROGRAMS\\FROSTBRD.SPK\|C:\\PROGRAMS\\FROSTBRD.SPK\|FROSTBRD\|$/);
+  assert.match(entry("FROSTBRD"), /^FROSTBRD\|Frostbird\|\d+\|\d+\|ok\|Internet\|.*\|program\|[0-9a-f]{8}\|C:\\PROGRAMS\\FROSTBRD.SPK\|C:\\PROGRAMS\\FROSTBRD.SPK\|FROSTBRD\|\|$/);
+  assert.match(entry("ELIZA"), /\|ELIZA$/, "a web app's folder, for machines that keep them in folders");
   assert.match(entry("ELIZA"), /\|web\|[0-9a-f]{8}\|\/\|C:\\WEB\\BOT.SPK;C:\\WEB\\ELIZA.HTM;C:\\WEB\\INDEX.ASP\|/);
   A.menu("Publish Apps...");
   await wait(() => alpha.ui.dialogs.length, "the second report", 30000);

@@ -17,6 +17,8 @@ A series of programs for the sim95 playground
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
   program with a JavaScript interpreter written in SPARK.
+* [`simhost/`](simhost/) – SimHost: every web app on one machine, each in a
+  folder of its own, and Move In to bring the other machines' data over.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
   programs and `.ASP` pages from Node, including several machines on a
   pretend network running real programs.
@@ -24,10 +26,13 @@ A series of programs for the sim95 playground
 * [`SIM95-NOTES.md`](SIM95-NOTES.md) – platform limits and a kernel bug worth
   knowing about.
 
-Each web app installs as its machine's home page: one machine per app. Paste
-the app's `INSTALL.SPK` into SPARK and press F5. Simxplorer installs as
-a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any machine.
+Paste an app's `INSTALL.SPK` into SPARK and press F5. On its own, a web app
+becomes its machine's home page: one machine per app. Install
+[SimHost](simhost/) first and they all share one machine instead, at
+`/book/`, `/mail/`, `/ask/` and `/eliza/`; that is one browser tab for the
+lot. Simxplorer installs as a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any
+machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird, clippy, vapor). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy, vapor, simhost). Rebuild the installers with `node tools/build-installer.mjs`.
