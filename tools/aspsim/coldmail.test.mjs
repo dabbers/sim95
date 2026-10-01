@@ -62,7 +62,7 @@ const bravo = await net.boot("BRAVO");
 await test("the installer writes the pages and the server, starts it, and adds it to startup", async () => {
   const said = await install(alpha);
   await install(bravo);
-  assert.match(said, /ColdMail is installed \(13 files\)/);
+  assert.match(said, /ColdMail is installed \(14 files\)/);
   assert.match(said, /started C:\\PROGRAMS\\MAILD.SPK/);
   for (const f of fs.readdirSync(path.join(root, "coldmail/WEB"))) assert.equal(alpha.read("C:\\WEB\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB", f), "utf8"), f);
   assert.equal(alpha.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
@@ -253,7 +253,7 @@ await test("GETMAIL.SPK copies ColdMail onto another machine, which can then mai
   const pid = charlie.run("C:\\MYFILES\\GETMAIL.SPK");
   await net.until(() => !charlie.running(pid), 30000, "GETMAIL");
   const said = charlie.output(pid);
-  assert.match(said, /ColdMail is installed \(13 files\) and your mail server is running/, said + JSON.stringify(charlie.ui.dialogs));
+  assert.match(said, /ColdMail is installed \(14 files\) and your mail server is running/, said + JSON.stringify(charlie.ui.dialogs));
   for (const f of fs.readdirSync(path.join(root, "coldmail/WEB"))) assert.equal(charlie.read("C:\\WEB\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB", f), "utf8"), f);
   assert.equal(charlie.read("C:\\PROGRAMS\\MAILD.SPK"), fs.readFileSync(path.join(root, "coldmail/PROGRAMS/MAILD.SPK"), "utf8"));
   assert.equal(charlie.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
@@ -268,7 +268,7 @@ await test("GETMAIL.SPK copies ColdMail onto another machine, which can then mai
   assert.match(delta.read("C:\\MYFILES\\GETMAIL.SPK"), /CONST FROM = "charlie"/);
   const p2 = delta.run("C:\\MYFILES\\GETMAIL.SPK");
   await net.until(() => !delta.running(p2), 30000, "GETMAIL from charlie");
-  assert.match(delta.output(p2), /ColdMail is installed \(13 files\)/);
+  assert.match(delta.output(p2), /ColdMail is installed \(14 files\)/);
   assert.deepEqual([...charlie.ui.dialogs, ...delta.ui.dialogs], []);
 });
 
@@ -279,6 +279,42 @@ await test("GETMAIL says so when the machine it comes from isn't there", async (
   await net.until(() => !echo.running(pid), 30000, "GETMAIL");
   assert.match(echo.output(pid), /Could not reach nowhere: Unknown host/);
   assert.ok(!echo.exists("C:\\WEB\\MAIL.SPK"));
+});
+
+await test("MAILPASS.SPK gives an account a new password: webmail and the mail server take it", async () => {
+  assert.ok(alpha.exists("C:\\PROGRAMS\\MAILPASS.SPK"));
+  const src = alpha.read("C:\\PROGRAMS\\MAILPASS.SPK");
+  const signedIn = browser(alpha);
+  ok(await signedIn.post("/login.asp", { u: "ann", pw: "secret" }));
+  assert.equal(ok(await signedIn.get("/inbox.asp")).url, "/inbox.asp");
+  let said = (await alpha.runScript(src, { input: ["nobody", "x", "x"] })).join("\n");
+  assert.match(said, /There is no account called 'nobody' here/);
+  said = (await alpha.runScript(src, { input: ["ann@alpha", "newpw1", "typo"] })).join("\n");
+  assert.match(said, /The two passwords are different. Nothing was changed/);
+  said = (await alpha.runScript(src, { input: ["ann@alpha", "newpw1", "newpw1"] })).join("\n");
+  assert.match(said, /ann@alpha/);
+  assert.match(said, /This is your new password for ColdMail: newpw1/);
+  assert.match(said, /signed out of the webmail in \d+ place/);
+  assert.match(alpha.read("C:\\MAILDATA\\USERS\\ANN.TXT"), /^name=/m, "the rest of the account is kept");
+  assert.notEqual(ok(await signedIn.get("/inbox.asp")).url, "/inbox.asp", "signed out");
+  assert.notEqual(ok(await browser(alpha).post("/login.asp", { u: "ann", pw: "secret" })).url, "/inbox.asp");
+  assert.equal(ok(await browser(alpha).post("/login.asp", { u: "ann", pw: "newpw1" })).url, "/inbox.asp");
+  // the mail server (what Frostbird talks to) takes it too
+  const pop = async (pw) => {
+    const conn = await alpha.stack.connect(0, "ALPHA", 110);
+    const got = [];
+    conn.onMessage((t) => got.push(t));
+    const step = async (line) => { const n = got.length; conn.send(line); await net.until(() => got.length > n, 5000, line); return got[got.length - 1]; };
+    await net.until(() => got.length > 0, 5000, "the greeting");
+    await step("USER ann");
+    const answer = await step("PASS " + pw);
+    conn.close?.();
+    return answer;
+  };
+  assert.match(await pop("newpw1"), /^\+OK/);
+  assert.match(await pop("secret"), /^-ERR/);
+  // put it back for the tests after this one
+  await alpha.runScript(src, { input: ["ann", "secret", "secret"] });
 });
 
 await test("long folders and long letters still fit on one page", async () => {

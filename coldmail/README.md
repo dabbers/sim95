@@ -49,6 +49,27 @@ can get ColdMail from you the same way. That's how shareware spread in 1996.
 The installer writes those copies too: `DIST\<n>.TXT` plus a `MANIFEST.TXT`
 of `n|where it goes`.
 
+## Forgotten passwords: MAILPASS.SPK
+
+On the machine ColdMail runs on, open `C:\PROGRAMS\MAILPASS.SPK` in SPARK
+and press F5. It lists the accounts, then asks which one, and the new
+password twice:
+
+```
+Account (the part before the @): dab
+Enter desired password: ********
+Again: ********
+
+This is your new password for ColdMail: ********
+  account: dab@yourhost
+```
+
+It asks for no other password, because anyone who can run programs on the
+machine can read the mailboxes anyway. The webmail, the mail server and
+Frostbird all take the new password. It signs the account out of the
+webmail everywhere and doesn't touch any letters. Frostbird keeps the old
+password, so set the account up in Frostbird again.
+
 ## How it works
 
 ```

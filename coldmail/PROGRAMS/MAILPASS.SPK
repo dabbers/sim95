@@ -1,0 +1,83 @@
+' MAILPASS.SPK - gives a ColdMail account a new password. Run it on the
+' machine ColdMail is on (open it in SPARK and press F5): whoever can run
+' programs here owns the mailboxes anyway, so it asks no other password.
+'
+' It writes the new password the way the webmail does (a fresh salt and the
+' same hash), so the webmail, the mail server and Frostbird all take it, and
+' signs the account out of the webmail everywhere. Letters are not touched.
+
+CONST DATADIR = "C:\MAILDATA"
+
+SUB Main ()
+    VAR u AS String
+    VAR pw AS String
+    VAR again AS String
+    VAR f AS String
+    VAR line AS String
+    VAR out AS Array OF String
+    VAR salt AS String
+    VAR ended AS Integer
+    IF NOT FS.Exists(DATADIR + "\USERS") THEN
+        Print("There is no ColdMail on this machine (no " + DATADIR + "\USERS).")
+        RETURN
+    END IF
+    Print("ColdMail accounts here:")
+    FOR EACH f IN FS.List(DATADIR + "\USERS")
+        IF f.EndsWith(".TXT") THEN Print("  " + f.Substring(0, f.Length - 4).Lower() + "@" + NET.HostName.Lower())
+    NEXT
+    u = Input("Account (the part before the @): ").Trim().Lower()
+    IF u.Contains("@") THEN u = u.Substring(0, u.IndexOf("@"))
+    IF u = "" OR u.Contains("\") OR u.Contains(".") OR NOT FS.Exists(DATADIR + "\USERS\" + u + ".TXT") THEN
+        Print("There is no account called '" + u + "' here. Nothing was changed.")
+        RETURN
+    END IF
+    pw = Input("Enter desired password: ")
+    IF pw.Length < 4 THEN
+        Print("Pick a password of at least 4 characters. Nothing was changed.")
+        RETURN
+    END IF
+    again = Input("Again: ")
+    IF again <> pw THEN
+        Print("The two passwords are different. Nothing was changed.")
+        RETURN
+    END IF
+    salt = Hex(268435456 + Rnd(1879048191))
+    FOR EACH line IN FS.Read(DATADIR + "\USERS\" + u + ".TXT").Lines()
+        IF line.StartsWith("salt=") OR line.StartsWith("pass=") THEN CONTINUE
+        IF line <> "" THEN out.Add(line)
+    NEXT
+    out.Add("salt=" + salt)
+    out.Add("pass=" + Hash(salt, pw))
+    FS.Write(DATADIR + "\USERS\" + u + ".TXT", out.Join(Chr(10)))
+    ' every webmail sign-in of theirs ends
+    IF FS.Exists(DATADIR + "\SESSIONS") THEN
+        FOR EACH f IN FS.List(DATADIR + "\SESSIONS")
+            IF f.EndsWith("\") THEN CONTINUE
+            IF (FS.Read(DATADIR + "\SESSIONS\" + f) + Chr(10)).Split(Chr(10))[0].Trim() = u THEN
+                FS.Delete(DATADIR + "\SESSIONS\" + f)
+                ended = ended + 1
+            END IF
+        NEXT
+    END IF
+    Print("")
+    Print("This is your new password for ColdMail: " + pw)
+    Print("  account: " + u + "@" + NET.HostName.Lower())
+    IF ended > 0 THEN Print("  signed out of the webmail in " + Str(ended) + " place(s)")
+    Print("Frostbird remembers the old one: in Frostbird, set the account up again with the new password.")
+END SUB
+
+' The webmail's password hash (MAIL.SPK), the same to the letter.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION

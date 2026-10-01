@@ -103,7 +103,7 @@ await test("ColdMail in its folder: sign up, send mail, and hand it on with GETM
   guest.write("C:\\MYFILES\\GETMAIL.SPK", decode(r.body.slice(r.body.indexOf("readonly>") + 9, r.body.indexOf("</textarea>"))));
   const pid = guest.run("C:\\MYFILES\\GETMAIL.SPK");
   await wait(() => !guest.running(pid) || /Voyager/.test(guest.output(pid)), "GETMAIL", 30000);
-  assert.match(guest.output(pid), /ColdMail is installed \(13 files\)/, guest.output(pid));
+  assert.match(guest.output(pid), /ColdMail is installed \(14 files\)/, guest.output(pid));
   assert.equal(guest.read("C:\\WEB\\MAIL.SPK"), host.read("C:\\WEB\\MAIL\\MAIL.SPK"));
 });
 
