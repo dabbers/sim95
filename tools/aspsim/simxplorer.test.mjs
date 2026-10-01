@@ -1,6 +1,6 @@
 // End-to-end tests for Simxplorer (simxplorer/src): the browser on ALPHA
 // fetching real pages from BRAVO's web server, running their JavaScript.
-//   node tools/aspsim/explorer.test.mjs
+//   node tools/aspsim/simxplorer.test.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -102,7 +102,8 @@ await test("the installer writes SIMXPLOR.SPK and starts it", async () => {
   alpha.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "simxplorer/INSTALL.SPK"), "utf8"));
   const pid = alpha.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !alpha.running(pid), 60000, "the installer");
-  assert.match(alpha.output(pid), /Simxplorer is installed \(1 files\)\.\n  wrote|wrote C:\\PROGRAMS\\SIMXPLOR.SPK[\s\S]*Simxplorer is running/);
+  assert.match(alpha.output(pid), /wrote C:\\WEB\\SXDEMO\\SNIFF.SPK[\s\S]*wrote C:\\PROGRAMS\\SIMXPLOR.SPK[\s\S]*Simxplorer is installed \(6 files\)\.[\s\S]*Simxplorer is running/);
+  assert.equal(alpha.read("C:\\WEB\\SXDEMO\\BADGE.PIC"), fs.readFileSync(path.join(root, "simxplorer/WEB/BADGE.PIC"), "utf8"), "the demo comes too");
   assert.ok(alpha.read("C:\\PROGRAMS\\SIMXPLOR.SPK") === fs.readFileSync(path.join(root, "simxplorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "simxplorer/src/BROWSER.SPK"), "utf8"), "simxplorer/INSTALL.SPK is out of date: node tools/build-installer.mjs explorer");
   const started = () => alpha.kernel.ps().find((p) => p.name === "SIMXPLOR");
   await net.until(() => started() && alpha.widgets(started().pid, "HtmlView").length, 30000, "Simxplorer");
@@ -312,9 +313,132 @@ await test("document.cookie lands in Voyager's cookie jar", async () => {
   assert.match(alpha.read("C:\\SYSTEM\\COOKIES.TXT"), /^BRAVO\|flavour\|oatmeal$/m);
 });
 
+// ---------------------------------------------------------------- XMLHttpRequest
+page("echo.asp", `<% RESPONSE.ContentType = "text/plain"
+RESPONSE.SetCookie("served", "yes")
+RESPONSE.Write(REQUEST.Method + ";q=" + REQUEST.Query("q") + ";say=" + REQUEST.Form("say") + ";cookie=" + REQUEST.Cookie("flavour") + ";ua=" + REQUEST.Header("User-Agent") + ";x=" + REQUEST.Header("X-Custom")) %>`);
+page("slow.asp", `<% SYS.Sleep(1500)
+RESPONSE.ContentType = "text/plain"
+RESPONSE.Write("slow") %>`);
+page("data.txt", "line one\nline two\n");
+page("xhr.htm", `<html><head><title>Background</title></head><body>
+<span id="get"></span>|<span id="post"></span>|<span id="miss"></span>|<span id="gone"></span>|<span id="order"></span>|<span id="ie"></span>|<span id="file"></span>
+<script language="JavaScript">
+function show(id, t) { document.getElementById(id).innerText = t; }
+var states = [], order = [];
+var g = new XMLHttpRequest();
+g.onreadystatechange = function () {
+  states.push(this.readyState);
+  if (g.readyState == 4) show("get", states.join(",") + " " + g.status + " " + g.statusText + " " + g.getResponseHeader("content-type") + " " + g.responseText);
+};
+g.open("GET", "echo.asp?q=hello", true);
+g.send(null);
+var p = new XMLHttpRequest();
+p.onreadystatechange = function () { if (p.readyState == 4) show("post", p.responseText); };
+p.open("POST", "/echo.asp", true);
+p.setRequestHeader("X-Custom", "abc");
+p.send("say=hi+there");
+var m = new XMLHttpRequest();
+m.onreadystatechange = function () { if (m.readyState == 4) show("miss", m.status + " " + m.statusText); };
+m.open("GET", "nothing-here.htm", true);
+m.send();
+var n = new XMLHttpRequest();
+n.onerror = function () { show("gone", "error " + n.readyState + " " + n.status + " [" + n.responseText + "]"); };
+n.open("GET", "http://nosuchhost/x.htm", true);
+n.send();
+function race(url) {
+  var r = new XMLHttpRequest();
+  r.onreadystatechange = function () { if (r.readyState == 4) { order.push(r.responseText.split(";")[0]); show("order", order.join(" then ")); } };
+  r.open("GET", url, true);
+  r.send();
+}
+race("slow.asp");
+race("echo.asp?q=fast");
+var ie = new ActiveXObject("Microsoft.XMLHTTP");
+ie.onreadystatechange = function () { if (ie.readyState == 4) show("ie", ie.responseText.split("\\n")[0]); };
+ie.open("GET", "http://bravo/data.txt", true);
+ie.send();
+</script></body></html>`);
+
+await test("XMLHttpRequest: GET and POST in the background, with cookies and the User-Agent", async () => {
+  await go("bravo/cookie.htm");
+  await wait(() => /cookie=flavour=oatmeal/.test(html()), "the cookie page");
+  await go("bravo/xhr.htm");
+  await loaded("Background");
+  await wait(() => el("get")?.Text, "the GET");
+  assert.equal(el("get").Text, "1,2,3,4 200 OK text/plain GET;q=hello;say=;cookie=oatmeal;ua=Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95);x=");
+  await wait(() => el("post")?.Text, "the POST");
+  assert.equal(el("post").Text, "POST;q=;say=hi there;cookie=oatmeal;ua=Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95);x=abc");
+  assert.match(alpha.read("C:\\SYSTEM\\COOKIES.TXT"), /^BRAVO\|served\|yes$/m, "a request's Set-Cookie is kept");
+  assert.equal(addressBox().get("Text"), "http://bravo/xhr.htm", "the page stayed put");
+  assert.equal(title(), "Background - Simxplorer");
+});
+
+await test("XMLHttpRequest: 404, an unknown host (status 0), several at once, and ActiveXObject", async () => {
+  await wait(() => el("miss")?.Text && el("gone")?.Text && el("ie")?.Text, "the rest");
+  assert.equal(el("miss").Text, "404 Not Found");
+  assert.equal(el("gone").Text, "error 4 0 []");
+  assert.equal(el("ie").Text, "line one");
+  await wait(() => /then/.test(el("order")?.Text || ""), "both racers");
+  assert.equal(el("order").Text, "GET then slow", "the quick one, sent second, came back first");
+  assert.deepEqual(dialogs(), []);
+  assert.deepEqual(alpha.errors, []);
+});
+
+await test("the Live Page: a clock and a counter kept up by XMLHttpRequest, a POST, the badge", async () => {
+  bravo.putTree(path.join(root, "simxplorer/WEB"), "C:\\WEB\\SXDEMO");
+  await go("bravo/sxdemo/");
+  await loaded("The Live Page");
+  assert.match(html(), /served to Simxplorer 3\.02/);
+  await wait(() => /Updated [3-9] times without reloading/.test(el("state")?.Text || ""), "three updates", 15000);
+  assert.match(el("clock").Text, /^\d\d:\d\d:\d\d$/);
+  assert.ok(Number(el("hits").Text) >= 3, "the server's count: " + el("hits").Text);
+  assert.equal(addressBox().get("Text"), "http://bravo/sxdemo/");
+  view().call("SetElement", "said", "Value", "hello world");
+  view().fire("onScript", "onclick", onclickOf('value="Send"'));
+  await wait(() => el("echo")?.Text, "the answer to the POST");
+  assert.match(el("echo").Text, /^\d\d:\d\d:\d\d Simxplorer 3\.02 said: HELLO WORLD!$/);
+  view().fire("onImage", "badge.pic");
+  await wait(() => view().images?.get("badge.pic"), "the badge");
+  assert.match(view().images.get("badge.pic"), /^SIM95PIC 88 31\n/);
+  assert.deepEqual(dialogs(), []);
+  await go("bravo/script.htm");
+  await loaded("Scripted");
+  // the old page's requests are let go
+  const hits = Number(bravo.read("C:\\WEB\\SXDEMO\\HITS.TXT"));
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.ok(Number(bravo.read("C:\\WEB\\SXDEMO\\HITS.TXT")) <= hits + 1, "the clock stopped asking");
+});
+
+await test("SNIFF.SPK: Voyager is told to get Simxplorer; server pages can tell who asked", async () => {
+  const VOYAGER = "Voyager/1.1 (SIM95)", SX = "Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)";
+  let r = await bravo.request("GET", "/sxdemo/", { headers: { "User-Agent": VOYAGER } });
+  assert.match(r.body, /<title>Simxplorer required<\/title>/);
+  assert.match(r.body, /This page requires Simxplorer 3\.0 or higher - <a href="\/sxdemo\/getsx\.htm"><font color="#00FF00">Download it now!<\/font><\/a>/);
+  assert.match(r.body, /You are using <b>Voyager 1\.1<\/b>/);
+  assert.ok(!/XMLHttpRequest\(\)/.test(r.body), "no script for Voyager");
+  r = await bravo.request("GET", "/sxdemo/", { headers: { "User-Agent": SX } });
+  assert.match(r.body, /<title>The Live Page<\/title>/);
+  // over the network, as Voyager would see it (this fetch says it is "test")
+  assert.match(await bravo.fetch("BRAVO", "/sxdemo/"), /This page requires Simxplorer 3\.0 or higher/);
+  bravo.mkdir("C:\\WEB\\SHOP");
+  bravo.write("C:\\WEB\\SHOP\\WHO.ASP", `<%@ import file="../SXDEMO/SNIFF.SPK" %><%= IsSimxplorer() %>|<%= IsVoyager() %>|<%= BrowserName() %>|<%= BrowserVersion() %>|<%= NeedsSimxplorer("3.0") = "" %>|<%= NeedsSimxplorer("4.0") = "" %>`);
+  const who = async (ua) => (await bravo.request("GET", "/shop/who.asp", { headers: ua ? { "User-Agent": ua } : {} })).body.trim();
+  assert.equal(await who(SX), "True|False|Simxplorer|3.02|True|False");
+  assert.equal(await who(VOYAGER), "False|True|Voyager|1.1|False|False");
+  assert.equal(await who("Mozilla/4.0 (compatible; MSIE 5.0; Windows 98)"), "False|False|Mozilla|4.0|False|False");
+  assert.equal(await who(""), "False|False|Unknown||False|False");
+  // with a Vapor store that has Simxplorer, the link goes there
+  bravo.mkdir("C:\\WEB\\VAPOR");
+  bravo.write("C:\\WEB\\VAPOR\\CATALOG.TXT", "SIMXPLOR|Simxplorer|9|1000|ok|Internet|A browser\n");
+  r = await bravo.request("GET", "/sxdemo/", { headers: { "User-Agent": VOYAGER } });
+  assert.match(r.body, /<a href="\/vapor\/#apps">/);
+  bravo.remove("C:\\WEB\\VAPOR\\CATALOG.TXT");
+});
+
 await test("a page with SPARK for Voyager and JavaScript for Simxplorer", async () => {
   await go("bravo/both.htm");
-  await wait(() => title() === "Simxplorer was here - Simxplorer", "the JavaScript");
+  await wait(() => title() === "Simxplorer was here - Simxplorer" && status().startsWith("Done"), "the JavaScript");
   assert.equal(status(), "Done (this page's SPARK scripts are for Voyager)");
   assert.deepEqual(dialogs(), [], "Page_Load is not taken for JavaScript");
 });

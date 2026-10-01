@@ -110,7 +110,8 @@ export async function machine(hostname = "SIM95", stack = null) {
     }
   };
   // One HTTP request, answered the way HTTPD.SPK answers it.
-  m.request = async (method, url, { body = "", cookies = "", budget } = {}) => {
+  // headers: more request headers, e.g. { "User-Agent": "Voyager/1.1 (SIM95)" }.
+  m.request = async (method, url, { body = "", cookies = "", budget, headers = {} } = {}) => {
     // Same mapping as PathToFile in HTTPD.SPK, with its INDEX.HTM -> INDEX.ASP fallback.
     const p = url.split("?")[0].replace(/\//g, "\\").toUpperCase();
     let file = "C:\\WEB" + (p.endsWith("\\") ? p + "INDEX.HTM" : p || "\\INDEX.HTM");
@@ -119,7 +120,7 @@ export async function machine(hostname = "SIM95", stack = null) {
       if (!disk.exists(file) || disk.isDir(file)) return { status: "404 Not Found", headers: [], body: "", raw: "" };
       return { status: "200 OK", headers: [], body: disk.read(file), raw: "" };
     }
-    const raw = `${method} ${url} HTTP/1.0\nHost: ${hostname}\n` + (cookies ? `Cookie: ${cookies}\n` : "") + "\n" + body;
+    const raw = `${method} ${url} HTTP/1.0\nHost: ${hostname}\n` + (cookies ? `Cookie: ${cookies}\n` : "") + Object.entries(headers).map(([k, v]) => `${k}: ${v}\n`).join("") + "\n" + body;
     if (raw.length > MESSAGE_LIMIT) throw new Error(`Message too long: Voyager cannot send a ${raw.length}-character request`);
     const text = await S.render(m, file, raw, "65.240.0.9", budget ? { budget } : {});
     if (text.length > MESSAGE_LIMIT) throw new Error(`Message too long: HTTPD.SPK would stop sending a ${text.length}-character page for ${url}`);

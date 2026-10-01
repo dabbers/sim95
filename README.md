@@ -16,7 +16,8 @@ A series of programs for the sim95 playground
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
-  program with a JavaScript interpreter written in SPARK.
+  program with a JavaScript interpreter written in SPARK (XMLHttpRequest
+  included), and `SNIFF.SPK` for "best viewed in Simxplorer" server pages.
 * [`simhost/`](simhost/) – SimHost: every web app on one machine, each in a
   folder of its own, and Move In to bring the other machines' data over.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK

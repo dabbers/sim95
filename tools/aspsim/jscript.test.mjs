@@ -33,7 +33,9 @@ SUB Main ()
         hostElems.Add("msg|TagName|span")
         JsReset()
         JsAddField(JsAddForm("f", 0), "name", "name")
+        hostXhr.Clear()
         err = JsRun(src, 1)
+        Answer()
         Print(err)
         Print(jsOut.Replace(Chr(10), Chr(1)))
         line = ""
@@ -42,6 +44,41 @@ SUB Main ()
         NEXT
         Print("--end--")
     NEXT
+END SUB
+
+' Answers the page's requests, the way the browser reports them: readyState 2,
+' 3 and 4. Hosts called nowhere fail (status 0); paths with "missing" are 404s.
+SUB Answer ()
+    VAR k AS Integer
+    VAR p AS Array OF String
+    VAR obj AS Integer
+    VAR req AS Integer
+    VAR e AS String
+    VAR body AS String
+    VAR st AS Integer
+    VAR why AS String
+    WHILE k < hostXhr.Count
+        p = hostXhr[k].Split("|")
+        req = Int(Val(p[0]))
+        obj = Int(Val(p[1]))
+        k = k + 1
+        IF p[3].Contains("nowhere") THEN
+            e = JsXhrUpdate(obj, req, 4, 0, "", "", "")
+        ELSE
+            st = 200
+            why = "OK"
+            IF p[3].Contains("missing") THEN
+                st = 404
+                why = "Not Found"
+            END IF
+            body = "reply to " + p[2] + " " + p[3] + " " + p[5]
+            IF p[3].Contains(".json") THEN body = "{""n"": 42, ""list"": [1, 2], ""ok"": true}"
+            e = JsXhrUpdate(obj, req, 2, st, why, "Content-Type: text/plain" + Chr(10) + "X-Echo: yes", "")
+            IF e = "" THEN e = JsXhrUpdate(obj, req, 3, st, why, "Content-Type: text/plain" + Chr(10) + "X-Echo: yes", body)
+            IF e = "" THEN e = JsXhrUpdate(obj, req, 4, st, why, "Content-Type: text/plain" + Chr(10) + "X-Echo: yes", body)
+        END IF
+        IF e <> "" THEN hostLog.Add("update:" + e)
+    END WHILE
 END SUB
 `;
 const m = await machine("ALPHA");
@@ -188,6 +225,72 @@ await test("eval, and the page: forms, elements, alerts, location, cookies, time
   assert.equal(r.err, "");
   assert.deepEqual(r.log, ["timeout:go():500:False", "timeout::1000:True", "cleartimeout:7", "navigate:next.htm", "history:-1", "open:pop.htm"]);
   assert.equal(await out(W(`navigator.appName + ' ' + (navigator.userAgent.indexOf('Simxplorer') > 0) + ' ' + typeof window + ' ' + (window.document == document)`)), "Simxplorer true object true");
+});
+
+await test("XMLHttpRequest: open, send, readyState 1 to 4, headers, and the answer", async () => {
+  const [r] = await js(`
+var x = new XMLHttpRequest(), seen = [];
+x.onreadystatechange = function () { seen.push(this.readyState + ':' + x.status); if (x.readyState == 4) document.write(seen.join(' ') + '|' + x.responseText + '|' + x.statusText + '|' + x.getResponseHeader('x-echo') + '|' + x.getResponseHeader('Nope') + '|' + x.getAllResponseHeaders().split('\\r\\n').length); };
+x.onload = function () { document.write('|loaded'); };
+x.open('post', 'save.asp', true);
+x.setRequestHeader('X-Thing', 'one');
+x.send('a=1&b=2');
+document.write('sent ' + x.readyState + '|');`);
+  assert.equal(r.err, "");
+  assert.deepEqual(r.log, ["xhr:POST save.asp [X-Thing: one;] a=1&b=2"]);
+  assert.equal(r.out, "sent 1|1:0 2:200 3:200 4:200|reply to POST save.asp a=1&b=2|OK|yes|null|3|loaded");
+});
+
+await test("XMLHttpRequest: 404, a failed request is status 0, and several at once", async () => {
+  let [r] = await js(`
+var a = new XMLHttpRequest(), b = new XMLHttpRequest(), c = new XMLHttpRequest();
+function done(name, x) { return function () { if (x.readyState == 4) document.write(name + '=' + x.status + ' '); }; }
+a.onreadystatechange = done('a', a); b.onreadystatechange = done('b', b); c.onreadystatechange = done('c', c);
+c.onerror = function () { document.write('c failed '); };
+a.open('GET', 'one.txt'); b.open('GET', 'missing.txt'); c.open('GET', 'http://nowhere/x.txt');
+a.send(); b.send(null); c.send();`);
+  assert.equal(r.err, "");
+  assert.equal(r.out, "a=200 b=404 c=0 c failed ");
+  assert.equal(r.log.filter((l) => l.startsWith("xhr:")).length, 3);
+  [r] = await js(`var x = new XMLHttpRequest(); x.open('GET', 'a.txt', false);`);
+  assert.match(r.err, /^1\|Simxplorer cannot wait for the network/);
+  [r] = await js(`var x = new XMLHttpRequest(); x.onreadystatechange = function () { document.write(x.readyState); }; x.open('GET', 'a.txt'); x.send(); x.abort(); document.write('/' + x.readyState);`);
+  assert.equal(r.out, "1/0", "an aborted request says nothing more");
+  assert.deepEqual(r.log, ["xhr:GET a.txt [] ", "xhrabort:1"]);
+  [r] = await js(`var x = new XMLHttpRequest(); x.send();`);
+  assert.equal(r.err, "1|Unspecified error", "send before open");
+});
+
+await test("ActiveXObject makes IE's XMLHTTP, and nothing else", async () => {
+  const [a, b, c] = await js(
+    `var x = new ActiveXObject("Microsoft.XMLHTTP"); x.onreadystatechange = function () { if (x.readyState == 4) document.write(x.responseText); }; x.open("GET", "ie.txt", true); x.send();`,
+    `var y = new ActiveXObject("Msxml2.XMLHTTP"); document.write(typeof y.send);`,
+    `try { new ActiveXObject("Excel.Application"); } catch (e) { document.write(e.message); } var z = new ActiveXObject("Word.Document");`);
+  assert.equal(a.out, "reply to GET ie.txt ");
+  assert.equal(b.out, "function");
+  assert.equal(c.out, "Automation server can't create object");
+  assert.equal(c.err, "1|Automation server can't create object");
+});
+
+await test("fetch() with then, chaining, arrow functions, json and catch", async () => {
+  const [a, b, c] = await js(
+    `fetch('news.txt').then(r => r.text()).then(t => document.write(t + '!'));`,
+    `fetch('data.json').then(function (r) { document.write(r.status + ' ' + r.ok + ' ' + r.headers.get('X-Echo') + ' '); return r.json(); }).then(function (d) { document.write(d.n + d.list[1]); });`,
+    `fetch('http://nowhere/').then(function () { document.write('no'); }).catch(function (e) { document.write('caught: ' + e.message); });
+     fetch('save.asp', {method: 'POST', body: 'x=1', headers: {'X-Y': 'z'}}).then(function () { throw new Error('inside'); }).then(null, function (e) { document.write(' and ' + e.message); });`);
+  assert.equal(a.err, "");
+  assert.equal(a.out, "reply to GET news.txt !");
+  assert.equal(b.out, "200 true yes 44");
+  assert.equal(c.out, "caught: Failed to fetch http://nowhere/ and inside");
+  assert.ok(c.log.includes("xhr:POST save.asp [X-Y: z;] x=1"), c.log.join("\n"));
+  assert.equal(await out(`var o = { n: 3, f: function () { var g = () => this.n * 2; return g(); } }; var add = (a, b) => a + b; document.write('' + o.f() + add(1, 2) + [1, 2].length);`), "632");
+});
+
+await test("browser detection: navigator and document.all", async () => {
+  assert.equal(await out(W(`navigator.appName + '|' + navigator.appCodeName + '|' + navigator.appVersion + '|' + navigator.userAgent + '|' + navigator.platform`)),
+    "Simxplorer|Mozilla|2.0 (compatible; Simxplorer 3.02; SIM95)|Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)|SIM95");
+  assert.equal(await out(`if (document.all) document.write(document.all.msg.innerText + ' ' + document.all['name'].value + ' ' + document.all.item('msg').tagName + ' ' + document.all.nothing + ' ' + document.all.item('nothing'));`), "old Bob span undefined null");
+  assert.equal(await out(W(`typeof XMLHttpRequest + ' ' + (window.ActiveXObject ? 'ie' : 'other')`)), "function ie");
 });
 
 await test("a runaway script asks whether to stop", async () => {

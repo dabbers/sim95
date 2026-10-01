@@ -170,14 +170,17 @@ const apps = {
 ' JavaScript engine in one program. Start it from Files (double-click it) or
 ' from SPARK. Your Voyager bookmarks become its Favorites the first time, and
 ' the two share cookies (C:\\SYSTEM\\COOKIES.TXT). Settings are kept in
-' C:\\SYSTEM\\SIMXPLOR.INI.`,
-    copy: [],
+' C:\\SYSTEM\\SIMXPLOR.INI. It also puts a demo in C:\\WEB\\SXDEMO (the Live
+' Page, at http://YOURNAME/sxdemo/ when the web server runs) with SNIFF.SPK,
+' which tells server pages which browser is asking. The home page is not touched.`,
+    // the demo, and SNIFF.SPK for other web apps to import
+    copy: [["simxplorer/WEB", "C:\\WEB\\SXDEMO"]],
     // the engine and the window, joined into one program
     generated: [{ dest: "C:\\PROGRAMS\\SIMXPLOR.SPK", text: () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") }],
-    dirs: [],
+    dirs: ["C:\\WEB\\SXDEMO"],
     first: [],
     last: [`SYS.Start("C:\\PROGRAMS\\SIMXPLOR.SPK", "")`],
-    done: `Print("Simxplorer is running. Next time, start C:\\PROGRAMS\\SIMXPLOR.SPK from Files.")`,
+    done: `Print("Simxplorer is running. Next time, start C:\\PROGRAMS\\SIMXPLOR.SPK from Files. Its demo: http://" + NET.HostName.Lower() + "/sxdemo/")`,
     code: () => "",
   },
   frostbird: {

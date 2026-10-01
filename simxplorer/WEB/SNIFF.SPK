@@ -1,0 +1,94 @@
+' SNIFF.SPK - which browser is asking? For ActiveSparkPages that want to
+' know, or that are best viewed in Simxplorer. Import it into a page:
+'
+'     <%@ import file="SNIFF.SPK" %>                  (a copy next to the page)
+'     <%@ import file="../SXDEMO/SNIFF.SPK" %>        (Simxplorer's own copy)
+'     <%@ import file="C:\WEB\SXDEMO\SNIFF.SPK" %>    (the same, from anywhere)
+'
+' Simxplorer's installer puts it in C:\WEB\SXDEMO. It reads the request's
+' User-Agent:
+'     Voyager      Voyager/1.1 (SIM95)
+'     Simxplorer   Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)
+'
+'     IsSimxplorer(), IsVoyager()   TRUE when that browser asked
+'     BrowserName()                 "Simxplorer", "Voyager", whatever else
+'                                   said who it was, or "Unknown"
+'     BrowserVersion()              "3.02", "1.1", or ""
+'     NeedsSimxplorer("3.0")        "" in Simxplorer 3.0 or newer; anywhere
+'                                   else, a "This page requires Simxplorer"
+'                                   block to send instead of the page:
+'
+'     <% VAR gate AS String
+'        gate = NeedsSimxplorer("3.0")
+'        IF gate <> "" THEN
+'            RESPONSE.Write("<html><body>" + gate + "</body></html>")
+'            RESPONSE.End()
+'        END IF %>
+'
+' Its own names all start with Sniff, to stay out of the page's way.
+
+FUNCTION SniffAgent () AS String
+    RETURN REQUEST.Header("User-Agent").Trim()
+END FUNCTION
+
+FUNCTION IsSimxplorer () AS Bool
+    RETURN SniffAgent().Contains("Simxplorer")
+END FUNCTION
+
+FUNCTION IsVoyager () AS Bool
+    RETURN SniffAgent().StartsWith("Voyager/")
+END FUNCTION
+
+FUNCTION BrowserName () AS String
+    VAR ua AS String
+    ua = SniffAgent()
+    IF IsSimxplorer() THEN RETURN "Simxplorer"
+    IF IsVoyager() THEN RETURN "Voyager"
+    IF ua = "" THEN RETURN "Unknown"
+    RETURN ua.Split("/")[0].Split(" ")[0]
+END FUNCTION
+
+FUNCTION BrowserVersion () AS String
+    VAR ua AS String
+    VAR v AS String
+    ua = SniffAgent()
+    IF IsSimxplorer() THEN
+        ' the version is the browser's own, not the Mozilla/2.0 it starts with
+        v = ua.Substring(ua.IndexOf("Simxplorer") + 10, ua.Length - ua.IndexOf("Simxplorer") - 10)
+        RETURN v.Split(";")[0].Split(")")[0].Trim()
+    END IF
+    IF NOT ua.Contains("/") THEN RETURN ""
+    RETURN ua.Split("/")[1].Split(" ")[0].Trim()
+END FUNCTION
+
+' Where to get Simxplorer: this machine's Vapor store, or the page about it
+' that comes with Simxplorer. "" when neither is here.
+FUNCTION SniffGetUrl () AS String
+    IF FS.Exists("C:\WEB\VAPOR\CATALOG.TXT") THEN
+        IF FS.Read("C:\WEB\VAPOR\CATALOG.TXT").Contains("SIMXPLOR|") THEN RETURN "/vapor/#apps"
+    END IF
+    IF FS.Exists("C:\WEB\SXDEMO\GETSX.HTM") THEN RETURN "/sxdemo/getsx.htm"
+    RETURN ""
+END FUNCTION
+
+FUNCTION NeedsSimxplorer (minVersion AS String) AS String
+    VAR html AS String
+    VAR where AS String
+    VAR yours AS String
+    IF IsSimxplorer() AND Val(BrowserVersion()) >= Val(minVersion) THEN RETURN ""
+    yours = BrowserName()
+    IF BrowserVersion() <> "" THEN yours = yours + " " + BrowserVersion()
+    where = SniffGetUrl()
+    html = "<center><table width=""90%"" border=""4"" cellpadding=""10"" cellspacing=""0"" bgcolor=""#000080""><tr><td align=""center"">" _
+         + "<font color=""#FFFF00"" size=""5""><b><blink>Attention, surfer!</blink></b></font><br><br>" _
+         + "<font color=""#FFFFFF"" size=""4""><b>This page requires Simxplorer " + SERVER.HtmlEncode(minVersion) + " or higher - "
+    IF where = "" THEN
+        html = html + "Download it now!</b></font>"
+    ELSE
+        html = html + "<a href=""" + where + """><font color=""#00FF00"">Download it now!</font></a></b></font>"
+    END IF
+    html = html + "<br><br><font color=""#C0C0C0"">You are using <b>" + SERVER.HtmlEncode(yours) + "</b>. This site uses JavaScript and" _
+         + " XMLHttpRequest, so it looks best in Simxplorer, the browser with JavaScript for SIM95.</font>"
+    IF where = "" THEN html = html + "<br><font color=""#C0C0C0"" size=""2"">Ask at any Vapor store: Simxplorer is on the Apps shelf, free.</font>"
+    RETURN html + "</td></tr></table></center>"
+END FUNCTION

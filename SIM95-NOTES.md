@@ -92,6 +92,21 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
   Names can have an ISP part (`BOB.DIALUP.ZONE`), and a lookup of just `BOB`
   finds it. To run several web apps on one machine, give each a folder (see
   `simhost/`).
+* **Two lookups of one name at once lose the first.** The network stack
+  keeps one waiter per name, so when a program (or two programs on one
+  machine) look up `BRAVO` while a lookup of `BRAVO` is still out, the first
+  never comes back: its `NET.Resolve`, or its `Connect("bravo", 80)`, waits
+  forever, without even timing out. Look names up one at a time
+  (`NET.Resolve`, then `Connect` to the address), and keep what you find.
+  Simxplorer, which fetches several things at once, does.
+* **A close can overtake the last message.** Each machine's stack delays
+  what arrives by a little and hands it on with a timer. When answers on
+  several connections arrive in the same instant, the `close` of one can be
+  handed on before its last message, and that message is then dropped: the
+  connection just closes, empty. Seen in `tools/aspsim` with a server
+  answering three requests in one millisecond. A client that opens several
+  connections should space them out (Simxplorer starts at most one every
+  50 ms).
 * **The Files service** (`C:\PROGRAMS\FILESVC.SPK`, port 139, on by
   default) lets anyone with the machine's user name and password from
   `C:\SYSTEM\USERS.INI` read and write all of C:. Commands: `AUTH user|password`,
