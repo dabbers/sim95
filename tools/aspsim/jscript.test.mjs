@@ -1,5 +1,5 @@
-// Tests for the browser's JavaScript engine (explorer/src/JSCRIPT.SPK), run on
-// its own with a stand-in page (explorer/test/HOSTSTUB.SPK).
+// Tests for the browser's JavaScript engine (simxplorer/src/JSCRIPT.SPK), run on
+// its own with a stand-in page (simxplorer/test/HOSTSTUB.SPK).
 //   node tools/aspsim/jscript.test.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -14,7 +14,7 @@ async function test(name, fn) {
   catch (e) { failures++; console.log("FAIL  " + name + "\n      " + (e.message || e).toString().split("\n").join("\n      ")); }
 }
 
-const engine = fs.readFileSync(path.join(root, "explorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "explorer/test/HOSTSTUB.SPK"), "utf8");
+const engine = fs.readFileSync(path.join(root, "simxplorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "simxplorer/test/HOSTSTUB.SPK"), "utf8");
 const main = `
 SUB Main ()
     VAR n AS Integer
@@ -157,7 +157,7 @@ await test("dates", async () => {
   assert.equal(await out(`document.write(isNaN(new Date('bogus').getTime()))`), "true");
 });
 
-await test("errors look like Internet Explorer's, and try/catch catches them", async () => {
+await test("errors look like Simxplorer's, and try/catch catches them", async () => {
   const [a, b, c, d, e, f] = await js("var x = 1;\nfoo();", "var o = null;\n\no.x = 1;", "var o = {};\no.nope();", "var x = 5;\nx();", "var x = (1;", "function f() { f(); }\nf();");
   assert.equal(a.err, "2|'foo' is undefined");
   assert.equal(b.err, "3|'o' is null or not an object");
@@ -187,7 +187,7 @@ await test("eval, and the page: forms, elements, alerts, location, cookies, time
   [r] = await js(`var t = setTimeout('go()', 500); var i = setInterval(function () {}, 1000); clearTimeout(t); location.href = 'next.htm'; history.back(); window.open('pop.htm');`);
   assert.equal(r.err, "");
   assert.deepEqual(r.log, ["timeout:go():500:False", "timeout::1000:True", "cleartimeout:7", "navigate:next.htm", "history:-1", "open:pop.htm"]);
-  assert.equal(await out(W(`navigator.appName + ' ' + (navigator.userAgent.indexOf('MSIE') > 0) + ' ' + typeof window + ' ' + (window.document == document)`)), "Microsoft Internet Explorer true object true");
+  assert.equal(await out(W(`navigator.appName + ' ' + (navigator.userAgent.indexOf('Simxplorer') > 0) + ' ' + typeof window + ' ' + (window.document == document)`)), "Simxplorer true object true");
 });
 
 await test("a runaway script asks whether to stop", async () => {

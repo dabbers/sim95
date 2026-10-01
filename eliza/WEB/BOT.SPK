@@ -744,7 +744,7 @@ FUNCTION TypeScript (text AS String) AS String
          + "END SUB" + Chr(10) _
          + "</script>" + Chr(10) _
          + "<script language=""JavaScript"">" + Chr(10) _
-         + "// The same for Internet Explorer, which runs JavaScript instead" + Chr(10) _
+         + "// The same for Simxplorer, which runs JavaScript instead" + Chr(10) _
          + "var full = """ + JsQuote(Wrapped(text)) + """, upTo = 0;" + Chr(10) _
          + "function typeIt() {" + Chr(10) _
          + "  upTo += 12;" + Chr(10) _

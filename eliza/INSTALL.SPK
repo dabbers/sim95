@@ -776,7 +776,7 @@ SUB File0 ()
     t = t + "         + ""END SUB"" + Chr(10) _" + NL
     t = t + "         + ""</script>"" + Chr(10) _" + NL
     t = t + "         + ""<script language=""""JavaScript"""">"" + Chr(10) _" + NL
-    t = t + "         + ""// The same for Internet Explorer, which runs JavaScript instead"" + Chr(10) _" + NL
+    t = t + "         + ""// The same for Simxplorer, which runs JavaScript instead"" + Chr(10) _" + NL
     t = t + "         + ""var full = """""" + JsQuote(Wrapped(text)) + """""", upTo = 0;"" + Chr(10) _" + NL
     t = t + "         + ""function typeIt() {"" + Chr(10) _" + NL
     t = t + "         + ""  upTo += 12;"" + Chr(10) _" + NL

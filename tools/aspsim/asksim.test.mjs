@@ -146,7 +146,7 @@ await test("a machine that goes away stays findable, marked, with its cached cop
   r = ok(await visitor.get(`/cache.asp?id=${doc("http://charlie/club.htm").split("|")[0]}`));
   assert.match(r.body, /The real page has not answered since/);
   assert.match(r.body, /Bring your own chess board/);
-  // Internet Explorer asks by address when a site is down
+  // Simxplorer asks by address when a site is down
   r = ok(await visitor.get("/cache.asp?url=" + encodeURIComponent("http://charlie/club.htm")));
   assert.match(r.body, /The real page has not answered since/);
   r = ok(await visitor.get("/cache.asp?url=charlie"));

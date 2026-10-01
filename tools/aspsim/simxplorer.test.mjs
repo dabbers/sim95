@@ -1,4 +1,4 @@
-// End-to-end tests for Internet Explorer (explorer/src): the browser on ALPHA
+// End-to-end tests for Simxplorer (simxplorer/src): the browser on ALPHA
 // fetching real pages from BRAVO's web server, running their JavaScript.
 //   node tools/aspsim/explorer.test.mjs
 import assert from "node:assert/strict";
@@ -80,13 +80,16 @@ page("both.htm", `<html><head><title>Both</title>
 <script type="spark">SUB Page_Load ()
     PAGE.Status = "Voyager was here"
 END SUB</script>
-<script language="JavaScript">document.title = "IE was here";</script>
+<script language="JavaScript">document.title = "Simxplorer was here";</script>
 </head><body onload="Page_Load"><p>Works in both browsers.</p></body></html>`);
 page("change.htm", `<html><head><title>Changes</title></head><body>
 <input id="shout" onchange="runs++; document.getElementById('runs').innerText = runs; document.getElementById('echo').innerText = this.value.toUpperCase()">
 <span id="echo"></span> <span id="runs">0</span> <span id="order"></span>
 <input type="button" value="Done" onclick="document.getElementById('order').innerText = document.getElementById('echo').innerText + ' then click'">
 <script>var runs = 0;</script></body></html>`);
+page("words.htm", `<html><head><title>Words</title></head><body>
+<h1>Words</h1><p>One apple, two apples, three apples.</p>
+<form><input name="note" value="apple pie"></form></body></html>`);
 page("prompt.htm", `<html><head><title>Asking</title></head><body><script>
 var n = prompt("What is your name?", "Bob");
 document.write(n == null ? "You said nothing." : "Hi " + n + "!");
@@ -95,20 +98,20 @@ page("move.htm", `<html><head><meta http-equiv="refresh" content="0; url=index.h
 
 alpha.write("C:\\SYSTEM\\BOOKMARK.TXT", "Bravo|http://bravo/\n");
 
-await test("the installer writes IEXPLORE.SPK and starts it", async () => {
-  alpha.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "explorer/INSTALL.SPK"), "utf8"));
+await test("the installer writes SIMXPLOR.SPK and starts it", async () => {
+  alpha.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "simxplorer/INSTALL.SPK"), "utf8"));
   const pid = alpha.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !alpha.running(pid), 60000, "the installer");
-  assert.match(alpha.output(pid), /Internet Explorer is installed \(1 files\)\.\n  wrote|wrote C:\\PROGRAMS\\IEXPLORE.SPK[\s\S]*Internet Explorer is running/);
-  assert.ok(alpha.read("C:\\PROGRAMS\\IEXPLORE.SPK") === fs.readFileSync(path.join(root, "explorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "explorer/src/BROWSER.SPK"), "utf8"), "explorer/INSTALL.SPK is out of date: node tools/build-installer.mjs explorer");
-  const started = () => alpha.kernel.ps().find((p) => p.name === "IEXPLORE");
-  await net.until(() => started() && alpha.widgets(started().pid, "HtmlView").length, 30000, "Internet Explorer");
+  assert.match(alpha.output(pid), /Simxplorer is installed \(1 files\)\.\n  wrote|wrote C:\\PROGRAMS\\SIMXPLOR.SPK[\s\S]*Simxplorer is running/);
+  assert.ok(alpha.read("C:\\PROGRAMS\\SIMXPLOR.SPK") === fs.readFileSync(path.join(root, "simxplorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "simxplorer/src/BROWSER.SPK"), "utf8"), "simxplorer/INSTALL.SPK is out of date: node tools/build-installer.mjs explorer");
+  const started = () => alpha.kernel.ps().find((p) => p.name === "SIMXPLOR");
+  await net.until(() => started() && alpha.widgets(started().pid, "HtmlView").length, 30000, "Simxplorer");
   assert.deepEqual(alpha.errors, []);
   alpha.kernel.kill(started().pid);
   alpha.ui.dialogs.splice(0); // it went to http://alpha/, where nobody serves pages
 });
 
-const ie = alpha.run("C:\\PROGRAMS\\IEXPLORE.SPK", ["http://bravo/"]);
+const ie = alpha.run("C:\\PROGRAMS\\SIMXPLOR.SPK", ["http://bravo/"]);
 const win = () => alpha.widgets(ie, "Window")[0];
 const view = () => alpha.widgets(ie, "HtmlView")[0];
 const addressBox = () => alpha.widgets(ie, "TextBox")[0];
@@ -117,13 +120,18 @@ const status = () => win().get("Status");
 const el = (id) => view().elements.get(id);
 const html = () => String(view().get("Html") ?? "");
 const wait = (fn, what, ms = 8000) => net.until(fn, ms, what);
-const loaded = (t) => wait(() => title() === t + " - Microsoft Internet Explorer" && status().startsWith("Done"), "the page " + t);
+const loaded = (t) => wait(() => title() === t + " - Simxplorer" && status().startsWith("Done"), "the page " + t);
 const dialogs = () => alpha.ui.dialogs.splice(0);
 const fireScript = async (id) => { const e = el(id) || [...view().elements.values()].find((x) => x.Value === id); view().fire("onScript", "onclick", /onclick="([^"]*)"/.exec(e.attrs)[1]); };
 // the js:N an element's onclick became, found by something in its tag
 const onclickOf = (bit) => { const tag = html().split("<").find((t) => t.includes(bit) && /onclick="js:\d+"/.test(t)); assert.ok(tag, "no handler on " + bit); return /onclick="(js:\d+)"/.exec(tag)[1]; };
 const onChangeOf = (id) => /onchange="(js:\d+)"/.exec(html().split("<").find((t) => t.includes(`id="${id}"`)))[1];
-const button = (name) => alpha.button(ie, name);
+// the toolbar is drawn on a canvas: press and let go over button i
+const toolbar = () => alpha.widgets(ie, "Canvas")[0];
+const tool = (i) => { toolbar().fire("onMouseDown", 2 + i * 58 + 25, 20, 1); toolbar().fire("onMouseUp", 2 + i * 58 + 25, 20, 1); };
+const TOOLS = { Back: 0, Forward: 1, Stop: 2, Refresh: 3, Home: 4, Search: 5, Favorites: 6, History: 7, Mail: 8 };
+const button = (name) => ({ call: () => tool(TOOLS[name]) });
+const menu = (item) => alpha.widgets(ie, "Menu")[0].fire("onSelect", item);
 await net.until(() => alpha.widgets(ie, "HtmlView").length > 0 || alpha.errors.length, 30000, "the window");
 const go = async (url) => { addressBox().set("Text", url); addressBox().fire("onEnter"); };
 
@@ -143,7 +151,7 @@ await test("scripts write into the page as it loads", async () => {
   view().fire("onNavigate", "script.htm");
   await loaded("Scripted");
   assert.match(html(), /Squares: 1 4 9 16 <\/p>/);
-  assert.match(html(), /<p id="agent">Microsoft Internet Explorer<\/p>/);
+  assert.match(html(), /<p id="agent">Simxplorer<\/p>/);
   assert.ok(!html().includes("square(n)"), "the script itself is not shown");
 });
 
@@ -154,7 +162,7 @@ await test("onclick runs JavaScript that changes the page, and alert() shows a b
   await wait(() => el("count").Text === "clicked 2", "the second click");
   view().fire("onScript", "onclick", onclickOf('value="Hello"'));
   await wait(() => alpha.ui.dialogs.length === 1, "the alert");
-  assert.deepEqual(dialogs().map((d) => [d.title, d.kind, d.text]), [["Microsoft Internet Explorer", "warn", "Hello from bravo"]]);
+  assert.deepEqual(dialogs().map((d) => [d.title, d.kind, d.text]), [["Simxplorer", "warn", "Hello from bravo"]]);
 });
 
 await test("a text box's onchange waits for the typing to stop, as leaving the box did", async () => {
@@ -172,6 +180,60 @@ await test("a text box's onchange waits for the typing to stop, as leaving the b
   await loaded("Scripted");
 });
 
+await test("the menus: Find on this page, Edit, and Search the Web (Ctrl+E)", async () => {
+  await go("bravo/words.htm");
+  await loaded("Words");
+  const field = [...view().elements.values()].find((e) => /name="note"/.test(e.attrs)).Id;
+  view().call("SetElement", field, "Value", "typed by hand");
+  menu("Find (on This Page)...");
+  const findWin = () => alpha.widgets(ie, "Window").find((w) => w.get("Title") === "Find");
+  await wait(() => findWin()?.get("Visible"), "the Find window");
+  const findBox = alpha.widgets(ie, "TextBox").find((t) => t.parent === findWin());
+  findBox.set("Text", "apple");
+  alpha.button(ie, "Find Next").call("Click");
+  await wait(() => /\(1 of 3\)/.test(status()), "the first apple");
+  assert.match(html(), /One <b><u><font color="#CC0000">apple<\/font><\/u><\/b>, two/);
+  assert.equal(view().elements.get(field).Value, "typed by hand", "what was typed survives");
+  menu("Find Next");
+  await wait(() => /\(2 of 3\)/.test(status()), "the second");
+  assert.match(html(), /two <b><u><font color="#CC0000">apple<\/font><\/u><\/b>s/);
+  menu("Find Next");
+  menu("Find Next");
+  await wait(() => alpha.ui.dialogs.length === 1, "the end");
+  assert.equal(dialogs()[0].text, "Finished searching the page.");
+  assert.ok(!/CC0000/.test(html()), "the mark goes");
+  findBox.set("Text", "pear");
+  menu("Find Next");
+  await wait(() => alpha.ui.dialogs.length === 1, "not found");
+  assert.equal(dialogs()[0].text, 'Simxplorer could not find "pear" on this page.');
+  menu("Select All");
+  await new Promise((r) => setTimeout(r, 100));
+  menu("Copy");
+  await wait(() => alpha.exists("C:\\SYSTEM\\CLIPBRD.TXT") || alpha.errors.length, "the clipboard").catch((e) => { throw new Error(e.message + JSON.stringify(alpha.ui.dialogs) + alpha.running(ie) + alpha.errors); });
+  assert.deepEqual(alpha.errors, []);
+  assert.match(alpha.read("C:\\SYSTEM\\CLIPBRD.TXT"), /^Words\nOne apple, two apples, three apples\.$/);
+  alpha.write("C:\\SYSTEM\\CLIPBRD.TXT", "bravo/forms.htm");
+  menu("Paste");
+  await wait(() => addressBox().get("Text") === "bravo/forms.htm", "the paste");
+  menu("Search the Web...");
+  await wait(() => alpha.widgets(ie, "Window").some((w) => w.get("Title") === "Search the Web"), "the search box");
+  alpha.widgets(ie, "TextBox").find((t) => t.parent?.get?.("Title") === "Search the Web").set("Text", "chess openings");
+  alpha.button(ie, "OK").call("Click");
+  await wait(() => /about:search\?chess\+openings/.test(addressBox().get("Text")), "the search");
+});
+
+await test("the toolbar: greyed-out buttons do nothing", async () => {
+  await go("bravo/script.htm");
+  await loaded("Scripted");
+  tool(TOOLS.Forward);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(addressBox().get("Text"), "http://bravo/script.htm");
+  tool(TOOLS.Back);
+  await wait(() => addressBox().get("Text") !== "http://bravo/script.htm", "Back");
+  tool(TOOLS.Forward);
+  await loaded("Scripted");
+});
+
 await test("a link's onclick can stop it; javascript: links run", async () => {
   const leave = onclickOf('href="index.htm"');
   alpha.ui.answers.push(false);
@@ -181,7 +243,7 @@ await test("a link's onclick can stop it; javascript: links run", async () => {
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(addressBox().get("Text"), "http://bravo/script.htm", "stayed");
   view().fire("onNavigate", "javascript:void(document.title = 'Renamed')");
-  await wait(() => title() === "Renamed - Microsoft Internet Explorer", "the new title");
+  await wait(() => title() === "Renamed - Simxplorer", "the new title");
   alpha.ui.answers.push(true);
   view().fire("onScript", "onclick", leave);
   await loaded("Bravo's Place");
@@ -198,13 +260,13 @@ await test("Back and Forward", async () => {
 await test("onsubmit checks a form, can change it, and the form goes by POST", async () => {
   await go("bravo/forms.htm");
   await loaded("Sign the Guestbook");
-  assert.match(html(), /<form name="book" method="post" action="iesubmit:0">/);
-  view().fire("onSubmit", "iesubmit:0", "who=&stamp=no-js&cool=yes&go=Sign", "");
+  assert.match(html(), /<form name="book" method="post" action="sxsubmit:0">/);
+  view().fire("onSubmit", "sxsubmit:0", "who=&stamp=no-js&cool=yes&go=Sign", "");
   await wait(() => alpha.ui.dialogs.length === 1, "the alert");
   assert.equal(dialogs()[0].text, "Please type your name.");
   const who = [...view().elements.values()].find((e) => /name="who"/.test(e.attrs)).Id;
   view().call("SetElement", who, "Value", "Ann & Bob");
-  view().fire("onSubmit", "iesubmit:0", "who=Ann+%26+Bob&stamp=no-js&cool=yes&go=Sign", "");
+  view().fire("onSubmit", "sxsubmit:0", "who=Ann+%26+Bob&stamp=no-js&cool=yes&go=Sign", "");
   await loaded("Signed");
   assert.equal(el("method").Text, "POST");
   assert.equal(el("who").Text, "Ann & Bob");
@@ -217,7 +279,7 @@ await test("a GET form without script goes as the view sent it", async () => {
   button("Back").call("Click");
   await loaded("Sign the Guestbook");
   view().call("SetElement", [...view().elements.values()].find((e) => /name="q"/.test(e.attrs)).Id, "Value", "dogs");
-  view().fire("onNavigate", "iesubmit:1?q=dogs");
+  view().fire("onNavigate", "sxsubmit:1?q=dogs");
   await loaded("Signed");
   assert.equal(el("method").Text, "GET");
   assert.equal(el("who").Text, "dogs");
@@ -227,7 +289,7 @@ await test("a GET form without script goes as the view sent it", async () => {
 await test("setTimeout, setInterval and body onload", async () => {
   await go("http://bravo/timer.htm");
   await wait(() => el("clock")?.Text === "3", "three ticks");
-  await wait(() => title() === "Later - Microsoft Internet Explorer", "the timeout");
+  await wait(() => title() === "Later - Simxplorer", "the timeout");
   await new Promise((r) => setTimeout(r, 400));
   assert.equal(el("clock").Text, "3", "cleared");
 });
@@ -238,7 +300,7 @@ await test("a script error says where, and No stops the page's scripts", async (
   await loaded("Broken");
   const d = dialogs();
   assert.equal(d.length, 1);
-  assert.equal(d[0].title, "Internet Explorer Script Error");
+  assert.equal(d[0].title, "Simxplorer Script Error");
   assert.match(d[0].text, /Line:  5\nChar:  1\nError:  'nosuchfunction' is undefined\nCode:  0\nURL:  http:\/\/bravo\/broken.htm/);
   assert.ok(!html().includes("second script"), "no more scripts");
   assert.equal(status(), "Done, but with errors on page.");
@@ -250,24 +312,25 @@ await test("document.cookie lands in Voyager's cookie jar", async () => {
   assert.match(alpha.read("C:\\SYSTEM\\COOKIES.TXT"), /^BRAVO\|flavour\|oatmeal$/m);
 });
 
-await test("a page with SPARK for Voyager and JavaScript for IE", async () => {
+await test("a page with SPARK for Voyager and JavaScript for Simxplorer", async () => {
   await go("bravo/both.htm");
-  await wait(() => title() === "IE was here - Microsoft Internet Explorer", "the JavaScript");
+  await wait(() => title() === "Simxplorer was here - Simxplorer", "the JavaScript");
   assert.equal(status(), "Done (this page's SPARK scripts are for Voyager)");
   assert.deepEqual(dialogs(), [], "Page_Load is not taken for JavaScript");
 });
 
 await test("prompt() asks in a window of its own", async () => {
   await go("bravo/prompt.htm");
-  await wait(() => alpha.widgets(ie, "Window").some((w) => w.get("Title") === "Explorer User Prompt"), "the prompt");
+  await wait(() => alpha.widgets(ie, "Window").some((w) => w.get("Title") === "Simxplorer User Prompt"), "the prompt");
   const box = alpha.widgets(ie, "TextBox").find((t) => t.get("Text") === "Bob");
   assert.ok(box, "the default answer is filled in");
   box.set("Text", "Ann");
-  alpha.button(ie, "OK").call("Click");
+  alpha.widgets(ie, "Button").find((b) => b.get("Text") === "OK" && b.parent?.get?.("Title") === "Simxplorer User Prompt").call("Click");
   await wait(() => /Hi Ann!/.test(html()), "the answer used");
   await go("bravo/prompt.htm");
-  await wait(() => alpha.button(ie, "Cancel"), "the prompt again");
-  alpha.button(ie, "Cancel").call("Click");
+  const promptButton = (text) => alpha.widgets(ie, "Button").find((b) => b.get("Text") === text && b.parent?.get?.("Title") === "Simxplorer User Prompt");
+  await wait(() => promptButton("Cancel"), "the prompt again");
+  promptButton("Cancel").call("Click");
   await wait(() => /You said nothing\./.test(html()), "Cancel gives null");
 });
 
@@ -276,12 +339,12 @@ await test("meta refresh moves on", async () => {
   await loaded("Bravo's Place");
 });
 
-await test("a machine that is not there: IE's box, and the page stays", async () => {
+await test("a machine that is not there: its box, and the page stays", async () => {
   alpha.ui.answers.push(false);
   await go("http://nowhere/");
   await wait(() => alpha.ui.dialogs.length === 1, "the box");
   const d = dialogs()[0];
-  assert.match(d.text, /^Internet Explorer cannot open the Internet site http:\/\/nowhere\/\.\n\n/);
+  assert.match(d.text, /^Simxplorer cannot open the Internet site http:\/\/nowhere\/\.\n\n/);
   assert.equal(addressBox().get("Text"), "http://nowhere/");
   assert.match(html(), /Welcome/);
   assert.deepEqual(alpha.errors, []);
@@ -296,7 +359,7 @@ await test("AutoSearch, Favorites, History and Options are pages of its own", as
   assert.match(html(), /You were looking for <b>chess clubs<\/b>/);
   view().fire("onNavigate", "about:options?home=bravo&search=http%3A%2F%2Fbravo%2Fsign.asp%3Fq%3D%25s&mail=");
   await wait(() => /Your settings have been saved/.test(html()), "the options");
-  assert.match(alpha.read("C:\\SYSTEM\\IEXPLORE.INI"), /search=http:\/\/bravo\/sign.asp\?q=%s/);
+  assert.match(alpha.read("C:\\SYSTEM\\SIMXPLOR.INI"), /search=http:\/\/bravo\/sign.asp\?q=%s/);
   await go("find knights");
   await loaded("Signed");
   assert.equal(el("who").Text, "knights");
@@ -336,7 +399,7 @@ async function submit(n, typed = {}, button) {
 const charlie = await net.boot("CHARLIE");
 const delta = await net.boot("DELTA");
 
-await test("SimBook in Internet Explorer: join, post, and its SPARK counter left to Voyager", async () => {
+await test("SimBook in Simxplorer: join, post, and its SPARK counter left to Voyager", async () => {
   charlie.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "simbook/INSTALL.SPK"), "utf8"));
   let pid = charlie.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !charlie.running(pid), 30000, "SimBook's installer");
@@ -350,13 +413,13 @@ await test("SimBook in Internet Explorer: join, post, and its SPARK counter left
   await wait(() => /What are you doing right now\?/.test(html()), "the home page");
   assert.match(alpha.read("C:\\SYSTEM\\COOKIES.TXT"), /^CHARLIE\|/m, "logged in by cookie");
   assert.match(status(), /SPARK scripts are for Voyager/);
-  await submit(0, { text: "Browsing with Internet Explorer 3!" });
-  await wait(() => /Browsing with Internet Explorer 3!/.test(html()), "the post in the feed");
+  await submit(0, { text: "Browsing with Simxplorer 3!" });
+  await wait(() => /Browsing with Simxplorer 3!/.test(html()), "the post in the feed");
   assert.deepEqual(dialogs(), []);
   assert.deepEqual(alpha.errors, []);
 });
 
-await test("ELIZA-95 in Internet Explorer: the answer types itself out in JavaScript", async () => {
+await test("ELIZA-95 in Simxplorer: the answer types itself out in JavaScript", async () => {
   delta.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "eliza/INSTALL.SPK"), "utf8"));
   const pid = delta.run("C:\\MYFILES\\INSTALL.SPK");
   await net.until(() => !delta.running(pid), 30000, "ELIZA's installer");
@@ -364,7 +427,7 @@ await test("ELIZA-95 in Internet Explorer: the answer types itself out in JavaSc
   await go("delta");
   await wait(() => /name="say"/.test(html()) && status().startsWith("Done"), "ELIZA");
   await submit(0, { say: "build me a website about modems" });
-  await wait(() => /_$/.test(el("answer")?.Text || ""), "the answer typing itself out (in JavaScript, for IE)");
+  await wait(() => /_$/.test(el("answer")?.Text || ""), "the answer typing itself out (in JavaScript, for Simxplorer)");
   await wait(() => /^Done\. \(\d+ tokens\)$/.test(status()), "the typing to finish");
   assert.match(el("answer").Text, /import website/);
   assert.deepEqual(dialogs(), []);

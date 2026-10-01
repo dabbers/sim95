@@ -95,21 +95,21 @@ const apps = {
     url: "/",
     code: () => startService + moveHomePage,
   },
-  explorer: {
-    title: "Internet Explorer",
+  simxplorer: {
+    title: "Simxplorer",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
-' Internet Explorer to C:\\PROGRAMS\\IEXPLORE.SPK: the browser window and its
+' Simxplorer to C:\\PROGRAMS\\SIMXPLOR.SPK: the browser window and its
 ' JavaScript engine in one program. Start it from Files (double-click it) or
 ' from SPARK. Your Voyager bookmarks become its Favorites the first time, and
 ' the two share cookies (C:\\SYSTEM\\COOKIES.TXT). Settings are kept in
-' C:\\SYSTEM\\IEXPLORE.INI.`,
+' C:\\SYSTEM\\SIMXPLOR.INI.`,
     copy: [],
     // the engine and the window, joined into one program
-    generated: [{ dest: "C:\\PROGRAMS\\IEXPLORE.SPK", text: () => read("explorer/src/JSCRIPT.SPK") + "\n" + read("explorer/src/BROWSER.SPK") }],
+    generated: [{ dest: "C:\\PROGRAMS\\SIMXPLOR.SPK", text: () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") }],
     dirs: [],
     first: [],
-    last: [`SYS.Start("C:\\PROGRAMS\\IEXPLORE.SPK", "")`],
-    done: `Print("Internet Explorer is running. Next time, start C:\\PROGRAMS\\IEXPLORE.SPK from Files.")`,
+    last: [`SYS.Start("C:\\PROGRAMS\\SIMXPLOR.SPK", "")`],
+    done: `Print("Simxplorer is running. Next time, start C:\\PROGRAMS\\SIMXPLOR.SPK from Files.")`,
     code: () => "",
   },
   eliza: {

@@ -9,7 +9,7 @@ A series of programs for the sim95 playground
   real crawler that goes round every machine's web pages.
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
   manners (and the occasional real answer).
-* [`explorer/`](explorer/) – Internet Explorer 3 for SIM95: a browser
+* [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
   program with a JavaScript interpreter written in SPARK.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
   programs and `.ASP` pages from Node, including several machines on a
@@ -19,8 +19,8 @@ A series of programs for the sim95 playground
   knowing about.
 
 Each web app installs as its machine's home page: one machine per app. Paste
-the app's `INSTALL.SPK` into SPARK and press F5. Internet Explorer installs as
-a program (`C:\PROGRAMS\IEXPLORE.SPK`) on any machine.
+the app's `INSTALL.SPK` into SPARK and press F5. Simxplorer installs as
+a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
-jscript, explorer). Rebuild the installers with `node tools/build-installer.mjs`.
+jscript, simxplorer). Rebuild the installers with `node tools/build-installer.mjs`.

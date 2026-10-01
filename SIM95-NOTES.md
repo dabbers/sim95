@@ -76,11 +76,11 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
   * Enter in a text box sends the form, unless the box has an `onenter`.
   * A text box's `onchange` fires at every key, not when you leave the box.
   * The `action` is resolved against `Base`, unless it already has a scheme
-    such as `iesubmit:`, which Internet Explorer relies on.
+    such as `sxsubmit:`, which Simxplorer relies on.
 * **Voyager runs only SPARK scripts.** It ignores
   `<script language="JavaScript">` and `type="text/javascript"`, but treats a
   bare `<script>` as SPARK. So one page can carry SPARK for Voyager and
-  JavaScript for Internet Explorer.
+  JavaScript for Simxplorer.
 * **Handlers interleave.** While one handler waits (`SYS.Sleep`, a message
   box), others run, including another tick of the same timer. Guard shared
   state with a flag.

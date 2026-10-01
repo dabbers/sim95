@@ -1,6 +1,6 @@
 ' JSCRIPT.SPK - a JavaScript interpreter written in SPARK, for the browser.
 '
-' It aims at the JavaScript of 1996 (JScript 1.0, what Internet Explorer 3
+' It aims at the JavaScript of 1996 (what the browsers of 1996
 ' ran) plus a few later conveniences: var, functions and closures, if / while /
 ' do / for / for-in / switch / try-catch, objects and arrays, new and this,
 ' Math, Date, String (with the HTML helpers like "x".bold()), Array, parseInt,
@@ -758,7 +758,7 @@ FUNCTION JsDescribe (n AS Integer) AS String
 END FUNCTION
 
 ' v, which the program is about to use as an object (node n): stops with
-' Internet Explorer's message when it is null or undefined.
+' the message 1996 browsers gave when it is null or undefined.
 FUNCTION JsNeed (v AS String, n AS Integer) AS String
     IF v = "u" OR v = "l" THEN THROW Str(nline[n]) + "|'" + JsDescribe(n) + "' is null or not an object"
     RETURN v
@@ -2311,7 +2311,7 @@ FUNCTION Pad2 (n AS Integer) AS String
     RETURN Str(n)
 END FUNCTION
 
-' "Thu Jul 4 12:00:00 1996", the way Internet Explorer wrote dates
+' "Thu Jul 4 12:00:00 1996", the way 1996 browsers wrote dates
 FUNCTION JsDateText (ms AS Real) AS String
     IF ms <> ms THEN RETURN "NaN"
     RETURN "Sun,Mon,Tue,Wed,Thu,Fri,Sat".Split(",")[JsDatePart(ms, "day")] + " " + "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec".Split(",")[JsDatePart(ms, "month")] + " " + Str(JsDatePart(ms, "date")) + " " _
@@ -2957,7 +2957,7 @@ FUNCTION JsDateMethod (name AS String, thisVal AS String, args AS Array OF Strin
         CASE "getFullYear"
             RETURN JsN(JsDatePart(ms, "year"))
         CASE "getYear"
-            ' Internet Explorer's famous quirk: 96 for 1996, but 2001 for 2001
+            ' the famous quirk of 1996 browsers: 96 for 1996, but 2001 for 2001
             IF JsDatePart(ms, "year") >= 1900 AND JsDatePart(ms, "year") < 2000 THEN RETURN JsN(JsDatePart(ms, "year") - 1900)
             RETURN JsN(JsDatePart(ms, "year"))
         CASE "getMonth"
@@ -3119,10 +3119,10 @@ SUB JsReset ()
     JsPutOwn(jsGlobal, "history", JsO(o))
 
     o = JsNewObject("Object", jsObjectProto)
-    JsPutOwn(o, "appName", JsS("Microsoft Internet Explorer"))
+    JsPutOwn(o, "appName", JsS("Simxplorer"))
     JsPutOwn(o, "appCodeName", JsS("Mozilla"))
-    JsPutOwn(o, "appVersion", JsS("2.0 (compatible; MSIE 3.02; SIM95)"))
-    JsPutOwn(o, "userAgent", JsS("Mozilla/2.0 (compatible; MSIE 3.02; SIM95)"))
+    JsPutOwn(o, "appVersion", JsS("2.0 (compatible; Simxplorer 3.02; SIM95)"))
+    JsPutOwn(o, "userAgent", JsS("Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)"))
     JsPutOwn(o, "platform", JsS("SIM95"))
     JsPutOwn(o, "javaEnabled", JsNative("navigator.javaEnabled"))
     JsPutOwn(jsGlobal, "navigator", JsO(o))

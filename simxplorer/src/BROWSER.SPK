@@ -1,6 +1,6 @@
-' BROWSER.SPK - Microsoft Internet Explorer for SIM95: the window, fetching,
+' BROWSER.SPK - Simxplorer for SIM95: the window, fetching,
 ' and the glue between pages and the JavaScript engine (JSCRIPT.SPK). The
-' builder joins the two into C:\PROGRAMS\IEXPLORE.SPK.
+' builder joins the two into C:\PROGRAMS\SIMXPLOR.SPK.
 '
 ' How a page is shown:
 '   1. It is fetched with HTTP/1.0, the way Voyager does (same cookie jar).
@@ -8,21 +8,21 @@
 '   3. Forms and event attributes are rewritten so the page talks to us:
 '      every form field gets an id, onclick="code" becomes onclick="js:N"
 '      (N indexes the code here), and every form's action becomes
-'      "iesubmit:N" so a sent form comes back to us first, for its onsubmit.
+'      "sxsubmit:N" so a sent form comes back to us first, for its onsubmit.
 '   4. The scripts run in order, and what they document.write() takes their
 '      place. Then the page is drawn, and <body onload> runs.
 '
 ' Everything that waits on the network starts from a timer tick of its own,
 ' inside a TRY with an empty CATCH: see the note in SIM95-NOTES.md.
 '
-' Files: C:\SYSTEM\IEXPLORE.INI (home, search, mail), C:\SYSTEM\FAVORITE.TXT
+' Files: C:\SYSTEM\SIMXPLOR.INI (home, search, mail), C:\SYSTEM\FAVORITE.TXT
 ' (title|url), C:\SYSTEM\HISTORY.TXT (when|title|url), and Voyager's
 ' C:\SYSTEM\COOKIES.TXT (HOST|name|value).
 
-CONST IETITLE = "Microsoft Internet Explorer"
-CONST IEAGENT = "Mozilla/2.0 (compatible; MSIE 3.02; SIM95)"
-CONST IEPATH = "C:\PROGRAMS\IEXPLORE.SPK"
-CONST INIFILE = "C:\SYSTEM\IEXPLORE.INI"
+CONST APPTITLE = "Simxplorer"
+CONST APPAGENT = "Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)"
+CONST APPPATH = "C:\PROGRAMS\SIMXPLOR.SPK"
+CONST INIFILE = "C:\SYSTEM\SIMXPLOR.INI"
 CONST FAVFILE = "C:\SYSTEM\FAVORITE.TXT"
 CONST HISTFILE = "C:\SYSTEM\HISTORY.TXT"
 CONST JARFILE = "C:\SYSTEM\COOKIES.TXT"
@@ -36,15 +36,9 @@ VAR EOL AS String
 ' ---------------------------------------------------------------- the window
 VAR win AS GUI_Window
 VAR bar AS GUI_Menu
-VAR bBack AS GUI_Button
-VAR bForward AS GUI_Button
-VAR bStop AS GUI_Button
-VAR bRefresh AS GUI_Button
-VAR bHome AS GUI_Button
-VAR bSearch AS GUI_Button
-VAR bFavorites AS GUI_Button
-VAR bHistory AS GUI_Button
-VAR bMail AS GUI_Button
+VAR tools AS GUI_Canvas            ' the toolbar, drawn: icons over labels
+VAR tbPressed AS Integer = -1      ' the button held down
+VAR tbDrawn AS String              ' what the toolbar looked like last time
 VAR throb AS GUI_Canvas
 VAR lblAddress AS GUI_Label
 VAR address AS GUI_TextBox
@@ -140,61 +134,62 @@ VAR tmNext AS Integer = 1
 
 SUB Main ()
     VAR first AS String
+    VAR zw AS String
     EOL = Chr(10)
+    zw = Chr(8203)    ' shown, but left to the text boxes: they cut, copy and paste themselves
     LoadSettings()
-    win = GUI_Window.New(IETITLE, 720, 480)
+    win = GUI_Window.New(APPTITLE, 720, 480)
     win.Icon = "voyager"
     win.Resizable = TRUE
     win.onClose = Win_OnClose
     win.onResize = Win_OnResize
     win.onKey = Win_OnKey
 
+    ' Shortcuts are written the way SIM95 names keys, so the menu fires them itself
     bar = GUI_Menu.New(win)
     bar.onSelect = Menu_OnSelect
     bar.AddMenu("&File")
     bar.AddItem("&File", "&New Window" + Chr(9) + "Ctrl+N")
     bar.AddItem("&File", "&Open..." + Chr(9) + "Ctrl+O")
-    bar.AddItem("&File", "Save &As File...")
+    bar.AddItem("&File", "Save &As File..." + Chr(9) + "Ctrl+S")
     bar.AddSeparator("&File")
-    bar.AddItem("&File", "&Close")
+    bar.AddItem("&File", "&Close" + Chr(9) + "Ctrl+W")
+    bar.AddMenu("&Edit")
+    bar.AddItem("&Edit", "Cu&t" + Chr(9) + "Ctrl+X" + zw)
+    bar.AddItem("&Edit", "&Copy" + Chr(9) + "Ctrl+C" + zw)
+    bar.AddItem("&Edit", "&Paste" + Chr(9) + "Ctrl+V" + zw)
+    bar.AddSeparator("&Edit")
+    bar.AddItem("&Edit", "Select &All" + Chr(9) + "Ctrl+A" + zw)
+    bar.AddSeparator("&Edit")
+    bar.AddItem("&Edit", "&Find (on This Page)..." + Chr(9) + "Ctrl+F")
+    bar.AddItem("&Edit", "Find &Next" + Chr(9) + "F3")
     bar.AddMenu("&View")
     bar.AddItem("&View", "&Stop" + Chr(9) + "Esc")
     bar.AddItem("&View", "&Refresh" + Chr(9) + "F5")
-    bar.AddItem("&View", "Sour&ce")
+    bar.AddItem("&View", "Sour&ce" + Chr(9) + "Ctrl+U")
     bar.AddSeparator("&View")
     bar.AddItem("&View", "&Options...")
     bar.AddMenu("&Go")
     bar.AddItem("&Go", "&Back" + Chr(9) + "Alt+Left")
     bar.AddItem("&Go", "&Forward" + Chr(9) + "Alt+Right")
+    bar.AddItem("&Go", "&Address Bar" + Chr(9) + "Alt+D")
     bar.AddSeparator("&Go")
-    bar.AddItem("&Go", "&Start Page")
-    bar.AddItem("&Go", "Search the &Web")
-    bar.AddItem("&Go", "Read &Mail")
+    bar.AddItem("&Go", "&Start Page" + Chr(9) + "Alt+Home")
+    bar.AddItem("&Go", "Search the &Web..." + Chr(9) + "Ctrl+E")
+    bar.AddItem("&Go", "Read &Mail" + Chr(9) + "Ctrl+M")
     bar.AddSeparator("&Go")
-    bar.AddItem("&Go", "Open &History Folder")
+    bar.AddItem("&Go", "&History" + Chr(9) + "Ctrl+H")
     bar.AddMenu("F&avorites")
     BuildFavoritesMenu()
     bar.AddMenu("&Help")
-    bar.AddItem("&Help", "&About Internet Explorer")
+    bar.AddItem("&Help", "&Keyboard Shortcuts" + Chr(9) + "F1")
+    bar.AddItem("&Help", "&About Simxplorer")
 
-    bBack = ToolButton("&Back")
-    bBack.onClick = Back_Click
-    bForward = ToolButton("&Forward")
-    bForward.onClick = Forward_Click
-    bStop = ToolButton("Stop")
-    bStop.onClick = Stop_Click
-    bRefresh = ToolButton("&Refresh")
-    bRefresh.onClick = Refresh_Click
-    bHome = ToolButton("&Home")
-    bHome.onClick = Home_Click
-    bSearch = ToolButton("&Search")
-    bSearch.onClick = Search_Click
-    bFavorites = ToolButton("Fa&vorites")
-    bFavorites.onClick = Favorites_Click
-    bHistory = ToolButton("H&istory")
-    bHistory.onClick = History_Click
-    bMail = ToolButton("&Mail")
-    bMail.onClick = Mail_Click
+    tools = GUI_Canvas.New(win)
+    tools.Background = 7
+    tools.onDraw = Tools_OnDraw
+    tools.onMouseDown = Tools_OnMouseDown
+    tools.onMouseUp = Tools_OnMouseUp
     throb = GUI_Canvas.New(win)
     throb.onDraw = Throb_OnDraw
     throb.onMouseDown = Throb_OnMouseDown
@@ -213,6 +208,7 @@ SUB Main ()
     view.onImage = View_OnImage
     progress = GUI_ProgressBar.New(win)
     progress.Max = 100
+    MakeFindWindow()
     zone = GUI_Label.New(win)
     zone.Align = "right"
     Win_OnResize()
@@ -237,38 +233,26 @@ SUB Main ()
     Go(Typed(first))
 END SUB
 
-FUNCTION ToolButton (text AS String) AS GUI_Button
-    VAR b AS GUI_Button
-    b = GUI_Button.New(win)
-    b.Text = text
-    RETURN b
-END FUNCTION
-
 SUB Win_OnResize ()
     VAR w AS Integer
     w = win.Width
-    bBack.SetBounds(4, 3, 62, 24)
-    bForward.SetBounds(68, 3, 62, 24)
-    bStop.SetBounds(132, 3, 62, 24)
-    bRefresh.SetBounds(196, 3, 62, 24)
-    bHome.SetBounds(260, 3, 62, 24)
-    bSearch.SetBounds(324, 3, 62, 24)
-    bFavorites.SetBounds(388, 3, 62, 24)
-    bHistory.SetBounds(452, 3, 62, 24)
-    bMail.SetBounds(516, 3, 62, 24)
-    throb.SetBounds(w - 44, 2, 42, 50)
-    lblAddress.SetBounds(6, 35, 50, 14)
-    address.SetBounds(58, 31, w - 140, 21)
-    bGo.SetBounds(w - 80, 31, 32, 21)
-    view.SetBounds(2, 56, w - 4, win.Height - 78)
+    tools.SetBounds(0, 0, MATH.Min(w - 46, TBCOUNT * TBW + 4), TBH + 3)
+    throb.SetBounds(w - 44, 1, 42, 46)
+    lblAddress.SetBounds(6, 54, 50, 14)
+    address.SetBounds(58, 50, w - 100, 21)
+    bGo.SetBounds(w - 38, 50, 34, 21)
+    view.SetBounds(2, 75, w - 4, win.Height - 97)
     progress.SetBounds(w - 260, win.Height - 19, 120, 16)
     zone.SetBounds(w - 136, win.Height - 18, 132, 14)
+    tbDrawn = ""
+    DrawTools()
 END SUB
 
 SUB Win_OnClose ()
     SYS.Exit(0)
 END SUB
 
+' Keys the menus do not take (only Ctrl, Alt and F-keys reach a menu).
 SUB Win_OnKey (key AS String)
     SELECT CASE key
         CASE "Alt+ArrowLeft"
@@ -276,15 +260,11 @@ SUB Win_OnKey (key AS String)
         CASE "Alt+ArrowRight"
             Forward_Click()
         CASE "Escape"
-            Stop_Click()
-        CASE "F5"
-            Refresh_Click()
-        CASE "Ctrl+N"
-            Menu_OnSelect("New Window")
-        CASE "Ctrl+O", "Ctrl+L"
-            Menu_OnSelect("Open...")
-        CASE "Ctrl+D"
-            AddFavorite()
+            IF findWin.Visible THEN
+                findWin.Hide()
+            ELSE
+                Stop_Click()
+            END IF
     END SELECT
 END SUB
 
@@ -313,12 +293,12 @@ END SUB
 
 SUB SaveSettings ()
     TRY
-        FS.Write(INIFILE, "[Internet Explorer]" + EOL + "home=" + optHome + EOL + "search=" + optSearch + EOL + "mail=" + optMail + EOL)
+        FS.Write(INIFILE, "[Simxplorer]" + EOL + "home=" + optHome + EOL + "search=" + optSearch + EOL + "mail=" + optMail + EOL)
     CATCH err
     END TRY
 END SUB
 
-' Internet Explorer imports your Netscape bookmarks; this one, Voyager's.
+' Your Voyager bookmarks become Favorites the first time.
 SUB ImportBookmarks ()
     VAR out AS String
     IF FS.Exists(BOOKFILE) THEN out = FS.Read(BOOKFILE)
@@ -466,7 +446,7 @@ FUNCTION Folder (path AS String) AS String
     RETURN path.Substring(0, path.Length - parts[parts.Count - 1].Length)
 END FUNCTION
 
-' What was typed in the Address box: an address, or (IE's AutoSearch) words
+' What was typed in the Address box: an address, or (AutoSearch) words
 ' to look up: "? chess", "go chess", "find chess clubs", or any words at all.
 FUNCTION Typed (t AS String) AS String
     VAR low AS String
@@ -557,9 +537,7 @@ SUB CancelFetch ()
 END SUB
 
 SUB Buttons ()
-    bBack.Enabled = histPos > 0
-    bForward.Enabled = histPos < hist.Count - 1
-    bStop.Enabled = pPending OR fetching
+    DrawTools()
 END SUB
 
 SUB Back_Click ()
@@ -684,9 +662,9 @@ END SUB
 SUB Oops (problem AS String)
     VAR box AS GUI_MessageBox
     box = GUI_MessageBox.New(win)
-    box.Title = IETITLE
+    box.Title = APPTITLE
     box.Kind = "error"
-    box.Text = "Internet Explorer has run into a problem of its own:" + EOL + EOL + problem
+    box.Text = "Simxplorer has run into a problem of its own:" + EOL + EOL + problem
     box.Show()
 END SUB
 
@@ -717,7 +695,7 @@ SUB StartFetch (kind AS String, url AS String, src AS String)
     ELSE
         request = "GET"
     END IF
-    request = request + " " + PathOf(url) + " HTTP/1.0" + EOL + "Host: " + HostOf(url) + EOL + "User-Agent: " + IEAGENT + EOL + "Accept: */*"
+    request = request + " " + PathOf(url) + " HTTP/1.0" + EOL + "Host: " + HostOf(url) + EOL + "User-Agent: " + APPAGENT + EOL + "Accept: */*"
     IF kind = "page" AND referrer.StartsWith("http:") THEN request = request + EOL + "Referer: " + referrer
     cookie = CookieHeader(HostOf(url))
     IF cookie <> "" THEN request = request + EOL + "Cookie: " + cookie
@@ -857,7 +835,7 @@ SUB Arrived ()
     END IF
 END SUB
 
-' Internet Explorer 3 said so in a box, and stayed where it was. This one
+' Browsers of 1996 said so in a box, and stayed where they were. This one
 ' also offers AskSim's cached copy, if there is a search engine to ask.
 SUB CannotOpen (url AS String, why AS String)
     VAR box AS GUI_MessageBox
@@ -871,8 +849,8 @@ SUB CannotOpen (url AS String, why AS String)
     IF why.Contains("Unknown host") THEN reason = "The server name or address could not be resolved."
     IF why.Contains("timed out") THEN reason = "The operation timed out."
     box = GUI_MessageBox.New(win)
-    box.Title = IETITLE
-    box.Text = "Internet Explorer cannot open the Internet site " + url + "." + EOL + EOL + reason
+    box.Title = APPTITLE
+    box.Text = "Simxplorer cannot open the Internet site " + url + "." + EOL + EOL + reason
     IF optSearch <> "" AND optSearch.StartsWith("http:") THEN
         box.Kind = "confirm"
         box.Buttons = "yesno"
@@ -904,7 +882,7 @@ FUNCTION FriendlyError (status AS Integer, url AS String) AS String
          + "<p>Please try the following:</p><ul><li>If you typed the page address in the Address bar, make sure that it is spelled correctly.</li>" _
          + "<li>Open the <a href=""" + Esc(Absolute(url, "/")) + """>" + Esc(HostOf(url)) + "</a> home page, and then look for links to the information you want.</li>" _
          + "<li>Click the <b>Back</b> button to try another link.</li></ul>" _
-         + "<p><font size=""2"">HTTP " + Str(status) + " - Internet Explorer</font></p></body></html>"
+         + "<p><font size=""2"">HTTP " + Str(status) + " - Simxplorer</font></p></body></html>"
 END FUNCTION
 
 ' ---------------------------------------------------------------- pictures
@@ -1208,7 +1186,7 @@ FUNCTION ProcessTags (html AS String) AS String
                 fmSubmit.Add(code)
                 fmObj.Add(0)
                 inForm = fmAction.Count - 1
-                tag = WithAttr(WithoutAttr(tag, "onsubmit"), "action", "iesubmit:" + Str(inForm))
+                tag = WithAttr(WithoutAttr(tag, "onsubmit"), "action", "sxsubmit:" + Str(inForm))
             CASE "/form"
                 inForm = -1
             CASE "input", "select", "textarea", "button"
@@ -1219,7 +1197,7 @@ FUNCTION ProcessTags (html AS String) AS String
                 IF name = "input" AND kind = "" THEN kind = "text"
                 IF id = "" THEN
                     autoIds = autoIds + 1
-                    id = "ief" + Str(autoIds)
+                    id = "sxf" + Str(autoIds)
                     tag = WithAttr(tag, "id", id)
                 END IF
                 IF inForm >= 0 THEN
@@ -1262,7 +1240,7 @@ FUNCTION ProcessTags (html AS String) AS String
             IF code <> "" AND NOT IsSpark(code) THEN
                 IF id = "" THEN
                     autoIds = autoIds + 1
-                    id = "iee" + Str(autoIds)
+                    id = "sxe" + Str(autoIds)
                     tag = WithAttr(tag, "id", id)
                 END IF
                 IF name = "a" THEN
@@ -1271,7 +1249,7 @@ FUNCTION ProcessTags (html AS String) AS String
                     tag = WithAttr(tag, ev, Handler(code, "", after, id))
                 ELSE
                     tag = WithAttr(tag, ev, Handler(code, "", "", id))
-                    ' the view says onchange at every key; Internet Explorer said
+                    ' the view says onchange at every key; browsers said
                     ' it once, on leaving the box
                     IF ev = "onchange" AND (name = "textarea" OR (name = "input" AND (kind = "text" OR kind = "password"))) THEN hTyped[hTyped.Count - 1] = TRUE
                 END IF
@@ -1407,6 +1385,11 @@ SUB ShowPage (url AS String, html AS String, addHist AS Bool)
     NEXT
     view.Base = url
     view.Html = pageHtml
+    curDrawn = pageHtml
+    liveKey.Clear()
+    liveVal.Clear()
+    pageAll = FALSE
+    findAt = -1
     rendered = TRUE
     ' what scripts did to fields before there were any
     FOR EACH err IN shDirty
@@ -1441,9 +1424,9 @@ END FUNCTION
 
 SUB SetTitle (title AS String)
     IF title = "" THEN
-        win.Title = IETITLE
+        win.Title = APPTITLE
     ELSE
-        win.Title = title + " - " + IETITLE
+        win.Title = title + " - " + APPTITLE
     END IF
 END SUB
 
@@ -1486,12 +1469,12 @@ SUB ShowLocal ()
         ShowPage(url, AboutPage(url.Substring(6, url.Length - 6)), pHist)
         RETURN
     END IF
-    CannotOpen(url, "Internet Explorer does not know how to open " + url.Split(":")[0] + ": addresses.")
+    CannotOpen(url, "Simxplorer does not know how to open " + url.Split(":")[0] + ": addresses.")
 END SUB
 
 ' ---------------------------------------------------------------- script errors
 
-' "line|message" from the engine, as Internet Explorer 3 showed it.
+' "line|message" from the engine, as the browsers of 1996 showed it.
 SUB ScriptError (err AS String)
     VAR box AS GUI_MessageBox
     VAR line AS String
@@ -1503,7 +1486,7 @@ SUB ScriptError (err AS String)
         RETURN
     END IF
     box = GUI_MessageBox.New(win)
-    box.Title = "Internet Explorer Script Error"
+    box.Title = "Simxplorer Script Error"
     box.Kind = "warn"
     box.Buttons = "yesno"
     box.Text = "An error has occurred in the script on this page." + EOL + EOL + "Line:  " + line + EOL + "Char:  1" + EOL + "Error:  " + message + EOL + "Code:  0" + EOL + "URL:  " + curUrl + EOL + EOL + "Do you want to continue running scripts on this page?"
@@ -1586,8 +1569,8 @@ END SUB
 SUB View_OnNavigate (url AS String)
     IF busy THEN RETURN
     FlushChange()
-    IF url.Contains("iesubmit:") THEN
-        url = url.Substring(url.IndexOf("iesubmit:") + 9, url.Length - url.IndexOf("iesubmit:") - 9)
+    IF url.Contains("sxsubmit:") THEN
+        url = url.Substring(url.IndexOf("sxsubmit:") + 9, url.Length - url.IndexOf("sxsubmit:") - 9)
         IF url.Contains("?") THEN
             FormSent(Int(Val(url.Split("?")[0])), url.Substring(url.IndexOf("?") + 1, url.Length - url.IndexOf("?") - 1), "")
         ELSE
@@ -1619,8 +1602,8 @@ END SUB
 SUB View_OnSubmit (url AS String, body AS String, files AS String)
     IF busy THEN RETURN
     FlushChange()
-    IF url.Contains("iesubmit:") THEN
-        FormSent(Int(Val(url.Substring(url.IndexOf("iesubmit:") + 9, url.Length - url.IndexOf("iesubmit:") - 9))), body, files)
+    IF url.Contains("sxsubmit:") THEN
+        FormSent(Int(Val(url.Substring(url.IndexOf("sxsubmit:") + 9, url.Length - url.IndexOf("sxsubmit:") - 9))), body, files)
         RETURN
     END IF
     GoWith(Absolute(curUrl, url), body, TRUE, TRUE)
@@ -1744,7 +1727,7 @@ END SUB
 SUB HostAlert (text AS String)
     VAR box AS GUI_MessageBox
     box = GUI_MessageBox.New(win)
-    box.Title = IETITLE
+    box.Title = APPTITLE
     box.Kind = "warn"
     box.Text = text
     box.Show()
@@ -1753,14 +1736,14 @@ END SUB
 FUNCTION HostConfirm (text AS String) AS Bool
     VAR box AS GUI_MessageBox
     box = GUI_MessageBox.New(win)
-    box.Title = IETITLE
+    box.Title = APPTITLE
     box.Kind = "confirm"
     box.Buttons = "okcancel"
     box.Text = text
     RETURN box.Show()
 END FUNCTION
 
-' The Explorer User Prompt: a little window of our own, since a message box
+' The Simxplorer User Prompt: a little window of our own, since a message box
 ' cannot be typed into. Chr(0) means Cancel.
 VAR askWin AS GUI_Window
 VAR askBox AS GUI_TextBox
@@ -1768,16 +1751,21 @@ VAR askDone AS Bool
 VAR askOk AS Bool
 
 FUNCTION HostPrompt (text AS String, initial AS String) AS String
+    RETURN Ask("Simxplorer User Prompt", "JavaScript Prompt:" + EOL + text, initial)
+END FUNCTION
+
+' A little window with a question and a box to type in. Chr(0) means Cancel.
+FUNCTION Ask (title AS String, text AS String, initial AS String) AS String
     VAR lbl AS GUI_Label
     VAR ok AS GUI_Button
     VAR cancel AS GUI_Button
     VAR t AS Integer
-    askWin = GUI_Window.New("Explorer User Prompt", 380, 120)
+    askWin = GUI_Window.New(title, 380, 120)
     askWin.Modal = TRUE
     askWin.Icon = "question"
     askWin.onClose = Ask_Cancel
     lbl = GUI_Label.New(askWin)
-    lbl.Text = "JavaScript Prompt:" + EOL + text
+    lbl.Text = text
     lbl.SetBounds(10, 8, 270, 50)
     ok = GUI_Button.New(askWin)
     ok.Text = "OK"
@@ -1856,6 +1844,12 @@ END FUNCTION
 SUB HostSet (id AS String, prop AS String, value AS String)
     IF rendered THEN
         IF view.HasElement(id) THEN
+            IF liveKey.IndexOf(id + "|" + prop) < 0 THEN
+                liveKey.Add(id + "|" + prop)
+                liveVal.Add(value)
+            ELSE
+                liveVal[liveKey.IndexOf(id + "|" + prop)] = value
+            END IF
             IF prop = "Checked" OR prop = "Visible" OR prop = "Enabled" THEN
                 view.SetElement(id, prop, value = "True")
             ELSE
@@ -1934,7 +1928,7 @@ END FUNCTION
 
 SUB HostOpen (url AS String)
     IF url = "" THEN url = "about:blank"
-    SYS.Start(IEPATH, Absolute(curUrl, url))
+    SYS.Start(APPPATH, Absolute(curUrl, url))
 END SUB
 
 SUB HostSubmit (form AS Integer)
@@ -1948,12 +1942,271 @@ END SUB
 FUNCTION HostSlow () AS Bool
     VAR box AS GUI_MessageBox
     box = GUI_MessageBox.New(win)
-    box.Title = IETITLE
+    box.Title = APPTITLE
     box.Kind = "warn"
     box.Buttons = "yesno"
-    box.Text = "A script on this page is causing Internet Explorer to run slowly. If it continues to run, your computer may become unresponsive." + EOL + EOL + "Do you want to abort the script?"
+    box.Text = "A script on this page is causing Simxplorer to run slowly. If it continues to run, your computer may become unresponsive." + EOL + EOL + "Do you want to abort the script?"
     RETURN box.Show()
 END FUNCTION
+
+' ================================================================ edit, find and search
+
+CONST CLIPFILE = "C:\SYSTEM\CLIPBRD.TXT"
+VAR curDrawn AS String             ' the page as given to the view, before any find marks
+VAR liveKey AS Array OF String     ' what scripts changed after drawing ("id|Prop")
+VAR liveVal AS Array OF String
+VAR pageAll AS Bool                ' Select All was chosen for the page
+
+' SPARK cannot reach the real clipboard: Ctrl+X/C/V in a text box use it
+' directly, and these menu commands use SIM95's own, a file.
+SUB EditCommand (what AS String)
+    VAR clip AS String
+    SELECT CASE what
+        CASE "Cut"
+            IF address.Focused THEN
+                FS.Write(CLIPFILE, address.Text)
+                address.Text = ""
+            ELSE
+                EditCommand("Copy")
+            END IF
+        CASE "Copy"
+            IF address.Focused THEN
+                clip = address.Text
+            ELSEIF pageAll THEN
+                clip = PlainText(curDrawn)
+            ELSE
+                clip = curUrl
+                SetStatus("Copied this page's address (choose Select All first to copy its text)")
+            END IF
+            FS.Write(CLIPFILE, clip)
+        CASE "Paste"
+            address.Text = ReadOr(CLIPFILE, "").Replace(Chr(13), "").Split(EOL)[0]
+            address.Focus()
+        CASE "Select All"
+            IF address.Focused THEN
+                address.SelectAll()
+            ELSE
+                pageAll = TRUE
+                SetStatus("The whole page is selected: Copy takes all of its text")
+            END IF
+    END SELECT
+END SUB
+
+' The words of a page, a line per paragraph.
+FUNCTION PlainText (html AS String) AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR p AS String
+    VAR name AS String
+    VAR skip AS String
+    VAR t AS String
+    parts = html.Split("<")
+    out.Add(parts[0])
+    FOR EACH p IN parts
+        IF NOT p.Contains(">") THEN CONTINUE
+        name = TagName(p.Substring(0, p.IndexOf(">")))
+        IF skip <> "" THEN
+            IF name = "/" + skip THEN skip = ""
+            CONTINUE
+        END IF
+        IF name = "title" OR name = "script" OR name = "style" THEN
+            skip = name
+            CONTINUE
+        END IF
+        IF "|br|p|/p|tr|li|h1|h2|h3|h4|h5|h6|div|hr|table|/table|pre|/pre|".Contains("|" + name + "|") THEN out.Add(EOL)
+        IF name = "td" THEN out.Add(" ")
+        out.Add(Unentity(p.Substring(p.IndexOf(">") + 1, p.Length - p.IndexOf(">") - 1)))
+    NEXT
+    t = out.Join("")
+    WHILE t.Contains("  ")
+        t = t.Replace("  ", " ")
+    END WHILE
+    WHILE t.Contains(EOL + " ")
+        t = t.Replace(EOL + " ", EOL)
+    END WHILE
+    WHILE t.Contains(EOL + EOL + EOL)
+        t = t.Replace(EOL + EOL + EOL, EOL + EOL)
+    END WHILE
+    RETURN t.Trim()
+END FUNCTION
+
+' ---------------------------------------------------------------- Find (on This Page)
+
+VAR findWin AS GUI_Window
+VAR findBox AS GUI_TextBox
+VAR findCase AS GUI_CheckBox
+VAR findAt AS Integer = -1         ' which match is showing
+
+SUB MakeFindWindow ()
+    VAR lbl AS GUI_Label
+    VAR b AS GUI_Button
+    findWin = GUI_Window.New("Find", 360, 78)
+    findWin.Icon = "question"
+    findWin.onClose = Find_Close
+    lbl = GUI_Label.New(findWin)
+    lbl.Text = "Fi&nd what:"
+    lbl.SetBounds(8, 12, 64, 14)
+    findBox = GUI_TextBox.New(findWin)
+    findBox.SetBounds(74, 8, 186, 21)
+    findBox.onEnter = Find_Next
+    findBox.onChange = Find_Changed
+    findCase = GUI_CheckBox.New(findWin)
+    findCase.Text = "Match &case"
+    findCase.SetBounds(8, 44, 120, 18)
+    findCase.onChange = Find_Changed
+    b = GUI_Button.New(findWin)
+    b.Text = "&Find Next"
+    b.Default = TRUE
+    b.SetBounds(270, 8, 82, 24)
+    b.onClick = Find_Next
+    b = GUI_Button.New(findWin)
+    b.Text = "Cancel"
+    b.Cancel = TRUE
+    b.SetBounds(270, 38, 82, 24)
+    b.onClick = Find_Close
+END SUB
+
+SUB ShowFind ()
+    findWin.Show()
+    findBox.Focus()
+    findBox.SelectAll()
+END SUB
+
+SUB Find_Close ()
+    findWin.Hide()
+END SUB
+
+SUB Find_Changed ()
+    findAt = -1
+END SUB
+
+SUB Find_Next ()
+    FindNext()
+END SUB
+
+' Where the word is in the page's text: the n-th place, or -1. Text inside
+' tags, titles, scripts and form fields does not count.
+FUNCTION FindIn (html AS String, word AS String, n AS Integer, exact AS Bool) AS Integer
+    VAR parts AS Array OF String
+    VAR p AS String
+    VAR i AS Integer
+    VAR at AS Integer
+    VAR found AS Integer
+    VAR text AS String
+    VAR offset AS Integer
+    VAR from AS Integer
+    VAR name AS String
+    VAR skip AS String
+    IF NOT exact THEN
+        html = html.Lower()
+        word = word.Lower()
+    END IF
+    parts = html.Split("<")
+    offset = parts[0].Length
+    FOR i = 1 TO parts.Count - 1
+        p = parts[i]
+        offset = offset + 1
+        IF p.Contains(">") THEN
+            name = TagName(p.Substring(0, p.IndexOf(">")))
+            IF skip <> "" THEN
+                IF name = "/" + skip THEN skip = ""
+            ELSEIF name = "title" OR name = "script" OR name = "style" OR name = "textarea" OR name = "select" THEN
+                skip = name
+            ELSE
+                text = p.Substring(p.IndexOf(">") + 1, p.Length - p.IndexOf(">") - 1)
+                from = 0
+                at = text.IndexOf(word)
+                WHILE at >= 0
+                    IF found = n THEN RETURN offset + p.IndexOf(">") + 1 + from + at
+                    found = found + 1
+                    from = from + at + word.Length
+                    at = text.Substring(from, text.Length - from).IndexOf(word)
+                END WHILE
+            END IF
+        END IF
+        offset = offset + p.Length
+    NEXT
+    RETURN -1
+END FUNCTION
+
+' The next place the word is, marked in red and scrolled to (roughly: the
+' view cannot say where things are, so it counts the lines before it).
+SUB FindNext ()
+    VAR word AS String
+    VAR at AS Integer
+    VAR marked AS String
+    VAR before AS String
+    VAR lines AS Integer
+    VAR total AS Integer
+    VAR box AS GUI_MessageBox
+    word = findBox.Text
+    IF word = "" OR curDrawn = "" OR busy THEN RETURN
+    findAt = findAt + 1
+    at = FindIn(curDrawn, word, findAt, findCase.Checked)
+    IF at < 0 THEN
+        Redraw(curDrawn)
+        box = GUI_MessageBox.New(findWin)
+        box.Title = "Find"
+        box.Kind = "info"
+        IF findAt = 0 THEN
+            box.Text = "Simxplorer could not find """ + word + """ on this page."
+        ELSE
+            box.Text = "Finished searching the page."
+        END IF
+        findAt = -1
+        box.Show()
+        RETURN
+    END IF
+    total = findAt + 1
+    WHILE FindIn(curDrawn, word, total, findCase.Checked) >= 0
+        total = total + 1
+    END WHILE
+    marked = curDrawn.Substring(0, at) + "<b><u><font color=""#CC0000"">" + curDrawn.Substring(at, word.Length) + "</font></u></b>" + curDrawn.Substring(at + word.Length, curDrawn.Length - at - word.Length)
+    Redraw(marked)
+    before = curDrawn.Substring(0, at).Lower()
+    lines = before.Split("<br").Count + before.Split("<p").Count + before.Split("<tr").Count + before.Split("<li").Count + before.Split("<h").Count + before.Split("<div").Count - 6
+    view.ScrollTo(MATH.Max(0, lines * 18 - 80))
+    SetStatus("Found """ + word + """ (" + Str(findAt + 1) + " of " + Str(total) + ")")
+END SUB
+
+' Draws the page again (with find marks), keeping what was typed into it
+' and what scripts changed since it was drawn.
+SUB Redraw (html AS String)
+    VAR k AS Integer
+    VAR values AS Array OF String
+    VAR checks AS Array OF String
+    FOR k = 0 TO fdId.Count - 1
+        IF view.HasElement(fdId[k]) THEN
+            values.Add(Str(view.GetElement(fdId[k], "Value")))
+            checks.Add(Str(view.GetElement(fdId[k], "Checked")))
+        ELSE
+            values.Add(Chr(0))
+            checks.Add("")
+        END IF
+    NEXT
+    view.Html = html
+    FOR k = 0 TO liveKey.Count - 1
+        IF view.HasElement(liveKey[k].Split("|")[0]) THEN HostSet(liveKey[k].Split("|")[0], liveKey[k].Split("|")[1], liveVal[k])
+    NEXT
+    FOR k = 0 TO fdId.Count - 1
+        IF values[k] <> Chr(0) AND view.HasElement(fdId[k]) THEN
+            IF fdType[k] = "checkbox" OR fdType[k] = "radio" THEN
+                view.SetElement(fdId[k], "Checked", checks[k] = "True")
+            ELSEIF fdType[k] <> "submit" AND fdType[k] <> "button" AND fdType[k] <> "reset" THEN
+                view.SetElement(fdId[k], "Value", values[k])
+            END IF
+        END IF
+    NEXT
+END SUB
+
+' ---------------------------------------------------------------- Search the Web (Ctrl+E)
+
+SUB QuickSearch ()
+    VAR words AS String
+    words = Ask("Search the Web", "Search the Web for:", "")
+    IF words = Chr(0) OR words.Trim() = "" THEN RETURN
+    Go(SearchUrl(words))
+END SUB
 
 ' ================================================================ favorites and history
 
@@ -1973,7 +2226,8 @@ END FUNCTION
 SUB BuildFavoritesMenu ()
     VAR line AS String
     bar.AddItem("F&avorites", "&Add To Favorites..." + Chr(9) + "Ctrl+D")
-    bar.AddItem("F&avorites", "&Organize Favorites...")
+    bar.AddItem("F&avorites", "&Organize Favorites..." + Chr(9) + "Ctrl+B")
+    bar.AddItem("F&avorites", "&Show Favorites" + Chr(9) + "Ctrl+I")
     favMenu.Clear()
     FOR EACH line IN Favorites()
         IF favMenu.Count = 0 THEN bar.AddSeparator("F&avorites")
@@ -1987,7 +2241,7 @@ SUB AddFavorite ()
     IF curUrl = "" OR curUrl.StartsWith("about:") THEN RETURN
     name = curTitle
     IF name = "" THEN name = curUrl
-    name = HostPrompt("Internet Explorer will add this page to your Favorites." + EOL + "Name:", name)
+    name = Ask("Add to Favorites", "Simxplorer will add this page to your Favorites." + EOL + "Name:", name)
     IF name = Chr(0) OR name.Trim() = "" THEN RETURN
     name = name.Replace("|", "-").Trim()
     TRY
@@ -2099,28 +2353,46 @@ FUNCTION AboutPage (what AS String) AS String
                  + "<hr><p><a href=""about:options?cookies=1"">Delete all cookies</a> &middot; <a href=""about:history?clear=1"">Clear History</a></p></body></html>"
         CASE "search"
             out = AboutTop("Search the Web")
-            out = out + "<p>Internet Explorer does not know a search engine on this network yet.</p>" _
-                + "<p>Find a machine that runs <b>AskSim</b> and type its address below; Internet Explorer will search there from now on, from the Search button and from the Address bar.</p>" _
+            out = out + "<p>Simxplorer does not know a search engine on this network yet.</p>" _
+                + "<p>Find a machine that runs <b>AskSim</b> and type its address below; Simxplorer will search there from now on, from the Search button and from the Address bar.</p>" _
                 + "<form action=""about:options"" method=""get""><input type=""hidden"" name=""home"" value=""" + Esc(optHome) + """><input type=""hidden"" name=""mail"" value=""" + Esc(optMail) + """>" _
                 + "Search engine: <input name=""search"" size=""30"" value=""http://""> <input type=""submit"" value=""Use it""></form>"
             IF query <> "" THEN out = out + "<p>(You were looking for <b>" + Esc(UrlDec(query)) + "</b>.)</p>"
             RETURN out + "</body></html>"
+        CASE "keys"
+            out = AboutTop("Keyboard Shortcuts") + "<table cellpadding=""3"">"
+            FOR EACH line IN ["Alt+Left|Back", "Alt+Right|Forward", "Esc|Stop", "F5|Refresh", "Alt+Home|Start page", "Alt+D|Go to the Address bar", "Ctrl+O|Open an address", _
+                    "Ctrl+E|Search the Web", "Ctrl+F|Find on this page", "F3|Find the next one", "Ctrl+D|Add to Favorites", "Ctrl+I|Show Favorites", "Ctrl+B|Organize Favorites", _
+                    "Ctrl+H|History", "Ctrl+M|Read mail", "Ctrl+U|View the page's source", "Ctrl+N|New window", "Ctrl+S|Save the page", "Ctrl+W|Close the window", _
+                    "Ctrl+X, Ctrl+C, Ctrl+V|Cut, copy and paste", "Ctrl+A|Select all", "F1|This page"]
+                out = out + "<tr><td><tt><b>" + Esc(line.Split("|")[0]) + "</b></tt></td><td>" + Esc(line.Split("|")[1]) + "</td></tr>"
+            NEXT
+            RETURN out + "</table><p><font size=""2"">In the Address bar, type words (or <tt>? words</tt>) to search the Web.</font></p></body></html>"
         CASE "mail"
-            RETURN AboutTop("Mail") + "<p>Internet Explorer does not know where your mail is.</p><p>If a machine on the network runs <b>ColdMail</b>, put its address in <a href=""about:options"">Options</a>.</p></body></html>"
+            RETURN AboutTop("Mail") + "<p>Simxplorer does not know where your mail is.</p><p>If a machine on the network runs <b>ColdMail</b>, put its address in <a href=""about:options"">Options</a>.</p></body></html>"
     END SELECT
-    RETURN AboutTop("Internet Explorer") + "<p>Internet Explorer does not have a page called about:" + Esc(what) + ".</p></body></html>"
+    RETURN AboutTop("Simxplorer") + "<p>Simxplorer does not have a page called about:" + Esc(what) + ".</p></body></html>"
 END FUNCTION
 
 ' ================================================================ menus
 
 SUB Menu_OnSelect (item AS String)
+    ' a menu command that goes wrong says so, rather than closing the browser
+    TRY
+        MenuCommand(item)
+    CATCH problem
+        Oops(problem)
+    END TRY
+END SUB
+
+SUB MenuCommand (item AS String)
     VAR box AS GUI_MessageBox
     VAR dlg AS GUI_FileDialog
     VAR path AS String
     VAR line AS String
     SELECT CASE item
         CASE "New Window"
-            SYS.Start(IEPATH, curUrl)
+            SYS.Start(APPPATH, curUrl)
         CASE "Open..."
             address.Focus()
             address.SelectAll()
@@ -2133,6 +2405,25 @@ SUB Menu_OnSelect (item AS String)
             IF path <> "" THEN FS.Write(path, curSource)
         CASE "Close"
             win.Close()
+        CASE "Cut", "Copy", "Paste", "Select All"
+            EditCommand(item)
+        CASE "Find (on This Page)..."
+            ShowFind()
+        CASE "Find Next"
+            IF findBox.Text = "" THEN
+                ShowFind()
+            ELSE
+                FindNext()
+            END IF
+        CASE "Address Bar"
+            address.Focus()
+            address.SelectAll()
+        CASE "Search the Web..."
+            QuickSearch()
+        CASE "History"
+            History_Click()
+        CASE "Keyboard Shortcuts"
+            Go("about:keys")
         CASE "Stop"
             Stop_Click()
         CASE "Refresh"
@@ -2157,17 +2448,19 @@ SUB Menu_OnSelect (item AS String)
             History_Click()
         CASE "Add To Favorites..."
             AddFavorite()
+        CASE "Show Favorites"
+            Favorites_Click()
         CASE "Organize Favorites..."
             IF NOT FS.Exists(FAVFILE) THEN FS.Write(FAVFILE, "")
             SYS.Start("C:\PROGRAMS\NOTES.SPK", FAVFILE)
-        CASE "About Internet Explorer"
+        CASE "About Simxplorer"
             box = GUI_MessageBox.New(win)
-            box.Title = "About Internet Explorer"
+            box.Title = "About Simxplorer"
             box.Kind = "info"
-            box.Text = "Microsoft (R) Internet Explorer" + EOL + "Version 3.02 for SIM95" + EOL + EOL _
-                + "With JScript, a JavaScript interpreter written in SPARK: functions, objects, arrays, Date and Math, forms, alert, confirm and prompt, setTimeout, document.write and cookies." + EOL + EOL _
+            box.Text = "Simxplorer" + EOL + "Version 3.02 for SIM95" + EOL + EOL _
+                + "With a JavaScript interpreter written in SPARK: functions, objects, arrays, Date and Math, forms, alert, confirm and prompt, setTimeout, document.write and cookies." + EOL + EOL _
                 + "Extras of this edition: AutoSearch from the Address bar (type ? chess), AskSim's cached copy when a site is down, and Voyager's cookies and bookmarks." + EOL + EOL _
-                + "Pages with SPARK scripts are for Voyager; Internet Explorer shows them without."
+                + "Pages with SPARK scripts are for Voyager; Simxplorer shows them without."
             box.Show()
         CASE ELSE
             FOR EACH line IN favMenu
@@ -2179,9 +2472,332 @@ SUB Menu_OnSelect (item AS String)
     END SELECT
 END SUB
 
+' ================================================================ the toolbar
+
+CONST TBW = 58                 ' a toolbar button
+CONST TBH = 44
+CONST TBCOUNT = 9
+
+FUNCTION ToolLabel (i AS Integer) AS String
+    RETURN "Back|Forward|Stop|Refresh|Home|Search|Favorites|History|Mail".Split("|")[i]
+END FUNCTION
+
+FUNCTION ToolEnabled (i AS Integer) AS Bool
+    IF i = 0 THEN RETURN histPos > 0
+    IF i = 1 THEN RETURN histPos < hist.Count - 1
+    IF i = 2 THEN RETURN pPending OR fetching
+    RETURN TRUE
+END FUNCTION
+
+' Redraws the toolbar when something on it changed.
+SUB DrawTools ()
+    VAR state AS String
+    VAR i AS Integer
+    state = Str(tbPressed) + Str(tools.Width)
+    FOR i = 0 TO TBCOUNT - 1
+        state = state + Str(ToolEnabled(i))
+    NEXT
+    IF state = tbDrawn THEN RETURN
+    tbDrawn = state
+    tools.Clear()
+    tools.SetColor(7)
+    tools.FillRect(0, 0, tools.Width, tools.Height)
+    FOR i = 0 TO TBCOUNT - 1
+        DrawTool(i, 2 + i * TBW, 1, ToolEnabled(i), i = tbPressed)
+    NEXT
+    tools.SetColor(8)
+    tools.Line(0, TBH + 2, tools.Width, TBH + 2)
+END SUB
+
+SUB DrawTool (i AS Integer, x AS Integer, y AS Integer, on AS Bool, down AS Bool)
+    VAR label AS String
+    VAR ox AS Integer
+    VAR oy AS Integer
+    VAR ink AS Integer
+    VAR d AS Integer
+    ' a raised button (sunken while held down)
+    IF down THEN
+        d = 1
+        Bevel(x, y, TBW - 2, TBH, 0, 15)
+    ELSE
+        Bevel(x, y, TBW - 2, TBH, 15, 8)
+    END IF
+    ox = x + Int((TBW - 2 - 22) / 2) + d
+    oy = y + 4 + d
+    DrawIcon(i, ox, oy, on)
+    ink = 0
+    IF NOT on THEN ink = 8
+    label = ToolLabel(i)
+    IF NOT on THEN TinyText(x + Int((TBW - 2 - (label.Length * 6 - 1)) / 2) + 1 + d, y + 31 + d, label, 15)
+    TinyText(x + Int((TBW - 2 - (label.Length * 6 - 1)) / 2) + d, y + 30 + d, label, ink)
+END SUB
+
+SUB Bevel (x AS Integer, y AS Integer, w AS Integer, h AS Integer, light AS Integer, dark AS Integer)
+    tools.SetColor(light)
+    tools.Line(x, y, x + w - 1, y)
+    tools.Line(x, y, x, y + h - 1)
+    tools.SetColor(dark)
+    tools.Line(x, y + h - 1, x + w - 1, y + h - 1)
+    tools.Line(x + w - 1, y, x + w - 1, y + h - 1)
+END SUB
+
+' A polygon, filled: points as "x,y x,y ...", offset by ox, oy (flip mirrors it).
+SUB Poly (c AS GUI_Canvas, points AS String, ox AS Integer, oy AS Integer, flip AS Bool, colour AS Integer)
+    VAR xs AS Array OF Real
+    VAR ys AS Array OF Real
+    VAR pt AS String
+    VAR hits AS Array OF Real
+    VAR y AS Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR top AS Real = 9999
+    VAR bottom AS Real = -9999
+    VAR t AS Real
+    VAR yy AS Real
+    FOR EACH pt IN points.Split(" ")
+        IF flip THEN
+            xs.Add(21 - Val(pt.Split(",")[0]))
+        ELSE
+            xs.Add(Val(pt.Split(",")[0]))
+        END IF
+        ys.Add(Val(pt.Split(",")[1]))
+        top = MATH.Min(top, ys[ys.Count - 1])
+        bottom = MATH.Max(bottom, ys[ys.Count - 1])
+    NEXT
+    c.SetColor(colour)
+    FOR y = Int(top) TO Int(bottom)
+        yy = y + 0.5
+        hits.Clear()
+        FOR i = 0 TO xs.Count - 1
+            j = (i + 1) MOD xs.Count
+            IF (ys[i] <= yy AND ys[j] > yy) OR (ys[j] <= yy AND ys[i] > yy) THEN hits.Add(xs[i] + (yy - ys[i]) * (xs[j] - xs[i]) / (ys[j] - ys[i]))
+        NEXT
+        ' (few crossings: a simple sort)
+        FOR i = 0 TO hits.Count - 2
+            FOR j = i + 1 TO hits.Count - 1
+                IF hits[j] < hits[i] THEN
+                    t = hits[i]
+                    hits[i] = hits[j]
+                    hits[j] = t
+                END IF
+            NEXT
+        NEXT
+        i = 0
+        WHILE i + 1 < hits.Count
+            c.FillRect(ox + MATH.Round(hits[i]), oy + y, MATH.Max(1, MATH.Round(hits[i + 1]) - MATH.Round(hits[i])), 1)
+            i = i + 2
+        END WHILE
+    NEXT
+END SUB
+
+' The toolbar's pictures, 22 by 22. Greyed out (on = FALSE) they are all grey.
+SUB DrawIcon (i AS Integer, ox AS Integer, oy AS Integer, on AS Bool)
+    VAR grey AS Integer
+    grey = 8
+    SELECT CASE i
+        CASE 0, 1
+            ' a fat arrow, left for Back and right for Forward
+            Poly(tools, "0,11 10,1 10,7 21,7 21,15 10,15 10,21", ox, oy, i = 1, Pick(on, 0, grey))
+            Poly(tools, "2,11 9,4 9,9 20,9 20,13 9,13 9,18", ox, oy, i = 1, Pick(on, 2, 7))
+        CASE 2
+            ' a red stop sign with a white cross
+            Poly(tools, "6,0 15,0 21,6 21,15 15,21 6,21 0,15 0,6", ox, oy, FALSE, Pick(on, 9, grey))
+            tools.SetColor(Pick(on, 15, 7))
+            tools.Line(ox + 6, oy + 6, ox + 15, oy + 15)
+            tools.Line(ox + 7, oy + 6, ox + 16, oy + 15)
+            tools.Line(ox + 15, oy + 6, ox + 6, oy + 15)
+            tools.Line(ox + 16, oy + 6, ox + 7, oy + 15)
+        CASE 3
+            ' a page with a green arrow going round it
+            tools.SetColor(15)
+            tools.FillRect(ox + 5, oy + 2, 12, 17)
+            tools.SetColor(8)
+            tools.Rect(ox + 5, oy + 2, 12, 17)
+            tools.SetColor(Pick(on, 2, grey))
+            tools.FillCircle(ox + 11, oy + 11, 8)
+            tools.SetColor(15)
+            tools.FillCircle(ox + 11, oy + 11, 5)
+            tools.SetColor(7)
+            tools.FillRect(ox + 12, oy + 1, 9, 9)
+            Poly(tools, "11,0 18,3 11,7", ox, oy, FALSE, Pick(on, 2, grey))
+        CASE 4
+            ' a house: red roof, white walls, a door
+            Poly(tools, "0,11 11,1 22,11", ox, oy, FALSE, Pick(on, 9, grey))
+            tools.SetColor(Pick(on, 15, 7))
+            tools.FillRect(ox + 4, oy + 11, 14, 10)
+            tools.SetColor(Pick(on, 0, grey))
+            tools.Rect(ox + 4, oy + 11, 14, 10)
+            tools.SetColor(Pick(on, 1, grey))
+            tools.FillRect(ox + 9, oy + 14, 4, 7)
+        CASE 5
+            ' a magnifying glass
+            tools.SetColor(Pick(on, 0, grey))
+            tools.FillCircle(ox + 9, oy + 9, 8)
+            tools.SetColor(Pick(on, 14, 7))
+            tools.FillCircle(ox + 9, oy + 9, 5)
+            tools.SetColor(Pick(on, 1, grey))
+            Poly(tools, "14,12 21,19 19,21 12,14", ox, oy, FALSE, Pick(on, 1, grey))
+        CASE 6
+            ' a gold star
+            Poly(tools, "11,0 14,8 22,8 16,13 18,21 11,16 4,21 6,13 0,8 8,8", ox, oy, FALSE, Pick(on, 3, grey))
+            Poly(tools, "11,3 13,9 19,9 14,13 16,19 11,15 6,19 8,13 3,9 9,9", ox, oy, FALSE, Pick(on, 11, 7))
+        CASE 7
+            ' a clock
+            tools.SetColor(Pick(on, 4, grey))
+            tools.FillCircle(ox + 11, oy + 11, 10)
+            tools.SetColor(15)
+            tools.FillCircle(ox + 11, oy + 11, 8)
+            tools.SetColor(Pick(on, 0, grey))
+            tools.Line(ox + 11, oy + 11, ox + 11, oy + 5)
+            tools.Line(ox + 11, oy + 11, ox + 16, oy + 11)
+        CASE 8
+            ' an envelope
+            tools.SetColor(Pick(on, 15, 7))
+            tools.FillRect(ox + 1, oy + 5, 20, 13)
+            tools.SetColor(Pick(on, 0, grey))
+            tools.Rect(ox + 1, oy + 5, 20, 13)
+            tools.Line(ox + 1, oy + 5, ox + 11, oy + 12)
+            tools.Line(ox + 11, oy + 12, ox + 20, oy + 5)
+    END SELECT
+END SUB
+
+FUNCTION Pick (on AS Bool, yes AS Integer, no AS Integer) AS Integer
+    IF on THEN RETURN yes
+    RETURN no
+END FUNCTION
+
+' A tiny bitmap font for the labels (the canvas's own is 16 pixels high).
+FUNCTION Glyph (c AS String) AS String
+    SELECT CASE Asc(c)
+        CASE 66
+            RETURN "####.|#...#|#...#|####.|#...#|#...#|####.|....."
+        CASE 70
+            RETURN "#####|#....|#....|####.|#....|#....|#....|....."
+        CASE 72
+            RETURN "#...#|#...#|#...#|#####|#...#|#...#|#...#|....."
+        CASE 77
+            RETURN "#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#|....."
+        CASE 82
+            RETURN "####.|#...#|#...#|####.|#.#..|#..#.|#...#|....."
+        CASE 83
+            RETURN ".####|#....|#....|.###.|....#|....#|####.|....."
+        CASE 97
+            RETURN ".....|.....|.###.|....#|.####|#...#|.####|....."
+        CASE 99
+            RETURN ".....|.....|.###.|#....|#....|#....|.###.|....."
+        CASE 100
+            RETURN "....#|....#|.####|#...#|#...#|#...#|.####|....."
+        CASE 101
+            RETURN ".....|.....|.###.|#...#|#####|#....|.###.|....."
+        CASE 102
+            RETURN "..##.|.#...|###..|.#...|.#...|.#...|.#...|....."
+        CASE 104
+            RETURN "#....|#....|#.##.|##..#|#...#|#...#|#...#|....."
+        CASE 105
+            RETURN "..#..|.....|.##..|..#..|..#..|..#..|.###.|....."
+        CASE 107
+            RETURN "#....|#....|#..#.|#.#..|##...|#.#..|#..#.|....."
+        CASE 108
+            RETURN ".##..|..#..|..#..|..#..|..#..|..#..|.###.|....."
+        CASE 109
+            RETURN ".....|.....|##.#.|#.#.#|#.#.#|#.#.#|#.#.#|....."
+        CASE 111
+            RETURN ".....|.....|.###.|#...#|#...#|#...#|.###.|....."
+        CASE 112
+            RETURN ".....|.....|####.|#...#|#...#|####.|#....|#...."
+        CASE 114
+            RETURN ".....|.....|#.##.|##..#|#....|#....|#....|....."
+        CASE 115
+            RETURN ".....|.....|.####|#....|.###.|....#|####.|....."
+        CASE 116
+            RETURN ".#...|.#...|###..|.#...|.#...|.#..#|..##.|....."
+        CASE 118
+            RETURN ".....|.....|#...#|#...#|#...#|.#.#.|..#..|....."
+        CASE 119
+            RETURN ".....|.....|#...#|#...#|#.#.#|#.#.#|.#.#.|....."
+        CASE 121
+            RETURN ".....|.....|#...#|#...#|#...#|.####|....#|.###."
+    END SELECT
+    RETURN ".....|.....|.....|.....|.....|.....|.....|....."
+END FUNCTION
+
+SUB TinyText (x AS Integer, y AS Integer, text AS String, colour AS Integer)
+    VAR i AS Integer
+    VAR r AS Integer
+    VAR rows AS Array OF String
+    VAR row AS String
+    VAR k AS Integer
+    VAR start AS Integer
+    tools.SetColor(colour)
+    FOR i = 0 TO text.Length - 1
+        rows = Glyph(text.CharAt(i)).Split("|")
+        FOR r = 0 TO 7
+            row = rows[r] + "."
+            start = -1
+            FOR k = 0 TO 5
+                IF row.CharAt(k) = "#" AND start < 0 THEN start = k
+                IF row.CharAt(k) <> "#" AND start >= 0 THEN
+                    tools.FillRect(x + i * 6 + start, y + r, k - start, 1)
+                    start = -1
+                END IF
+            NEXT
+        NEXT
+    NEXT
+END SUB
+
+SUB Tools_OnDraw (canvas AS GUI_Canvas)
+    tbDrawn = ""
+    DrawTools()
+END SUB
+
+FUNCTION ToolAt (x AS Integer, y AS Integer) AS Integer
+    VAR i AS Integer
+    IF x < 2 OR y > TBH THEN RETURN -1
+    i = Int((x - 2) / TBW)
+    IF i < 0 OR i >= TBCOUNT THEN RETURN -1
+    RETURN i
+END FUNCTION
+
+SUB Tools_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    i = ToolAt(x, y)
+    IF i < 0 THEN RETURN
+    IF NOT ToolEnabled(i) THEN RETURN
+    tbPressed = i
+    DrawTools()
+END SUB
+
+SUB Tools_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    i = tbPressed
+    tbPressed = -1
+    DrawTools()
+    IF i < 0 OR ToolAt(x, y) <> i THEN RETURN
+    SELECT CASE i
+        CASE 0
+            Back_Click()
+        CASE 1
+            Forward_Click()
+        CASE 2
+            Stop_Click()
+        CASE 3
+            Refresh_Click()
+        CASE 4
+            Home_Click()
+        CASE 5
+            Search_Click()
+        CASE 6
+            Favorites_Click()
+        CASE 7
+            History_Click()
+        CASE 8
+            Mail_Click()
+    END SELECT
+END SUB
+
 ' ================================================================ the logo
 
-' The "e", with a swoosh round it that spins while a page is coming.
+' A blue S, with a gold swoosh round it that spins while a page is coming.
 SUB DrawThrob ()
     VAR i AS Integer
     VAR a AS Real
@@ -2189,22 +2805,25 @@ SUB DrawThrob ()
     VAR y AS Integer
     VAR spin AS Bool
     spin = pPending OR fetching OR imgWant.Count > 0
+    throb.Clear()
     throb.SetColor(15)
-    throb.FillRect(0, 0, 42, 50)
+    throb.FillRect(0, 0, 42, 46)
     throb.SetColor(8)
-    throb.Rect(0, 0, 42, 50)
+    throb.Rect(0, 0, 42, 46)
+    ' the S: round the top bowl one way, the bottom bowl the other
     throb.SetColor(12)
-    throb.FillCircle(21, 25, 12)
-    throb.SetColor(15)
-    throb.FillCircle(21, 25, 7)
-    throb.SetColor(12)
-    throb.FillRect(10, 23, 23, 4)
-    throb.SetColor(15)
-    throb.FillRect(23, 28, 11, 5)
+    FOR i = 0 TO 15
+        a = (-40 - i * 15) * MATH.Pi / 180
+        throb.FillCircle(Int(21 + 7 * MATH.Cos(a)), Int(16 + 6 * MATH.Sin(a)), 2)
+    NEXT
+    FOR i = 0 TO 15
+        a = (-90 + i * 15) * MATH.Pi / 180
+        throb.FillCircle(Int(21 + 7 * MATH.Cos(a)), Int(28 + 6 * MATH.Sin(a)), 2)
+    NEXT
     FOR i = 0 TO 17
         a = i * 20 * MATH.Pi / 180
         x = Int(21 + 18 * MATH.Cos(a) * 0.94 - 6 * MATH.Sin(a) * 0.34)
-        y = Int(25 + 18 * MATH.Cos(a) * -0.34 + 6 * MATH.Sin(a) * 0.94)
+        y = Int(23 + 18 * MATH.Cos(a) * -0.34 + 6 * MATH.Sin(a) * 0.94)
         throb.SetColor(3)
         throb.Pixel(x, y)
     NEXT
@@ -2212,7 +2831,7 @@ SUB DrawThrob ()
         FOR i = 0 TO 2
             a = ((throbStep / 2) * 40 + i * 14) * MATH.Pi / 180
             x = Int(21 + 18 * MATH.Cos(a) * 0.94 - 6 * MATH.Sin(a) * 0.34)
-            y = Int(25 + 18 * MATH.Cos(a) * -0.34 + 6 * MATH.Sin(a) * 0.94)
+            y = Int(23 + 18 * MATH.Cos(a) * -0.34 + 6 * MATH.Sin(a) * 0.94)
             throb.SetColor(11)
             throb.FillCircle(x, y, Int(2 - i / 2))
         NEXT
@@ -2223,7 +2842,7 @@ SUB Throb_OnDraw (canvas AS GUI_Canvas)
     DrawThrob()
 END SUB
 
-' Clicking the logo, like clicking IE's, goes home
+' Clicking the logo goes home
 SUB Throb_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
     Home_Click()
 END SUB
