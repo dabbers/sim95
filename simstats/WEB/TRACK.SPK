@@ -1,0 +1,387 @@
+' TRACK.SPK - the counting half of SimStats: what hit.asp does for every
+' visit, kept small because it runs on every page view of every site we
+' count. The dashboards import STATS.SPK as well, which builds on this.
+'
+' It uses nothing of the web server's (REQUEST, RESPONSE, SERVER): hit.asp
+' hands it what the request said, so it also runs as a plain SPARK program.
+'
+' Everything lives under C:\STATDATA, outside C:\WEB:
+'
+'   SITES.TXT            one line per site: id|owner|name|url|public|created|on
+'   HOME.TXT             the id of "this machine", the site the installer made
+'   USERS\<user>.TXT     an account, key=value per line
+'   SESSIONS\<id>.TXT    who a sign-in cookie belongs to, and its form token
+'   S\<id>\TOTAL.TXT     hits since the start|the day it started
+'   S\<id>\LIVE.TXT      the last 20 hits, oldest first
+'   S\<id>\<yyyymmdd>.TXT  one day's rollup (see Bump): hits, visitors, pages,
+'                        browsers, hours, referrers and machines, counted as
+'                        they come, so a dashboard never reads a raw log
+'   S\<id>\<yyyymmdd>.LOG  the day's raw hits, one line each (then .L2, .L3...
+'                        when a day outgrows one network message). Kept RAWDAYS days.
+'
+' A rollup line is kind|key|count:
+'   h|all|n      hits          u|<visitor>|n   one per visitor
+'   p|<path>|n   pages         t|<path>|title  the page's latest title
+'   b|<browser>|n browsers     o|<hour>|n      hours of the day
+'   r|<ref>|n    referrers     m|<address>|n   visiting machines
+'   n|<address>|<visitor>      the visitor id handed to a machine whose
+'                              browser sent no SimStats cookie
+'
+' Visitors: hit.asp gives each browser a cookie (ssvid) on the stats machine.
+' Voyager and Simxplorer both send the stats machine's cookies with a picture
+' from it, even on another machine's page, so the cookie is the visitor. A
+' browser that never sends it back is counted once per machine per day.
+
+CONST DATADIR = "C:\STATDATA"
+CONST VIDCOOKIE = "ssvid"        ' the visitor's id, on the stats machine
+CONST OUTCOOKIE = "ssout"        ' "1": this visitor asked not to be counted
+CONST RAWDAYS = 14               ' days of raw hits kept
+CONST KEEPDAYS = 100             ' days of rollups kept
+CONST LIVEROWS = 20
+CONST LOGMAX = 50000             ' a raw log stays under one network message
+
+' ---------------------------------------------------------------- little helpers
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+' Text that is safe inside one |-separated line, and back again.
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    s = s.Replace(Chr(13), " ").Replace(Chr(10), " ").Trim()
+    IF s.Length > most THEN s = s.Substring(0, most)
+    RETURN s
+END FUNCTION
+
+' The invisible tag: one white pixel.
+FUNCTION Dot () AS String
+    RETURN "SIM95PIC 1 1" + Chr(10) + "F" + Chr(10)
+END FUNCTION
+
+FUNCTION NewToken () AS String
+    RETURN Hex(268435456 + Rnd(1879048191))
+END FUNCTION
+
+' A site id or a visitor id: 8 hex digits.
+FUNCTION IsId (s AS String) AS Bool
+    IF s.Length <> 8 THEN RETURN FALSE
+    RETURN OnlyFrom(s, "0123456789ABCDEF")
+END FUNCTION
+
+' ---------------------------------------------------------------- the calendar
+' Days are counted from 1970-01-01, so "seven days ago" works across months.
+
+FUNCTION DayNum (d AS String) AS Integer
+    VAR y AS Integer
+    VAR m AS Integer
+    VAR dd AS Integer
+    VAR era AS Integer
+    VAR yoe AS Integer
+    VAR doy AS Integer
+    y = Int(Val(d.Substring(0, 4)))
+    m = Int(Val(d.Substring(5, 2)))
+    dd = Int(Val(d.Substring(8, 2)))
+    IF m <= 2 THEN y = y - 1
+    era = Int(y / 400)
+    yoe = y - era * 400
+    doy = Int((153 * ((m + 9) MOD 12) + 2) / 5) + dd - 1
+    RETURN era * 146097 + yoe * 365 + Int(yoe / 4) - Int(yoe / 100) + doy - 719468
+END FUNCTION
+
+FUNCTION DateOf (n AS Integer) AS String
+    VAR z AS Integer
+    VAR era AS Integer
+    VAR doe AS Integer
+    VAR yoe AS Integer
+    VAR y AS Integer
+    VAR doy AS Integer
+    VAR mp AS Integer
+    VAR d AS Integer
+    VAR m AS Integer
+    z = n + 719468
+    era = Int(z / 146097)
+    doe = z - era * 146097
+    yoe = Int((doe - Int(doe / 1460) + Int(doe / 36524) - Int(doe / 146096)) / 365)
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + Int(yoe / 4) - Int(yoe / 100))
+    mp = Int((5 * doy + 2) / 153)
+    d = doy - Int((153 * mp + 2) / 5) + 1
+    IF mp < 10 THEN
+        m = mp + 3
+    ELSE
+        m = mp - 9
+    END IF
+    IF m <= 2 THEN y = y + 1
+    RETURN Str(y) + "-" + Str(100 + m).Substring(1, 2) + "-" + Str(100 + d).Substring(1, 2)
+END FUNCTION
+
+' "2026-10-01" is in 20261001.TXT and 20261001.LOG
+FUNCTION DayFile (d AS String) AS String
+    RETURN d.Replace("-", "")
+END FUNCTION
+
+' ---------------------------------------------------------------- sites
+
+' The line of site id, or "".
+FUNCTION SiteLine (id AS String) AS String
+    VAR text AS String
+    VAR at AS Integer
+    IF NOT IsId(id) THEN RETURN ""
+    text = Chr(10) + ReadOr(DATADIR + "\SITES.TXT", "")
+    at = text.IndexOf(Chr(10) + id + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    IF text.IndexOf(Chr(10)) >= 0 THEN text = text.Substring(0, text.IndexOf(Chr(10)))
+    RETURN text
+END FUNCTION
+
+' Field i of a site's line: 0 id, 1 owner, 2 name, 3 url, 4 public, 5 created, 6 on
+FUNCTION SF (line AS String, i AS Integer) AS String
+    VAR p AS Array OF String
+    p = line.Split("|")
+    IF i >= p.Count THEN RETURN ""
+    RETURN Unesc(p[i])
+END FUNCTION
+
+FUNCTION SiteDir (id AS String) AS String
+    RETURN DATADIR + "\S\" + id
+END FUNCTION
+
+FUNCTION TotalHits (id AS String) AS Integer
+    RETURN Int(Val(ReadOr(SiteDir(id) + "\TOTAL.TXT", "0").Split("|")[0]))
+END FUNCTION
+
+' ---------------------------------------------------------------- browsers
+' The same reading as Simxplorer's SNIFF.SPK, from the User-Agent:
+'   Voyager/1.1 (SIM95)                                  Voyager 1.1
+'   Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)     Simxplorer 3.02
+
+FUNCTION BrowserOf (ua AS String) AS String
+    VAR v AS String
+    ua = ua.Trim()
+    IF ua.Contains("Simxplorer") THEN
+        v = ua.Substring(ua.IndexOf("Simxplorer") + 10, ua.Length - ua.IndexOf("Simxplorer") - 10)
+        RETURN Clip("Simxplorer " + v.Split(";")[0].Split(")")[0].Trim(), 40)
+    END IF
+    IF ua = "" THEN RETURN "Unknown"
+    IF NOT ua.Contains("/") THEN RETURN Clip(ua.Split(" ")[0], 40)
+    RETURN Clip(ua.Split("/")[0].Split(" ")[0] + " " + ua.Split("/")[1].Split(" ")[0].Trim(), 40)
+END FUNCTION
+
+' Crawlers are not visitors.
+FUNCTION IsRobot (ua AS String) AS Bool
+    ua = ua.Lower()
+    RETURN ua.StartsWith("asksim/") OR ua.Contains("crawler") OR ua.Contains("spider") OR ua.Contains("robot")
+END FUNCTION
+
+' ---------------------------------------------------------------- counting
+
+' Adds one to kind|key in a rollup (text starts with a line break). A day
+' keeps at most most different keys of a kind; the rest go under (other).
+FUNCTION Bump (text AS String, kind AS String, key AS String, most AS Integer) AS String
+    VAR head AS String
+    VAR at AS Integer
+    VAR rest AS String
+    VAR stop AS Integer
+    head = Chr(10) + kind + "|" + key + "|"
+    at = text.IndexOf(head)
+    IF at < 0 THEN
+        IF text.Split(Chr(10) + kind + "|").Count > most THEN
+            head = Chr(10) + kind + "|(other)|"
+            at = text.IndexOf(head)
+        END IF
+        IF at < 0 THEN RETURN text + head.Substring(1, head.Length - 1) + "1" + Chr(10)
+    END IF
+    at = at + head.Length
+    rest = text.Substring(at, text.Length - at)
+    stop = rest.IndexOf(Chr(10))
+    RETURN text.Substring(0, at) + Str(Int(Val(rest.Substring(0, stop))) + 1) + rest.Substring(stop, rest.Length - stop)
+END FUNCTION
+
+' Sets kind|key|value, replacing what was there.
+FUNCTION SetLine (text AS String, kind AS String, key AS String, value AS String) AS String
+    VAR head AS String
+    VAR at AS Integer
+    VAR rest AS String
+    head = Chr(10) + kind + "|" + key + "|"
+    at = text.IndexOf(head)
+    IF at < 0 THEN RETURN text + head.Substring(1, head.Length - 1) + value + Chr(10)
+    at = at + head.Length
+    rest = text.Substring(at, text.Length - at)
+    RETURN text.Substring(0, at) + value + rest.Substring(rest.IndexOf(Chr(10)), rest.Length - rest.IndexOf(Chr(10)))
+END FUNCTION
+
+' Two hits for one site may arrive at once, and each rewrites the day's
+' rollup. The lock is a folder: FS.MakeDir fails when it is already there, so
+' taking it is one step (SimPal locks its ledger the same way). A lock left by
+' a page that died is cleared after a few seconds.
+FUNCTION TakeLock (id AS String) AS Bool
+    VAR tries AS Integer
+    VAR at AS String
+    WHILE tries < 100
+        tries = tries + 1
+        TRY
+            FS.MakeDir(SiteDir(id) + "\LOCK")
+            FS.Write(SiteDir(id) + "\LOCK\AT.TXT", Str(TIME.Now))
+            RETURN TRUE
+        CATCH err
+            at = ReadOr(SiteDir(id) + "\LOCK\AT.TXT", "")
+            IF (at <> "" AND TIME.Now - Int(Val(at)) > 5) OR (at = "" AND tries MOD 25 = 0) THEN
+                DropLock(id)
+            ELSE
+                SYS.Sleep(10)
+            END IF
+        END TRY
+    END WHILE
+    RETURN FALSE
+END FUNCTION
+
+SUB DropLock (id AS String)
+    TRY
+        IF FS.Exists(SiteDir(id) + "\LOCK\AT.TXT") THEN FS.Delete(SiteDir(id) + "\LOCK\AT.TXT")
+        IF FS.Exists(SiteDir(id) + "\LOCK") THEN FS.Delete(SiteDir(id) + "\LOCK")
+    CATCH err
+    END TRY
+END SUB
+
+' One hit: the raw line, and the day's rollup, the last 20 and the total.
+' vid is the visitor's cookie ("" if their browser sent none). Returns the
+' visitor id to hand them in a cookie, or "" when theirs is fine.
+FUNCTION RecordHit (id AS String, day AS String, clock AS String, addr AS String, vid AS String, agent AS String, path AS String, title AS String, ref AS String) AS String
+    VAR dir AS String
+    VAR file AS String
+    VAR text AS String
+    VAR fresh AS Bool
+    VAR given AS String
+    VAR at AS Integer
+    VAR browser AS String
+    VAR log AS String
+    VAR n AS Integer
+    VAR live AS Array OF String
+    VAR total AS Array OF String
+    dir = SiteDir(id)
+    IF NOT FS.Exists(DATADIR + "\S") THEN FS.MakeDir(DATADIR + "\S")
+    IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    path = Esc(Clip(path, 120))
+    IF path = "" THEN path = "/"
+    title = Esc(Clip(title, 80))
+    ref = Esc(Clip(ref, 150))
+    addr = Esc(Clip(addr, 40))
+    browser = Esc(BrowserOf(agent))
+    IF NOT TakeLock(id) THEN RETURN ""
+    file = dir + "\" + DayFile(day) + ".TXT"
+    IF FS.Exists(file) THEN
+        text = Chr(10) + FS.Read(file)
+    ELSE
+        text = Chr(10)
+        fresh = TRUE
+    END IF
+    ' who it is: their cookie, or what this machine was given today
+    IF NOT IsId(vid) THEN
+        at = text.IndexOf(Chr(10) + "n|" + addr + "|")
+        IF at >= 0 THEN
+            vid = text.Substring(at + addr.Length + 4, 8)
+        ELSE
+            vid = NewToken()
+            text = text + "n|" + addr + "|" + vid + Chr(10)
+        END IF
+        given = vid
+    END IF
+    text = Bump(text, "h", "all", 1)
+    text = Bump(text, "u", vid, 1000)
+    text = Bump(text, "p", path, 200)
+    IF title <> "" THEN text = SetLine(text, "t", path, title)
+    text = Bump(text, "b", browser, 50)
+    text = Bump(text, "o", clock.Substring(0, 2), 24)
+    IF ref <> "" THEN text = Bump(text, "r", ref, 200)
+    text = Bump(text, "m", addr, 1000)
+    FS.Write(file, text.Substring(1, text.Length - 1))
+    ' the raw line, in the day's log (or the next part of it)
+    log = dir + "\" + DayFile(day) + ".LOG"
+    n = 1
+    WHILE FS.Exists(log) AND n < 10
+        IF FS.Size(log) < LOGMAX THEN BREAK
+        n = n + 1
+        log = dir + "\" + DayFile(day) + ".L" + Str(n)
+    END WHILE
+    IF n < 10 THEN FS.Append(log, clock + "|" + addr + "|" + vid + "|" + browser + "|" + path + "|" + title + "|" + ref + Chr(10))
+    ' the last 20, for the Live box
+    live = ReadOr(dir + "\LIVE.TXT", "").Lines()
+    IF live.Count > 0 THEN
+        IF live[live.Count - 1] = "" THEN live.RemoveAt(live.Count - 1)
+    END IF
+    live.Add(day + " " + clock + "|" + addr + "|" + browser + "|" + path + "|" + title + "|" + ref)
+    WHILE live.Count > LIVEROWS
+        live.RemoveAt(0)
+    END WHILE
+    FS.Write(dir + "\LIVE.TXT", live.Join(Chr(10)) + Chr(10))
+    total = ReadOr(dir + "\TOTAL.TXT", "0|" + day).Split("|")
+    FS.Write(dir + "\TOTAL.TXT", Str(Int(Val(total[0])) + 1) + "|" + total[1].Trim())
+    IF fresh THEN Prune(id, day)
+    DropLock(id)
+    RETURN given
+END FUNCTION
+
+' The first hit of a day clears out raw logs older than RAWDAYS and rollups
+' older than KEEPDAYS.
+SUB Prune (id AS String, day AS String)
+    VAR f AS String
+    VAR oldRaw AS String
+    VAR oldDay AS String
+    oldRaw = DayFile(DateOf(DayNum(day) - RAWDAYS))
+    oldDay = DayFile(DateOf(DayNum(day) - KEEPDAYS))
+    FOR EACH f IN FS.List(SiteDir(id))
+        IF f.EndsWith("\") OR f.Length < 12 THEN CONTINUE
+        IF NOT OnlyFrom(f.Substring(0, 8), "0123456789") THEN CONTINUE
+        IF f.Substring(9, 1).Upper() = "L" AND f.Substring(0, 8) < oldRaw THEN FS.Delete(SiteDir(id) + "\" + f)
+        IF f.Substring(9, 3).Upper() = "TXT" AND f.Substring(0, 8) < oldDay THEN FS.Delete(SiteDir(id) + "\" + f)
+    NEXT
+END SUB
+
+' ---------------------------------------------------------------- the badge
+' An 88x31 counter in the old style: green LED digits in a black window, on
+' the picture in BADGE.PIC (which has the window empty).
+
+CONST LED = "01110100011001110101110011000101110001000110000100001000010000100011100111010001000010001000100010001111111111000100010000010000011000101110000100011001010100101111100010000101111110000111100000100001100010111000110010001000011110100011000101110111110000100010001000100001000010000111010001100010111010001100010111001110100011000101111000010001001100"
+
+FUNCTION Badge (template AS String, count AS Integer) AS String
+    VAR rows AS Array OF String
+    VAR digits AS String
+    VAR i AS Integer
+    VAR r AS Integer
+    VAR x AS Integer
+    VAR d AS Integer
+    VAR seg AS String
+    rows = template.Replace(Chr(13), "").Split(Chr(10))
+    IF rows.Count < 32 THEN RETURN Dot()
+    digits = Str(count)
+    IF digits.Length < 5 THEN digits = ("00000" + digits).Substring(digits.Length, 5)
+    IF digits.Length > 7 THEN digits = "9999999"
+    x = 44 - Int((digits.Length * 6 - 1) / 2)
+    FOR i = 0 TO digits.Length - 1
+        d = Asc(digits.CharAt(i)) - 48
+        FOR r = 0 TO 6
+            seg = LED.Substring(d * 35 + r * 5, 5).Replace("1", "A")
+            rows[r + 6] = rows[r + 6].Substring(0, x) + seg + rows[r + 6].Substring(x + 5, rows[r + 6].Length - x - 5)
+        NEXT
+        x = x + 6
+    NEXT
+    RETURN rows.Join(Chr(10))
+END FUNCTION

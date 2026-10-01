@@ -10,6 +10,7 @@
 '   Games      C:\GAMES: Vapor's library, games, saves and achievements
 '   Frostbird  C:\FROST
 '   Favorites  C:\SYSTEM\FAVORITE.TXT
+'   SimStats   C:\STATDATA: accounts, sites and their statistics
 '
 ' Nothing on the other machine is changed or deleted. Where this machine
 ' already has some of the same data, it asks first, and then only adds:
@@ -32,6 +33,7 @@ VAR cBot AS GUI_CheckBox
 VAR cGeo AS GUI_CheckBox
 VAR cPal AS GUI_CheckBox
 VAR cTube AS GUI_CheckBox
+VAR cStats AS GUI_CheckBox
 VAR cGames AS GUI_CheckBox
 VAR cFrost AS GUI_CheckBox
 VAR cFav AS GUI_CheckBox
@@ -88,12 +90,13 @@ SUB Main ()
     cGeo = Check("GeoSimies: homepages, guestbooks", 220, 192)
     cPal = Check("SimPal: accounts and money", 10, 212)
     cTube = Check("SimTube: movies and comments", 220, 212)
+    cStats = Check("SimStats: sites and statistics", 10, 232)
     goBtn = GUI_Button.New(win)
     goBtn.SetBounds(330, 48, 100, 26)
     goBtn.Text = "Move In"
     goBtn.onClick = Go_Click
     log = GUI_ListBox.New(win)
-    log.SetBounds(10, 240, 420, 160)
+    log.SetBounds(10, 260, 420, 150)
     clock = GUI_Timer.New(win)
     clock.Interval = 100
     clock.onTick = Clock_OnTick
@@ -162,6 +165,8 @@ FUNCTION SetName (s AS String) AS String
             RETURN "SimPal"
         CASE "TUBE"
             RETURN "SimTube"
+        CASE "STATS"
+            RETURN "SimStats"
     END SELECT
     RETURN "Favorites"
 END FUNCTION
@@ -187,6 +192,8 @@ FUNCTION SetPath (s AS String) AS String
             RETURN "C:\PALDATA"
         CASE "TUBE"
             RETURN "C:\TUBEDATA"
+        CASE "STATS"
+            RETURN "C:\STATDATA"
     END SELECT
     RETURN "C:\SYSTEM\FAVORITE.TXT"
 END FUNCTION
@@ -196,13 +203,16 @@ FUNCTION Joinable (path AS String) AS Bool
     VAR p AS String
     p = path.Upper()
     IF p.StartsWith("C:\GEODATA\HOODS\") THEN RETURN TRUE
-    RETURN p = "C:\SYSTEM\FAVORITE.TXT" OR p = "C:\GAMES\LIBRARY.TXT" OR p = "C:\BOOKDATA\PEOPLE.TXT" OR p = "C:\GEODATA\MEMBERS.TXT" OR p = "C:\GEODATA\NEWEST.TXT"
+    RETURN p = "C:\SYSTEM\FAVORITE.TXT" OR p = "C:\STATDATA\SITES.TXT" OR p = "C:\GAMES\LIBRARY.TXT" OR p = "C:\BOOKDATA\PEOPLE.TXT" OR p = "C:\GEODATA\MEMBERS.TXT" OR p = "C:\GEODATA\NEWEST.TXT"
 END FUNCTION
 
-' Not worth moving: who is signed in, and the like.
+' Not worth moving: who is signed in, and the like. SimStats' HOME.TXT names
+' the old machine's own site, which here is only one site among the others.
 FUNCTION Skip (path AS String) AS Bool
     VAR p AS String
     p = path.Upper()
+    IF p = "C:\STATDATA\SESSIONS" OR p = "C:\STATDATA\HOME.TXT" THEN RETURN TRUE
+    IF p.StartsWith("C:\STATDATA\S\") AND p.EndsWith("\LOCK") THEN RETURN TRUE
     RETURN p = "C:\BOOKDATA\SESSIONS" OR p = "C:\MAILDATA\SESSIONS" OR p = "C:\MAILDATA\ALIVE.TXT" OR p = "C:\GEODATA\SESSIONS" OR p = "C:\PALDATA\SESSIONS" OR p = "C:\PALDATA\LOCK" OR p = "C:\TUBEDATA\SESSIONS"
 END FUNCTION
 
@@ -269,6 +279,7 @@ SUB Go_Click ()
     IF cGeo.Checked THEN all.Add("GEO")
     IF cPal.Checked THEN all.Add("PAL")
     IF cTube.Checked THEN all.Add("TUBE")
+    IF cStats.Checked THEN all.Add("STATS")
     IF all.Count = 0 THEN
         Warn("Tick what to move in.")
         RETURN
@@ -283,6 +294,11 @@ SUB Go_Click ()
         IF s = "TUBE" AND HasData(SetPath(s)) THEN
             ' movies are numbered: two SimTubes' numbers would collide
             Warn("This machine already has SimTube movies in C:\TUBEDATA, and two SimTubes can't be joined: their movie numbers would collide. SimTube is skipped." + EOL + EOL + "To move it anyway, rename C:\TUBEDATA here first.")
+            CONTINUE
+        END IF
+        IF s = "STATS" AND HasData("C:\STATDATA\USERS") THEN
+            ' two sets of accounts would collide, and nobody could say whose site is whose
+            Warn("This machine already has SimStats accounts in C:\STATDATA, and two SimStats can't be joined: their accounts would collide. SimStats is skipped." + EOL + EOL + "To move it anyway, rename C:\STATDATA here first.")
             CONTINUE
         END IF
         IF HasData(SetPath(s)) THEN

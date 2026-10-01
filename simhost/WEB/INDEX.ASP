@@ -8,6 +8,7 @@ VAR a AS String
 VAR p AS Array OF String
 VAR n AS Integer
 VAR known AS String
+VAR counter AS String
 here = SERVER.Name.Lower()
 
 apps.Add("BOOK|BOOK.SPK|SimBook|The social network: profiles, friends, a news feed, walls, photos and pokes.|#3B5998")
@@ -17,6 +18,7 @@ apps.Add("GEO|GEO.SPK|GeoSimies|Free homepages for everybody: neighborhoods, hit
 apps.Add("ELIZA|BOT.SPK|ELIZA-95|A chatbot with Language-Model-of-Certain-Size manners.|#2F6F4F")
 apps.Add("PAL|PAL.SPK|SimPal|Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.|#003087")
 apps.Add("TUBE|TUBE.SPK|SimTube|Movies: watch them, put yours up, give them stars. They play in SimPlayer.|#CC0000")
+apps.Add("STATS|STATS.SPK|SimStats|Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.|#003366")
 apps.Add("VAPOR|CATALOG.TXT|Vapor|The store: get Vapor, then games and every SIM95 program.|#1B2838")
 ' Apps that leave an APP.INF in their folder (name|blurb|colour) say how they
 ' show here; the list above covers ones installed before they did.
@@ -39,7 +41,12 @@ FOR EACH a IN FS.List("C:\WEB")
         END IF
     NEXT
 NEXT
-IF n = 0 THEN rows = "<tr><td>No web apps here yet. Install SimBook, ColdMail, AskSim, GeoSimies, ELIZA-95, SimPal or SimTube (from Vapor, or with their INSTALL.SPK): each goes in a folder of its own and shows up here.</td></tr>"
+IF n = 0 THEN rows = "<tr><td>No web apps here yet. Install SimBook, ColdMail, AskSim, GeoSimies, ELIZA-95, SimPal, SimTube or SimStats (from Vapor, or with their INSTALL.SPK): each goes in a folder of its own and shows up here.</td></tr>"
+' With SimStats in /stats/, this page counts its visitors as "this machine",
+' the site SimStats' installer made for it (its id is in C:\STATDATA\HOME.TXT).
+IF FS.Exists("C:\WEB\STATS\STATS.SPK") AND FS.Exists("C:\STATDATA\HOME.TXT") THEN
+    counter = "<img src=""/stats/hit.asp?s=" + SERVER.UrlEncode(FS.Read("C:\STATDATA\HOME.TXT").Trim()) + "&p=/&t=" + SERVER.UrlEncode(SERVER.Name + " - SimHost") + """ width=""1"" height=""1"" alt="""">"
+END IF
 %>
 <script runat="server">
 ' One app's row on the front page.
@@ -63,6 +70,6 @@ END FUNCTION
 <p><font size="2">
 <% IF FS.Exists("C:\WEB\WELCOME.HTM") THEN %><a href="/welcome.htm">The old home page</a> &middot; <% END IF %>
 Moving in from another machine? Run C:\PROGRAMS\MOVEIN.SPK here.
-</font>
+</font><%= counter %>
 </body>
 </html>
