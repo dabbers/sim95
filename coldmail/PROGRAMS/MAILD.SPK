@@ -22,6 +22,16 @@
 ' The webmail (C:\WEB\MAIL\MAIL.SPK) reads and writes the same files.
 '
 ' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>.
+'
+' One SIM95 quirk shapes the sending loop: a failed wait (a Connect nobody
+' answers, a Receive that times out) can be caught with TRY, but the handler it
+' happened in is spoiled: the error comes back at its next wait, and at the
+' next pause the interpreter takes every 512 statements. So after a failed
+' delivery the tick ends at once, noting only which letter and why
+' (pendingPath, pendingAnswer); the next tick, a fresh handler, writes down the
+' retry or the bounce before anything else. The whole tick sits in a TRY with
+' an empty CATCH and nothing after it, so a spoiled tick can only end. The
+' failed letter then waits for its retry time and cannot hold up the others.
 
 CONST DATA = "C:\MAILDATA"
 CONST PORT = 25
@@ -31,6 +41,11 @@ VAR log AS GUI_ListBox
 VAR sock AS NET_Socket
 VAR timer AS GUI_Timer
 VAR busy AS Bool
+VAR busySince AS Integer      ' a tick cut short by a spoiled handler leaves busy set; this lets go
+VAR failed AS Bool            ' a wait failed in this tick: it must end now
+VAR pendingPath AS String     ' the letter it was, for the next tick to settle
+VAR pendingAnswer AS String
+VAR outSock AS NET_Socket
 VAR retry AS Integer = 30
 VAR tries AS Integer = 5
 VAR received AS Integer
@@ -196,11 +211,21 @@ END SUB
 
 ' ---------------------------------------------------------------- receiving
 
+' An answer to the other server. It may already have hung up (it sends QUIT
+' and closes without waiting for "221 Bye"); that is no reason to stop.
+SUB Reply (conn AS NET_Connection, text AS String)
+    IF NOT conn.IsOpen THEN RETURN
+    TRY
+        conn.Send(text)
+    CATCH err
+    END TRY
+END SUB
+
 ' Each connection's state lives in its Tag: helo|from|rcpt1,rcpt2
 SUB Sock_OnConnect (conn AS NET_Connection)
     conn.Accept()
     conn.Tag = "||"
-    conn.Send("220 " + NET.HostName + " ColdMail ready")
+    Reply(conn, "220 " + NET.HostName + " ColdMail ready")
 END SUB
 
 SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
@@ -219,27 +244,27 @@ SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
 
     IF cmd.StartsWith("HELO") OR cmd.StartsWith("EHLO") THEN
         state[0] = arg.Trim()
-        conn.Send("250 Hello " + arg.Trim() + ", pleased to meet you")
+        Reply(conn, "250 Hello " + arg.Trim() + ", pleased to meet you")
     ELSEIF cmd.StartsWith("MAIL FROM") THEN
         state[1] = Bare(arg)
         state[2] = ""
-        conn.Send("250 OK")
+        Reply(conn, "250 OK")
     ELSEIF cmd.StartsWith("RCPT TO") THEN
         who = Bare(arg)
         IF state[1] = "" THEN
-            conn.Send("503 MAIL FROM first")
+            Reply(conn, "503 MAIL FROM first")
         ELSEIF NOT IsLocal(HostPart(who)) THEN
-            conn.Send("551 I only take mail for " + NET.HostName.Lower())
+            Reply(conn, "551 I only take mail for " + NET.HostName.Lower())
         ELSEIF NOT HasMailbox(UserPart(who)) THEN
-            conn.Send("550 No such user here: " + UserPart(who))
+            Reply(conn, "550 No such user here: " + UserPart(who))
         ELSE
             IF state[2] <> "" THEN state[2] = state[2] + ","
             state[2] = state[2] + UserPart(who)
-            conn.Send("250 OK")
+            Reply(conn, "250 OK")
         END IF
     ELSEIF cmd.StartsWith("DATA") THEN
         IF state[2] = "" THEN
-            conn.Send("503 RCPT TO first")
+            Reply(conn, "503 RCPT TO first")
         ELSE
             body = ""
             IF message.Contains(Chr(10)) THEN body = message.Substring(message.IndexOf(Chr(10)) + 1, message.Length - message.IndexOf(Chr(10)) - 1)
@@ -250,21 +275,21 @@ SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
             Note("Received mail from " + state[1] + " (" + conn.FromAddress + ") for " + state[2])
             state[1] = ""
             state[2] = ""
-            conn.Send("250 OK delivered")
+            Reply(conn, "250 OK delivered")
             Status()
         END IF
     ELSEIF cmd = "RSET" THEN
         state[1] = ""
         state[2] = ""
-        conn.Send("250 OK")
+        Reply(conn, "250 OK")
     ELSEIF cmd = "NOOP" THEN
-        conn.Send("250 OK")
+        Reply(conn, "250 OK")
     ELSEIF cmd = "QUIT" THEN
-        conn.Send("221 Bye")
+        Reply(conn, "221 Bye")
         conn.Close()
         RETURN
     ELSE
-        conn.Send("500 What? I know HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP and QUIT")
+        Reply(conn, "500 What? I know HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP and QUIT")
     END IF
     conn.Tag = state.Join("|")
 END SUB
@@ -288,19 +313,49 @@ FUNCTION Spooled () AS Array OF String
 END FUNCTION
 
 SUB Timer_OnTick ()
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
     VAR f AS String
-    IF busy THEN RETURN
+    IF busy AND TIME.Now - busySince < 20 THEN RETURN
     busy = TRUE
+    busySince = TIME.Now
     FS.Write(DATA + "\ALIVE.TXT", Str(TIME.Now))
+    failed = FALSE
+    IF pendingPath <> "" THEN Settle()
     TRY
         FOR EACH f IN Spooled()
             Attempt(DATA + "\SPOOL\" + f)
+            IF failed THEN RETURN
         NEXT
     CATCH err
+        IF failed THEN RETURN
         Note("ERROR " + err)
     END TRY
     busy = FALSE
     Status()
+END SUB
+
+' Finishes the letter a spoiled tick left behind.
+SUB Settle ()
+    VAR path AS String
+    VAR answer AS String
+    VAR text AS String
+    VAR head AS String
+    path = pendingPath
+    answer = pendingAnswer
+    pendingPath = ""
+    pendingAnswer = ""
+    IF NOT IsNothing(outSock) THEN outSock.Close()
+    IF answer = "" THEN answer = "421 interrupted"
+    IF NOT FS.Exists(path) THEN RETURN
+    text = FS.Read(path)
+    head = text.Substring(0, text.IndexOf(Chr(10) + Chr(10)))
+    Conclude(path, Header(head, "X-Sender"), Header(head, "X-Recipient"), Int(Val(Header(head, "X-Tries"))), text.Substring(head.Length + 2, text.Length - head.Length - 2), answer)
 END SUB
 
 SUB Attempt (path AS String)
@@ -336,7 +391,16 @@ SUB Attempt (path AS String)
         RETURN
     END IF
 
+    pendingPath = path
+    pendingAnswer = ""
     answer = Transfer(sender, recipient, letter)
+    IF failed THEN RETURN
+    pendingPath = ""
+    Conclude(path, sender, recipient, n, letter, answer)
+END SUB
+
+' What happens to a letter after one try at sending it.
+SUB Conclude (path AS String, sender AS String, recipient AS String, n AS Integer, letter AS String, answer AS String)
     IF answer.StartsWith("250") THEN
         Note("Sent " + sender + " -> " + recipient)
         sent = sent + 1
@@ -356,14 +420,16 @@ END SUB
 ' Hands one letter to the recipient's mail server. Returns its final answer:
 ' "250 ..." delivered, "5xx ..." refused for good, anything else: try later.
 FUNCTION Transfer (sender AS String, recipient AS String, letter AS String) AS String
-    VAR out AS NET_Socket
     VAR conn AS NET_Connection
     VAR answer AS String
-    out = NET_Socket.New()
+    outSock = NET_Socket.New()
     TRY
-        conn = out.Connect(HostPart(recipient), PORT)
+        conn = outSock.Connect(HostPart(recipient), PORT)
     CATCH err
-        RETURN "421 " + err
+        failed = TRUE
+        pendingAnswer = "421 " + err
+        busy = FALSE
+        RETURN pendingAnswer
     END TRY
     TRY
         answer = conn.Receive(5000)
@@ -381,9 +447,15 @@ FUNCTION Transfer (sender AS String, recipient AS String, letter AS String) AS S
         IF NOT answer.StartsWith("250") THEN THROW answer
         conn.Send("QUIT")
     CATCH err
+        ' An answer we THREW ourselves leaves the handler fine; a failed Receive does not.
+        IF NOT (err.StartsWith("5") OR err.StartsWith("4") OR err.StartsWith("2")) THEN
+            failed = TRUE
+            pendingAnswer = "421 " + err
+            busy = FALSE
+            RETURN pendingAnswer
+        END IF
         answer = err
-        IF NOT (answer.StartsWith("5") OR answer.StartsWith("4")) THEN answer = "421 " + answer
     END TRY
-    out.Close()
+    outSock.Close()
     RETURN answer
 END FUNCTION

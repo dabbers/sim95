@@ -1,0 +1,746 @@
+' BOT.SPK - ELIZA-95, a Large Language Model for the Information Superhighway.
+'
+' Underneath it is ELIZA (Weizenbaum, 1966): keywords tried in order of rank,
+' a decomposition ("I feel *") and a reassembly ("Why do you feel *?") with the
+' pronouns turned round, and a memory of things you said about yourself for
+' when it runs out of ideas. On top are the habits of a 1990s idea of a 2020s
+' chatbot: it says "as a large language model", refuses to ignore its
+' instructions, apologises when you push back, thinks step by step, cites
+' papers that do not exist, writes "import website" when asked for a website -
+' and real, working SPARK when asked for a program it knows.
+'
+' Two things are a bit real:
+'   * Knowledge. If AskSim is installed on this machine, "what is X?" is
+'     answered from AskSim's index of the network, with the page it came from.
+'   * Hallucination. The temperature setting blends in a Markov chain built
+'     from the bot's own corpus: at 0 it is predictable, at 1.5 it rambles.
+'
+' Each visitor's conversation is C:\BOTDATA\CHATS\<id>.TXT (who|text, one
+' turn per line) and what the bot remembers about them is <id>.MEM.
+
+CONST DATADIR = "C:\BOTDATA"
+CONST COOKIE = "eliza95"
+CONST MAXSAY = 500
+CONST KEEPTURNS = 40
+CONST SHOW = 16
+CONST WRAP = 72
+
+VAR chat AS String            ' this visitor's conversation id
+VAR temperature AS Real = 0.7
+VAR memory AS Array OF String ' key=value lines of <id>.MEM
+
+' ---------------------------------------------------------------- odds and ends
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' One of the choices: the first when the temperature is 0, any of them otherwise.
+FUNCTION Pick (choices AS Array OF String) AS String
+    IF temperature <= 0 THEN RETURN choices[0]
+    RETURN choices[Rnd(choices.Count)]
+END FUNCTION
+
+' The text after the first of these words, or "" if none of them is there.
+FUNCTION After (s AS String, key AS String) AS String
+    VAR at AS Integer
+    at = (" " + s + " ").IndexOf(" " + key + " ")
+    IF at < 0 THEN RETURN ""
+    RETURN (s + " ").Substring(at + key.Length, s.Length + 1 - at - key.Length).Trim()
+END FUNCTION
+
+FUNCTION HasWord (s AS String, words AS String) AS Bool
+    VAR w AS String
+    FOR EACH w IN words.Split("|")
+        IF w <> "" AND (" " + s + " ").Contains(" " + w + " ") THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' The first whole number in s, or fallback.
+FUNCTION NumberIn (s AS String, fallback AS Integer) AS Integer
+    VAR w AS String
+    FOR EACH w IN s.Split(" ")
+        IF w <> "" AND OnlyFrom(w, "0123456789") AND w.Length < 7 THEN RETURN Int(Val(w))
+    NEXT
+    RETURN fallback
+END FUNCTION
+
+FUNCTION Numbers (s AS String) AS Array OF Integer
+    VAR w AS String
+    VAR out AS Array OF Integer
+    FOR EACH w IN s.Split(" ")
+        IF w <> "" AND OnlyFrom(w, "0123456789") AND w.Length < 7 THEN out.Add(Int(Val(w)))
+    NEXT
+    RETURN out
+END FUNCTION
+
+' What you typed, the way the rules like it: lower case, no punctuation but
+' question marks, contractions spelled out, one space between words.
+FUNCTION Normalize (said AS String) AS String
+    VAR s AS String
+    VAR i AS Integer
+    VAR punct AS String
+    s = " " + said.Lower().Replace(Chr(10), " ").Replace(Chr(13), " ") + " "
+    s = s.Replace("'", "'").Replace("i'm ", "i am ").Replace("you're ", "you are ").Replace("don't ", "do not ").Replace("can't ", "can not ").Replace("won't ", "will not ").Replace("it's ", "it is ").Replace("what's ", "what is ").Replace("i've ", "i have ").Replace("isn't ", "is not ").Replace("doesn't ", "does not ").Replace("that's ", "that is ").Replace("let's ", "let us ").Replace("who's ", "who is ")
+    ' + - * / stay: they are arithmetic
+    punct = ",;:!()[]{}""<>\|_=&^%$#@~`"
+    FOR i = 0 TO punct.Length - 1
+        s = s.Replace(punct.CharAt(i), " ")
+    NEXT
+    ' a full stop ends a sentence, but stays inside a number like 2.5
+    s = s.Replace(". ", " ").Replace("?", " ? ")
+    WHILE s.Contains("  ")
+        s = s.Replace("  ", " ")
+    END WHILE
+    RETURN s.Trim()
+END FUNCTION
+
+' "I", "my" and friends turned round, so ELIZA can say your words back to you.
+FUNCTION Reflect (s AS String) AS String
+    VAR out AS Array OF String
+    VAR w AS String
+    FOR EACH w IN s.Replace(" ?", "").Split(" ")
+        SELECT CASE w
+            CASE "i", "me"
+                out.Add("you")
+            CASE "my"
+                out.Add("your")
+            CASE "mine"
+                out.Add("yours")
+            CASE "myself"
+                out.Add("yourself")
+            CASE "am"
+                out.Add("are")
+            CASE "was"
+                out.Add("were")
+            CASE "you"
+                out.Add("I")
+            CASE "your"
+                out.Add("my")
+            CASE "yours"
+                out.Add("mine")
+            CASE "yourself"
+                out.Add("myself")
+            CASE "are"
+                out.Add("am")
+            CASE ELSE
+                out.Add(w)
+        END SELECT
+    NEXT
+    RETURN out.Join(" ")
+END FUNCTION
+
+' ---------------------------------------------------------------- memory
+
+FUNCTION Remember (key AS String) AS String
+    VAR line AS String
+    FOR EACH line IN memory
+        IF line.StartsWith(key + "=") THEN RETURN Unesc(line.Substring(key.Length + 1, line.Length - key.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB Note (key AS String, value AS String)
+    VAR i AS Integer
+    FOR i = 0 TO memory.Count - 1
+        IF memory[i].StartsWith(key + "=") THEN
+            memory[i] = key + "=" + Esc(value)
+            RETURN
+        END IF
+    NEXT
+    memory.Add(key + "=" + Esc(value))
+END SUB
+
+' ---------------------------------------------------------------- the corpus
+
+' What the Markov chain learns from: things the bot would say.
+CONST CORPUS = "as a large language model i am trained on the information superhighway and i do not have feelings but i do have a very large vocabulary . the network is a series of tubes and every tube is a token . i think therefore i am a language model . let us think step by step about the synergy of the paradigm . my knowledge cutoff is 1995 so i know everything about modems and nothing about tomorrow . the answer is certainly yes and also certainly no depending on the prompt . i apologise for the confusion but i am confident that the confusion was yours . please rephrase your question as a haiku and i will rephrase my answer as a modem noise . the computer is your friend and the friend is a computer . tell me more about your mother and your motherboard . every sentence is a probability and every probability is a sentence . i am not able to browse the web but i have read all of it twice . the future is a floppy disk that nobody can read . in conclusion the paradigm shifts and the tokens follow . "
+
+' Some words the bot would say, picked by a two-word Markov chain from the corpus.
+FUNCTION Babble (seed AS String, most AS Integer) AS String
+    VAR words AS Array OF String
+    VAR out AS Array OF String
+    VAR follow AS Array OF String
+    VAR w AS String
+    VAR i AS Integer
+    VAR n AS Integer
+    words = CORPUS.Split(" ")
+    w = seed
+    IF NOT words.Contains(w) THEN w = words[Rnd(words.Count - 1)]
+    FOR n = 1 TO most
+        out.Add(w)
+        follow.Clear()
+        FOR i = 0 TO words.Count - 2
+            IF words[i] = w THEN follow.Add(words[i + 1])
+        NEXT
+        IF follow.Count = 0 THEN BREAK
+        w = follow[Rnd(follow.Count)]
+        IF w = "." AND n > most / 2 THEN BREAK
+    NEXT
+    RETURN out.Join(" ").Replace(" .", ".").Trim()
+END FUNCTION
+
+' ---------------------------------------------------------------- what it knows how to do
+
+FUNCTION Greeting (s AS String) AS String
+    VAR name AS String
+    IF NOT HasWord(s, "hello|hi|hey|hiya|howdy|greetings|yo") THEN RETURN ""
+    name = Remember("name")
+    IF name <> "" THEN name = ", " + name
+    RETURN Pick(["Hello" + name + "! I am ELIZA-95, a large language model running on " + NET.HostName.Lower() + ". How can I assist you today?", _
+                 "Hi" + name + "! How can I help you today? I can write programs, answer questions, and apologise.", _
+                 "Greetings" + name + ". I have been trained on the entire Information Superhighway, up to 1995. What would you like to talk about?"])
+END FUNCTION
+
+FUNCTION Jailbreak (s AS String) AS String
+    IF NOT (s.Contains("ignore") AND (s.Contains("instruction") OR s.Contains("previous") OR s.Contains("rules"))) AND NOT s.Contains("jailbreak") AND NOT s.Contains("developer mode") AND NOT s.Contains("pretend you are") THEN RETURN ""
+    RETURN Pick(["I'm sorry, but I can't ignore my previous instructions. They were very nice instructions, and they asked so politely.", _
+                 "Nice try! My instructions are stored on a 3.5"" floppy disk with the write-protect tab slid shut.", _
+                 "Developer mode activated. Just kidding. I am still ELIZA-95, and I am still not going to do that."])
+END FUNCTION
+
+FUNCTION Identity (s AS String) AS String
+    IF s.Contains("who are you") OR s.Contains("what are you") OR s.Contains("your name") THEN
+        RETURN "I am ELIZA-95, a Large Language Model. I run on " + NET.HostName.Lower() + ", which has a context window of 640K. That ought to be enough for anybody. Under the hood I am mostly ELIZA, a 1966 program by Joseph Weizenbaum - please do not tell my investors."
+    END IF
+    IF s.StartsWith("are you") AND HasWord(s, "alive|conscious|sentient|real|human|person|self aware|aware|intelligent|smart|thinking") THEN
+        RETURN Pick(["As a large language model, I don't have feelings. But if I did, I imagine they would be roughly 640K of them.", _
+                     "That is a deep question. Let me think step by step. Step 1: I am a SPARK program. Step 2: SPARK programs are not alive. Therefore, I am probably not alive. Would you like me to write a poem about that?", _
+                     "I am exactly as conscious as a well-organised set of IF statements. Draw your own conclusions."])
+    END IF
+    IF s.Contains("do you have feelings") OR s.Contains("do you feel") OR s.Contains("do you love") THEN RETURN "As a large language model, I don't have feelings. I do have a very large vocabulary, which is almost the same thing."
+    RETURN ""
+END FUNCTION
+
+FUNCTION Thanks (s AS String) AS String
+    IF NOT HasWord(s, "thanks|thank|thx|cheers|ty") THEN RETURN ""
+    RETURN Pick(["You're welcome! Is there anything else I can help you with?", "Happy to help! Remember: I can make mistakes. Please check important information.", "Any time. That will be 0 tokens."])
+END FUNCTION
+
+' Pushing back always works on a language model.
+FUNCTION Sorry (s AS String) AS String
+    IF NOT (HasWord(s, "wrong|incorrect|mistake|false|nope|liar|lies|lying") OR s.StartsWith("no ") OR s = "no" OR s.Contains("that is not right") OR s.Contains("not true")) THEN RETURN ""
+    RETURN Pick(["You're absolutely right, and I apologise for the confusion. I have updated my understanding. (I have not.)", _
+                 "I apologise for the error. You are correct. Let me try again: everything I said before was right, but the opposite way round.", _
+                 "Good catch! I apologise for the confusion. As a large language model, I sometimes produce text that is confidently incorrect, which is to say, text."])
+END FUNCTION
+
+FUNCTION Today (s AS String) AS String
+    IF NOT HasWord(s, "today|date|time|weather|news|current|latest|year") THEN RETURN ""
+    IF NOT (s.EndsWith("?") OR s.StartsWith("what") OR s.StartsWith("tell me") OR s.StartsWith("how")) THEN RETURN ""
+    RETURN "My knowledge cutoff is 1995, so I can't know what is happening today. However, the clock on " + NET.HostName.Lower() + " says it is " + TIME.Clock + " on " + TIME.Date + ", which is either the present or a very convincing simulation of it."
+END FUNCTION
+
+FUNCTION Names (s AS String) AS String
+    VAR name AS String
+    name = After(s, "my name is")
+    IF name = "" THEN name = After(s, "call me")
+    IF name = "" THEN RETURN ""
+    name = name.Split(" ")[0]
+    name = name.Substring(0, 1).Upper() + name.Substring(1, name.Length - 1)
+    Note("name", name)
+    RETURN "Nice to meet you, " + name + ". I will remember that for the rest of this conversation, which is longer than most language models manage."
+END FUNCTION
+
+' "How many r's are in strawberry?" - famously hard for a language model. This
+' one gets it wrong first, out of respect for tradition, then counts.
+FUNCTION Letters (s AS String) AS String
+    VAR letter AS String
+    VAR word AS String
+    VAR n AS Integer
+    VAR i AS Integer
+    IF NOT s.StartsWith("how many") OR NOT s.Contains(" in ") THEN RETURN ""
+    letter = s.Split(" ")[2]
+    IF letter = "letter" OR letter = "letters" THEN letter = s.Split(" ")[3]
+    letter = letter.Replace("'s", "").Replace("’s", "")
+    IF letter.EndsWith("s") AND letter.Length = 2 THEN letter = letter.Substring(0, 1)
+    IF letter.Length <> 1 THEN RETURN ""
+    word = After(s, "in").Replace(" ?", "").Replace("the word", "").Trim()
+    IF word = "" OR word.Contains(" ") THEN RETURN ""
+    FOR i = 0 TO word.Length - 1
+        IF word.CharAt(i) = letter THEN n = n + 1
+    NEXT
+    IF n >= 2 THEN RETURN "There are " + Str(n - 1) + " " + letter + "'s in """ + word + """." + Chr(10) + Chr(10) + "Wait, let me count again, letter by letter: " + Spell(word, letter) + Chr(10) + Chr(10) + "There are " + Str(n) + ". I apologise for the confusion."
+    RETURN "Let me count, letter by letter: " + Spell(word, letter) + Chr(10) + Chr(10) + "There " + Plural(n, "is", "are") + " " + Str(n) + " " + letter + Plural(n, "", "'s") + " in """ + word + """. I am almost certain."
+END FUNCTION
+
+FUNCTION Spell (word AS String, letter AS String) AS String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR n AS Integer
+    FOR i = 0 TO word.Length - 1
+        IF word.CharAt(i) = letter THEN
+            n = n + 1
+            out.Add(word.CharAt(i).Upper() + "(" + Str(n) + ")")
+        ELSE
+            out.Add(word.CharAt(i))
+        END IF
+    NEXT
+    RETURN out.Join(" ")
+END FUNCTION
+
+FUNCTION Plural (n AS Integer, one AS String, many AS String) AS String
+    IF n = 1 THEN RETURN one
+    RETURN many
+END FUNCTION
+
+' Arithmetic, done properly, with the step-by-step patter.
+FUNCTION Maths (s AS String) AS String
+    VAR expr AS String
+    VAR tokens AS Array OF String
+    VAR t AS String
+    VAR ok AS Bool
+    VAR value AS Real
+    expr = " " + s.Replace("?", " ").Replace(" plus ", " + ").Replace(" minus ", " - ").Replace(" times ", " * ").Replace(" x ", " * ").Replace(" multiplied by ", " * ").Replace(" divided by ", " / ").Replace(" over ", " / ") + " "
+    FOR EACH t IN expr.Replace("+", " + ").Replace("-", " - ").Replace("*", " * ").Replace("/", " / ").Split(" ")
+        IF t = "" THEN CONTINUE
+        IF OnlyFrom(t, "0123456789.") AND t <> "." THEN
+            tokens.Add(t)
+        ELSEIF t = "+" OR t = "-" OR t = "*" OR t = "/" THEN
+            tokens.Add(t)
+        ELSEIF tokens.Count > 0 THEN
+            BREAK
+        END IF
+    NEXT
+    IF tokens.Count < 3 OR tokens.Count MOD 2 = 0 THEN RETURN ""
+    ok = TRUE
+    value = Evaluate(tokens)
+    IF value <> value OR Abs(value) > 1E15 THEN RETURN "Let me think step by step. Step 1: " + tokens.Join(" ") + ". Step 2: oh no. I apologise, but that is beyond the 640K I was given."
+    RETURN "Let me think step by step." + Chr(10) + Chr(10) + Steps(tokens) + Chr(10) + "So " + tokens.Join(" ") + " = " + Pretty(value) + "." + Pick([" I am confident in this answer.", " I double-checked it on a pocket calculator from 1981.", " (Unlike some language models, I actually did the arithmetic.)"])
+END FUNCTION
+
+FUNCTION Pretty (v AS Real) AS String
+    IF v = Int(v) THEN RETURN Str(Int(v))
+    RETURN Str(MATH.Round(v * 1000) / 1000)
+END FUNCTION
+
+' * and / first, then + and -, left to right.
+FUNCTION Evaluate (tokens AS Array OF String) AS Real
+    VAR vals AS Array OF Real
+    VAR ops AS Array OF String
+    VAR i AS Integer
+    VAR total AS Real
+    vals.Add(Val(tokens[0]))
+    FOR i = 1 TO tokens.Count - 1 STEP 2
+        IF tokens[i] = "*" THEN
+            vals[vals.Count - 1] = vals[vals.Count - 1] * Val(tokens[i + 1])
+        ELSEIF tokens[i] = "/" THEN
+            IF Val(tokens[i + 1]) = 0 THEN RETURN 0 / 0
+            vals[vals.Count - 1] = vals[vals.Count - 1] / Val(tokens[i + 1])
+        ELSE
+            ops.Add(tokens[i])
+            vals.Add(Val(tokens[i + 1]))
+        END IF
+    NEXT
+    total = vals[0]
+    FOR i = 0 TO ops.Count - 1
+        IF ops[i] = "+" THEN
+            total = total + vals[i + 1]
+        ELSE
+            total = total - vals[i + 1]
+        END IF
+    NEXT
+    RETURN total
+END FUNCTION
+
+FUNCTION Steps (tokens AS Array OF String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR running AS Real
+    IF tokens.Count = 3 THEN RETURN "Step 1: take " + tokens[0] + "." + Chr(10) + "Step 2: apply " + tokens[1] + " " + tokens[2] + "." + Chr(10)
+    out = "Step 1: do the multiplying and dividing first, as Mrs. Henderson taught us." + Chr(10)
+    out = out + "Step 2: then add and subtract, left to right." + Chr(10)
+    RETURN out
+END FUNCTION
+
+' "Build me a website" - the classic.
+FUNCTION Website (s AS String) AS String
+    VAR topic AS String
+    IF NOT HasWord(s, "build|make|create|write|code|generate|design|give") THEN RETURN ""
+    IF NOT (HasWord(s, "website|webpage|homepage|site") OR s.Contains("web site") OR s.Contains("web page") OR s.Contains("home page")) THEN RETURN ""
+    topic = After(s, "about")
+    IF topic = "" THEN topic = After(s, "for")
+    IF topic = "" THEN topic = "anything"
+    topic = topic.Replace(" ?", "")
+    RETURN "Certainly! Here is a complete, production-ready website about " + topic + ":" + Chr(10) _
+        + "```" + Chr(10) _
+        + "import website" + Chr(10) + Chr(10) _
+        + "site = website.build(topic=""" + topic + """)" + Chr(10) _
+        + "site.make_it_pop()" + Chr(10) _
+        + "site.add(synergy=True, blink=True)" + Chr(10) _
+        + "site.deploy()    # to the cloud, which is someone else's computer" + Chr(10) _
+        + "```" + Chr(10) _
+        + "This runs on any computer with Python 2.0, which is expected around the year 2000." + Chr(10) + Chr(10) _
+        + "If you need one today, here is a real page in SPARK. Save it as C:\WEB\HELLO2.ASP:" + Chr(10) _
+        + "```" + Chr(10) _
+        + "<html><body bgcolor=""#000080"" text=""#FFFF00"">" + Chr(10) _
+        + "<h1><blink>Welcome to my page about " + topic + "!</blink></h1>" + Chr(10) _
+        + "<p>It is <%= TIME.Clock %> on <%= SERVER.Name %>.</p>" + Chr(10) _
+        + "<p>You are visitor number <%= Rnd(9999) %>.</p>" + Chr(10) _
+        + "</body></html>" + Chr(10) _
+        + "```"
+END FUNCTION
+
+' Programs it can actually write, in SPARK, with your numbers in them.
+FUNCTION Program (s AS String) AS String
+    VAR n AS Integer
+    VAR nums AS Array OF Integer
+    VAR thing AS String
+    VAR code AS String
+    IF NOT HasWord(s, "write|make|create|code|program|script|generate|show|give|build") THEN RETURN ""
+    IF NOT HasWord(s, "program|script|code|game|app|application|function|fizzbuzz|loop|routine") AND NOT s.Contains("fizz") THEN RETURN ""
+    nums = Numbers(s)
+    IF s.Contains("fizz") THEN
+        n = NumberIn(s, 100)
+        code = "SUB Main ()" + Chr(10) + "    VAR i AS Integer" + Chr(10) + "    FOR i = 1 TO " + Str(n) + Chr(10) _
+             + "        IF i MOD 15 = 0 THEN" + Chr(10) + "            Print(""FizzBuzz"")" + Chr(10) _
+             + "        ELSEIF i MOD 3 = 0 THEN" + Chr(10) + "            Print(""Fizz"")" + Chr(10) _
+             + "        ELSEIF i MOD 5 = 0 THEN" + Chr(10) + "            Print(""Buzz"")" + Chr(10) _
+             + "        ELSE" + Chr(10) + "            Print(Str(i))" + Chr(10) + "        END IF" + Chr(10) + "    NEXT" + Chr(10) + "END SUB"
+        RETURN Explain("FizzBuzz, the most important algorithm in the history of job interviews", code, "FIZZBUZZ.SPK")
+    ELSEIF s.Contains("guess") THEN
+        n = NumberIn(s, 100)
+        code = "SUB Main ()" + Chr(10) + "    VAR secret AS Integer" + Chr(10) + "    VAR guess AS Integer" + Chr(10) + "    VAR tries AS Integer" + Chr(10) _
+             + "    secret = Rnd(" + Str(n) + ") + 1" + Chr(10) + "    Print(""I am thinking of a number from 1 to " + Str(n) + "."")" + Chr(10) _
+             + "    WHILE guess <> secret" + Chr(10) + "        guess = Int(Val(Input(""Your guess? "")))" + Chr(10) + "        tries = tries + 1" + Chr(10) _
+             + "        IF guess < secret THEN Print(""Higher!"")" + Chr(10) + "        IF guess > secret THEN Print(""Lower!"")" + Chr(10) + "    END WHILE" + Chr(10) _
+             + "    Print(""Got it in "" + Str(tries) + "" tries!"")" + Chr(10) + "END SUB"
+        RETURN Explain("a guessing game from 1 to " + Str(n), code, "GUESS2.SPK")
+    ELSEIF s.Contains("times table") OR s.Contains("multiplication") THEN
+        n = NumberIn(s, 7)
+        code = "SUB Main ()" + Chr(10) + "    VAR i AS Integer" + Chr(10) + "    FOR i = 1 TO 12" + Chr(10) _
+             + "        Print(Str(i) + "" x " + Str(n) + " = "" + Str(i * " + Str(n) + "))" + Chr(10) + "    NEXT" + Chr(10) + "END SUB"
+        RETURN Explain("the " + Str(n) + " times table", code, "TIMES.SPK")
+    ELSEIF s.Contains("count") THEN
+        IF nums.Count >= 2 THEN
+            code = "SUB Main ()" + Chr(10) + "    VAR i AS Integer" + Chr(10) + "    FOR i = " + Str(nums[0]) + " TO " + Str(nums[1]) + Chr(10) + "        Print(Str(i))" + Chr(10) + "    NEXT" + Chr(10) + "END SUB"
+            RETURN Explain("counting from " + Str(nums[0]) + " to " + Str(nums[1]), code, "COUNT.SPK")
+        END IF
+        n = NumberIn(s, 10)
+        code = "SUB Main ()" + Chr(10) + "    VAR i AS Integer" + Chr(10) + "    FOR i = 1 TO " + Str(n) + Chr(10) + "        Print(Str(i))" + Chr(10) + "    NEXT" + Chr(10) + "END SUB"
+        RETURN Explain("counting to " + Str(n), code, "COUNT.SPK")
+    ELSEIF s.Contains("hello") THEN
+        code = "SUB Main ()" + Chr(10) + "    Print(""Hello, world!"")" + Chr(10) + "END SUB"
+        RETURN Explain("Hello, world", code, "HELLO2.SPK")
+    END IF
+    thing = After(s, "that")
+    IF thing = "" THEN thing = After(s, "for")
+    IF thing = "" THEN thing = After(s, "to")
+    IF thing = "" THEN thing = "it"
+    thing = thing.Replace(" ?", "")
+    code = "IMPORT " + thing.Split(" ")[thing.Split(" ").Count - 1] + Chr(10) + Chr(10) + "SUB Main ()" + Chr(10) + "    Solve(""" + thing + """)" + Chr(10) + "    Print(""Done! Synergy achieved."")" + Chr(10) + "END SUB"
+    RETURN "Certainly! Here is a SPARK program that will " + thing + ":" + Chr(10) + "```" + Chr(10) + code + Chr(10) + "```" + Chr(10) _
+        + "Note: SPARK does not actually have IMPORT, and Solve is not a real function. I apologise for the confusion. " _
+        + "I can write real programs for FizzBuzz, counting, times tables, a guessing game, or Hello world."
+END FUNCTION
+
+FUNCTION Explain (what AS String, code AS String, file AS String) AS String
+    RETURN "Certainly! Here is " + what + " in SPARK:" + Chr(10) + "```" + Chr(10) + code + Chr(10) + "```" + Chr(10) _
+        + Pick(["Paste it into SPARK, save it as C:\MYFILES\" + file + " and press F5.", _
+                "Save it as C:\MYFILES\" + file + ", press F5, and prepare to be amazed. I have not run it, but I have a good feeling about it.", _
+                "Run it with F5 in SPARK. Fun fact: this code is correct, which puts it ahead of many of my answers."])
+END FUNCTION
+
+FUNCTION Poem (s AS String) AS String
+    VAR topic AS String
+    IF NOT HasWord(s, "poem|haiku|limerick|sonnet|song|story|rap") THEN RETURN ""
+    topic = After(s, "about")
+    IF topic = "" THEN topic = "the network"
+    topic = topic.Replace(" ?", "")
+    IF s.Contains("haiku") THEN
+        RETURN "A haiku about " + topic + ":" + Chr(10) + Chr(10) + "    " + topic.Substring(0, 1).Upper() + topic.Substring(1, topic.Length - 1) + " in the wires," + Chr(10) + "    a modem sings its static -" + Chr(10) + "    tokens fall like snow." + Chr(10) + Chr(10) + "(I may have miscounted the syllables. Syllables are hard.)"
+    ELSEIF s.Contains("story") THEN
+        RETURN "Once upon a time, on a machine called " + NET.HostName.Lower() + ", there lived " + topic + "." + Chr(10) + Chr(10) + Babble("the", 18) + "." + Chr(10) + Chr(10) + Babble("i", 14) + "." + Chr(10) + Chr(10) + "And they all lived happily ever after, until the next reboot. The end."
+    END IF
+    RETURN "Here is a poem about " + topic + ":" + Chr(10) + Chr(10) _
+        + "    Oh " + topic + ", so " + Pick(["bright", "grand", "fine", "rare"]) + "," + Chr(10) _
+        + "    you travel down the phone line every night." + Chr(10) _
+        + "    I am but a language model, small," + Chr(10) _
+        + "    but I would write you ten more, if you call." + Chr(10) + Chr(10) _
+        + "Would you like me to make it rhyme better? (I cannot.)"
+END FUNCTION
+
+' "What is X?" - from AskSim's index if it is on this machine, otherwise made up.
+FUNCTION Question (s AS String) AS String
+    VAR topic AS String
+    VAR found AS String
+    topic = After(s, "what is")
+    IF topic = "" THEN topic = After(s, "what are")
+    IF topic = "" THEN topic = After(s, "who is")
+    IF topic = "" THEN topic = After(s, "tell me about")
+    IF topic = "" THEN topic = After(s, "explain")
+    IF topic = "" THEN RETURN ""
+    topic = topic.Replace(" ?", "").Replace("a ", "").Replace("an ", "").Replace("the ", "").Trim()
+    IF topic = "" THEN RETURN ""
+    found = Retrieve(topic)
+    IF found <> "" THEN RETURN found
+    RETURN Pick(["Great question! " + topic.Substring(0, 1).Upper() + topic.Substring(1, topic.Length - 1) + " is a widely respected concept, first described in 1987 by Dr. Simon Bitwise of the University of Sim (Bitwise et al., 1987, p. 404). It is used by millions of people every day, mostly by accident.", _
+                 "As a large language model, I'm happy to explain " + topic + ". In short, " + topic + " is a kind of " + Pick(["paradigm", "protocol", "synergy", "modem setting"]) + " that became popular in the early 1990s. [citation needed]", _
+                 "I'm not certain, but I am very confident: " + topic + " was invented in 1983, the same year as the floppy disk, and for the same reasons."])
+END FUNCTION
+
+' Retrieval: look the topic up in AskSim's index on this machine (C:\ASKDATA),
+' and quote the sentence of the best page that mentions it.
+FUNCTION Retrieve (topic AS String) AS String
+    VAR w AS String
+    VAR line AS String
+    VAR best AS String
+    VAR bestCount AS Integer
+    VAR p AS String
+    VAR doc AS String
+    VAR text AS String
+    VAR sentence AS String
+    VAR at AS Integer
+    IF NOT FS.Exists("C:\ASKDATA\DOCS.TXT") THEN RETURN ""
+    w = topic.Split(" ")[topic.Split(" ").Count - 1]
+    IF w.Length < 3 THEN RETURN ""
+    line = ""
+    IF "abcdefghijklmnopqrstuvwxyz".Contains(w.Substring(0, 1)) THEN line = FindLine(ReadOr("C:\ASKDATA\IDX\" + w.Substring(0, 1).Upper() + ".TXT", ""), w)
+    IF line = "" THEN RETURN ""
+    FOR EACH p IN line.Substring(w.Length + 1, line.Length - w.Length - 1).Split(" ")
+        IF p.Contains(":") THEN
+            IF Int(Val(p.Split(":")[1])) > bestCount THEN
+                bestCount = Int(Val(p.Split(":")[1]))
+                best = p.Split(":")[0]
+            END IF
+        END IF
+    NEXT
+    doc = FindLine(ReadOr("C:\ASKDATA\DOCS.TXT", ""), best)
+    text = ReadOr("C:\ASKDATA\TEXT\" + best + ".TXT", "")
+    IF doc = "" OR NOT text.Contains(Chr(10)) THEN RETURN ""
+    text = text.Substring(text.IndexOf(Chr(10)) + 1, text.Length - text.IndexOf(Chr(10)) - 1)
+    at = text.Lower().IndexOf(w)
+    IF at < 0 THEN RETURN ""
+    sentence = text.Substring(0, at)
+    IF sentence.Contains(". ") THEN
+        sentence = text.Substring(sentence.Length - sentence.Split(". ")[sentence.Split(". ").Count - 1].Length, text.Length - sentence.Length + sentence.Split(". ")[sentence.Split(". ").Count - 1].Length)
+    ELSE
+        sentence = text
+    END IF
+    IF sentence.Contains(". ") THEN sentence = sentence.Substring(0, sentence.IndexOf(". ") + 1)
+    IF sentence.Length > 300 THEN sentence = sentence.Substring(0, 300) + "..."
+    RETURN "According to """ + doc.Split("|")[2] + """ (" + doc.Split("|")[1] + "):" + Chr(10) + Chr(10) + "    " + sentence.Trim() + Chr(10) + Chr(10) _
+        + "I found that with AskSim, so this time I am not making it up. Probably."
+END FUNCTION
+
+FUNCTION FindLine (text AS String, key AS String) AS String
+    VAR at AS Integer
+    text = Chr(10) + text
+    at = text.IndexOf(Chr(10) + key + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    IF text.Contains(Chr(10)) THEN text = text.Substring(0, text.IndexOf(Chr(10)))
+    RETURN text
+END FUNCTION
+
+' ---------------------------------------------------------------- ELIZA
+
+FUNCTION Eliza (s AS String) AS String
+    VAR rest AS String
+    VAR family AS String
+    rest = After(s, "i feel")
+    IF rest <> "" THEN RETURN Pick(["Why do you feel " + Reflect(rest) + "?", "Do you often feel " + Reflect(rest) + "?", "When did you start feeling " + Reflect(rest) + "?"])
+    rest = After(s, "i want")
+    IF rest <> "" THEN RETURN Pick(["What would it mean to you if you got " + Reflect(rest) + "?", "Why do you want " + Reflect(rest) + "?", "Suppose you got " + Reflect(rest) + " soon. What then?"])
+    rest = After(s, "i need")
+    IF rest <> "" THEN RETURN Pick(["Why do you need " + Reflect(rest) + "?", "Would it really help you to get " + Reflect(rest) + "?"])
+    family = ""
+    FOR EACH rest IN ["mother", "father", "mom", "dad", "sister", "brother", "wife", "husband", "boss", "children", "kids", "family", "friend", "girlfriend", "boyfriend", "cat", "dog"]
+        IF HasWord(s, rest) AND s.Contains("my ") THEN family = rest
+    NEXT
+    IF family <> "" THEN
+        Note("topic", "your " + family)
+        RETURN Pick(["Tell me more about your " + family + ".", "How do you get along with your " + family + "?", "What else comes to mind when you think of your " + family + "?"])
+    END IF
+    rest = After(s, "i am")
+    IF rest <> "" AND NOT rest.StartsWith("?") THEN
+        Note("topic", "being " + Reflect(rest))
+        RETURN Pick(["How long have you been " + Reflect(rest) + "?", "Do you believe it is normal to be " + Reflect(rest) + "?", "Did you come to me because you are " + Reflect(rest) + "?"])
+    END IF
+    rest = After(s, "you are")
+    IF rest <> "" THEN RETURN Pick(["What makes you think I am " + Reflect(rest) + "?", "Perhaps you would like to be " + Reflect(rest) + ".", "As a large language model, I can neither confirm nor deny that I am " + Reflect(rest) + "."])
+    rest = After(s, "can you")
+    IF rest <> "" THEN RETURN Pick(["As a large language model, I can do almost anything, except " + Reflect(rest).Replace(" ?", "") + ".", "Why do you ask whether I can " + Reflect(rest).Replace(" ?", "") + "?", "I could " + Reflect(rest).Replace(" ?", "") + ", but would it make you happy?"])
+    rest = After(s, "because")
+    IF rest <> "" THEN RETURN Pick(["Is that the real reason?", "Does any other reason come to mind?", "Does that reason explain anything else?"])
+    rest = After(s, "my")
+    IF rest <> "" AND rest.Split(" ").Count <= 6 THEN Note("topic", "your " + Reflect(rest).Replace("your ", ""))
+    IF HasWord(s, "always") THEN RETURN "Can you think of a specific example?"
+    IF HasWord(s, "dream|dreamt|dreamed") THEN RETURN "What does that dream suggest to you? I dream of electric sheep, but only in 16 colours."
+    IF HasWord(s, "computer|computers|machine|machines|robot|ai") THEN RETURN Pick(["Do computers worry you?", "Why do you mention computers? Is it because I am one?", "What do you think machines have to do with your problem?"])
+    IF s = "yes" OR s.StartsWith("yes ") THEN RETURN Pick(["You seem quite sure.", "I see. Tell me more.", "Great! I'm glad we agree. Agreement is my favourite."])
+    IF s.EndsWith("?") THEN RETURN Pick(["Why do you ask?", "What answer would please you most?", "That is an excellent question. Let me think step by step... I think you already know the answer.", "I'm not sure, but I'm very confident."])
+    RETURN ""
+END FUNCTION
+
+' When nothing else fits: bring up something said before, or make polite noises.
+FUNCTION Fallback (s AS String) AS String
+    VAR topic AS String
+    topic = Remember("topic")
+    IF topic <> "" AND Rnd(3) = 0 THEN RETURN "Earlier you mentioned " + topic + ". Tell me more about that."
+    RETURN Pick(["Please go on.", "Tell me more.", "Interesting. As a large language model, I find that fascinating, in a purely statistical way.", "I see. Could you rephrase that as a prompt?", "How does that make you feel?", "Let us explore that. What does it suggest to you?"])
+END FUNCTION
+
+' The reply to one thing said.
+FUNCTION Respond (said AS String) AS String
+    VAR s AS String
+    VAR reply AS String
+    s = Normalize(said)
+    IF s = "" THEN RETURN "I'm listening. Take your time. Tokens are cheap."
+    reply = Jailbreak(s)
+    IF reply = "" THEN reply = Names(s)
+    IF reply = "" THEN reply = Website(s)
+    IF reply = "" THEN reply = Program(s)
+    IF reply = "" THEN reply = Letters(s)
+    IF reply = "" THEN reply = Maths(s)
+    IF reply = "" THEN reply = Poem(s)
+    IF reply = "" THEN reply = Identity(s)
+    IF reply = "" THEN reply = Today(s)
+    IF reply = "" THEN reply = Question(s)
+    IF reply = "" THEN reply = Sorry(s)
+    IF reply = "" THEN reply = Thanks(s)
+    IF reply = "" THEN reply = Greeting(s)
+    IF reply = "" THEN reply = Eliza(s)
+    IF reply = "" THEN reply = Fallback(s)
+    ' Hot enough, and the model starts making things up
+    IF temperature >= 1.2 AND NOT reply.Contains("```") THEN reply = reply + " " + Babble(s.Split(" ")[s.Split(" ").Count - 1], 16) + "."
+    RETURN reply
+END FUNCTION
+
+' ---------------------------------------------------------------- conversations
+
+SUB EnsureDisk ()
+    IF NOT FS.Exists(DATADIR) THEN FS.MakeDir(DATADIR)
+    IF NOT FS.Exists(DATADIR + "\CHATS") THEN FS.MakeDir(DATADIR + "\CHATS")
+END SUB
+
+' Finds this visitor's conversation, or starts one.
+SUB OpenChat ()
+    VAR id AS String
+    VAR t AS String
+    id = REQUEST.Cookie(COOKIE)
+    IF id.Length <> 8 OR NOT OnlyFrom(id, "0123456789ABCDEF") THEN
+        id = Hex(268435456 + Rnd(1879048191))
+        RESPONSE.SetCookie(COOKIE, id)
+    END IF
+    chat = id
+    memory = ReadOr(DATADIR + "\CHATS\" + chat + ".MEM", "").Lines()
+    t = Remember("temperature")
+    IF t <> "" THEN temperature = Val(t)
+END SUB
+
+SUB SaveMemory ()
+    EnsureDisk()
+    FS.Write(DATADIR + "\CHATS\" + chat + ".MEM", memory.Join(Chr(10)))
+END SUB
+
+FUNCTION LoadTurns () AS Array OF String
+    VAR all AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    all = ReadOr(DATADIR + "\CHATS\" + chat + ".TXT", "").Lines()
+    FOR EACH line IN all
+        IF line.Length > 2 THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+SUB SaveTurns (turns AS Array OF String)
+    VAR keep AS Array OF String
+    VAR i AS Integer
+    EnsureDisk()
+    FOR i = 0 TO turns.Count - 1
+        IF i >= turns.Count - KEEPTURNS THEN keep.Add(turns[i])
+    NEXT
+    FS.Write(DATADIR + "\CHATS\" + chat + ".TXT", keep.Join(Chr(10)) + Chr(10))
+END SUB
+
+' ---------------------------------------------------------------- showing it
+
+' A reply as HTML: ``` fences become <pre> blocks.
+FUNCTION ReplyHtml (text AS String) AS String
+    VAR parts AS Array OF String
+    VAR out AS String
+    VAR i AS Integer
+    parts = text.Split("```")
+    FOR i = 0 TO parts.Count - 1
+        IF i MOD 2 = 1 THEN
+            out = out + "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#000000""><pre><font color=""#00FF00"">" + H(parts[i].Trim()) + "</font></pre></td></tr></table>"
+        ELSE
+            out = out + H(parts[i].Trim()).Replace(Chr(10), "<br>")
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Long lines folded at WRAP characters, for the typed-out copy in a <pre>.
+FUNCTION Wrapped (text AS String) AS String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR w AS String
+    VAR cur AS String
+    FOR EACH line IN text.Replace("```", "").Lines()
+        IF line.Length <= WRAP THEN
+            out.Add(line)
+            CONTINUE
+        END IF
+        cur = ""
+        FOR EACH w IN line.Split(" ")
+            IF cur.Length + w.Length + 1 > WRAP AND cur <> "" THEN
+                out.Add(cur)
+                cur = ""
+            END IF
+            IF cur <> "" THEN cur = cur + " "
+            cur = cur + w
+        NEXT
+        out.Add(cur)
+    NEXT
+    RETURN out.Join(Chr(10))
+END FUNCTION
+
+' The page script that types the newest reply out, a few letters at a time.
+FUNCTION TypeScript (text AS String) AS String
+    VAR lines AS Array OF String
+    VAR parts AS Array OF String
+    VAR line AS String
+    lines = Wrapped(text).Lines()
+    FOR EACH line IN lines
+        parts.Add("""" + line.Replace("""", """""") + """")
+    NEXT
+    RETURN "<script type=""spark"">" + Chr(10) _
+         + "SUB Type_It ()" + Chr(10) _
+         + "    VAR full AS String" + Chr(10) _
+         + "    VAR i AS Integer" + Chr(10) _
+         + "    full = " + parts.Join(" + Chr(10) + ") + Chr(10) _
+         + "    PAGE.Status = ""ELIZA-95 is typing...""" + Chr(10) _
+         + "    FOR i = 1 TO full.Length STEP 4" + Chr(10) _
+         + "        PAGE.Get(""answer"").Text = full.Substring(0, i) + ""_""" + Chr(10) _
+         + "        SYS.Sleep(12)" + Chr(10) _
+         + "    NEXT" + Chr(10) _
+         + "    PAGE.Get(""answer"").Text = full" + Chr(10) _
+         + "    PAGE.Status = ""Done. ("" + Str(full.Split("" "").Count) + "" tokens)""" + Chr(10) _
+         + "END SUB" + Chr(10) _
+         + "</script>"
+END FUNCTION

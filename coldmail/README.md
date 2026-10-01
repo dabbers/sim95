@@ -24,6 +24,20 @@ Addresses are `name@machine`, using the machine's full name or just its
 computer name: `bob@a3f9c2e1.dialup.zone` or `bob@a3f9c2e1`. A name with no
 machine means this one.
 
+## Hosting your own: GETMAIL.SPK
+
+The front page (`/mail/`) offers **Host ColdMail on your machine**
+(`host.asp`). It hands out a small program, `GETMAIL.SPK`, with the machine
+you got it from filled in. Paste it into SPARK on your machine and press F5.
+It fetches ColdMail over the web one file at a time (the full installer is
+too big for one 64K page), installs it, starts your mail server, adds it to
+startup, and tells you to open `http://yourmachine/mail/`.
+
+Your machine also keeps the copies in `C:\WEB\MAIL\DIST`, so the next person
+can get ColdMail from you the same way. That's how shareware spread in 1996.
+The installer writes those copies too: `DIST\<n>.TXT` plus a `MANIFEST.TXT`
+of `n|where it goes`.
+
 ## How it works
 
 ```
@@ -60,11 +74,20 @@ watch it happen.
   `retry=` seconds and `tries=`.
 * **Server not running**: the webmail says so, and letters wait in the outbox.
 
+The sending loop works around a SIM95 quirk. A wait that fails (a `Connect`
+nobody answers, a `Receive` that times out) can be caught, but it spoils the
+handler it happened in: the error comes back at that handler's next wait or
+pause. So after a failed delivery the tick ends at once, and the next tick
+records the retry or bounce. The whole tick sits in a `TRY` with an empty
+`CATCH` and nothing after it. The receiving side also ignores replies to a
+sender that has already hung up.
+
 ## Webmail
 
 | Page | |
 |---|---|
-| `index.asp` | Sign in, or sign up for an address |
+| `index.asp` | Sign in, sign up, or go host your own |
+| `host.asp` | Hands out `GETMAIL.SPK`; sends you on to your own `/mail/` |
 | `inbox.asp?f=inbox\|sent` | A folder, newest first; unread letters in bold; tick and delete |
 | `read.asp?f=&n=` | One letter; opening it marks it read. Reply, Forward, Delete |
 | `compose.asp` | Write a letter (`?reply=N`, `?fwd=N` start from one, quoted) |

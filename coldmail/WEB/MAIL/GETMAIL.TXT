@@ -1,0 +1,94 @@
+' GETMAIL.SPK - copies ColdMail from %HOST% onto this machine and starts your
+' own mail server. Save it as C:\MYFILES\GETMAIL.SPK in SPARK and press F5.
+'
+' It fetches each file over the web (each one fits in a network message, which
+' the whole installer would not), writes it where it belongs, starts
+' C:\PROGRAMS\MAILD.SPK, and adds it to C:\SYSTEM\STARTUP. It also keeps a
+' copy of everything in C:\WEB\MAIL\DIST, so your machine can hand ColdMail on
+' to the next person in the same way. Your mail in C:\MAILDATA is never touched.
+
+CONST FROM = "%HOST%"
+
+VAR web AS NET_Socket
+VAR parts AS Array OF String
+VAR done AS Bool
+
+SUB Main ()
+    ' A failed Connect spoils the handler it happens in (see Fetch), so all of
+    ' it sits in a TRY with nothing after it.
+    TRY
+        Install()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Install ()
+    VAR manifest AS String
+    VAR line AS String
+    VAR text AS String
+    VAR n AS Integer
+    VAR task AS String
+    VAR shared AS String
+    web = NET_Socket.New()
+    web.onMessage = Web_OnMessage
+    web.onClose = Web_OnClose
+    Print("Fetching ColdMail from " + FROM + "...")
+    manifest = Fetch("/mail/dist/manifest.txt")
+    IF manifest = "" THEN RETURN
+    IF NOT FS.Exists("C:\WEB\MAIL") THEN FS.MakeDir("C:\WEB\MAIL")
+    IF NOT FS.Exists("C:\WEB\MAIL\DIST") THEN FS.MakeDir("C:\WEB\MAIL\DIST")
+    FOR EACH line IN manifest.Lines()
+        IF line.Split("|").Count < 2 THEN CONTINUE
+        text = Fetch("/mail/dist/" + line.Split("|")[0] + ".txt")
+        IF text = "" THEN RETURN
+        FS.Write(line.Split("|")[1], text)
+        FS.Write("C:\WEB\MAIL\DIST\" + line.Split("|")[0] + ".TXT", text)
+        shared = shared + line + Chr(10)
+        Print("  wrote " + line.Split("|")[1])
+        n = n + 1
+    NEXT
+    FS.Write("C:\WEB\MAIL\DIST\MANIFEST.TXT", shared)
+    FS.Write("C:\SYSTEM\STARTUP\MAIL.RUN", "C:\PROGRAMS\MAILD.SPK")
+    FOR EACH task IN SYS.Tasks()
+        IF task.Split("|")[1].Upper() = "MAILD" THEN SYS.Kill(Int(Val(task.Split("|")[0])))
+    NEXT
+    SYS.Run("C:\PROGRAMS\MAILD.SPK")
+    Print("ColdMail is installed (" + Str(n) + " files) and your mail server is running.")
+    Print("Open http://" + NET.HostName.Lower() + "/mail/ in Voyager and sign up.")
+END SUB
+
+' One file over the web. Answers come in through the socket's events; there is
+' no Receive, because a Receive that ends in "connection closed" would spoil
+' the handler: every later wait in it would fail with the same error.
+FUNCTION Fetch (path AS String) AS String
+    VAR conn AS NET_Connection
+    VAR raw AS String
+    VAR since AS Integer
+    parts.Clear()
+    done = FALSE
+    TRY
+        conn = web.Connect(FROM, 80)
+    CATCH err
+        Print("Could not reach " + FROM + ": " + err)
+        RETURN ""
+    END TRY
+    conn.Send("GET " + path + " HTTP/1.0" + Chr(10) + "Host: " + FROM)
+    since = SYS.Ticks
+    WHILE NOT done AND SYS.Ticks - since < 10000
+        SYS.Sleep(50)
+    END WHILE
+    raw = parts.Join(Chr(10))
+    IF NOT raw.StartsWith("HTTP/1.0 200") OR NOT raw.Contains(Chr(10) + Chr(10)) THEN
+        Print("Could not get " + path + " from " + FROM + ": " + raw.Lines()[0])
+        RETURN ""
+    END IF
+    RETURN raw.Substring(raw.IndexOf(Chr(10) + Chr(10)) + 2, raw.Length - raw.IndexOf(Chr(10) + Chr(10)) - 2)
+END FUNCTION
+
+SUB Web_OnMessage (conn AS NET_Connection, message AS String)
+    parts.Add(message)
+END SUB
+
+SUB Web_OnClose (conn AS NET_Connection)
+    done = TRUE
+END SUB

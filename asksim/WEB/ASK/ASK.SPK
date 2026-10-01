@@ -1,0 +1,231 @@
+' ASK.SPK - AskSim's search, shared by the pages in C:\WEB\ASK. The index is
+' built by the crawler (C:\PROGRAMS\CRAWLER.SPK); these pages only read it.
+'
+'   C:\ASKDATA\DOCS.TXT       id|url|title|crawled|state|since   (state ok or gone)
+'   C:\ASKDATA\TEXT\<id>.TXT  title, a line break, the page's text
+'   C:\ASKDATA\CACHE\<id>.HTM the page as the crawler last saw it
+'   C:\ASKDATA\IDX\<c>.TXT    word|id:count id:count ...
+'   C:\ASKDATA\STATS.TXT      last crawl, pages, machines, seconds, TIME.Now
+'   C:\ASKDATA\SEEDS.TXT      sites people submitted
+'
+' Ranking is tf-idf: a word counts for more the more often it is on a page,
+' and for less the more pages it is on; a page with all your words beats one
+' with some of them; a page that has stopped answering counts for half.
+
+CONST DATADIR = "C:\ASKDATA"
+CONST PERPAGE = 10
+CONST MAXWORDS = 8
+CONST MAXSEEDS = 200
+' Words that say nothing about what you are looking for
+CONST IGNORE = "|a|an|the|and|or|of|to|in|on|at|by|for|is|it|its|be|as|are|was|with|this|that|from|you|your|i|me|my|we|our|he|she|they|them|but|not|no|so|if|do|does|did|have|has|had|can|will|just|all|any|there|here|what|where|who|how|which|when|why|about|into|out|up|than|then|also|more|some|very|would|could|should|been|were|these|those|their|his|her|him|am|get|got|one|nbsp|find|information|info|page|pages|site|sites|web|please|tell|show|know|want|looking|look|search|need|anything|something|someone|somebody|anyone|anybody|place|places|go|best|good|thing|things|let|lot|lots|like|ask|simms|"
+
+VAR found AS Array OF String     ' "score|id", best first, after Search
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+FUNCTION FindLine (text AS String, key AS String) AS String
+    VAR at AS Integer
+    text = Chr(10) + text
+    at = text.IndexOf(Chr(10) + key + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    IF text.Contains(Chr(10)) THEN text = text.Substring(0, text.IndexOf(Chr(10)))
+    RETURN text
+END FUNCTION
+
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    IF s.Length > most THEN RETURN s.Substring(0, most - 3) + "..."
+    RETURN s
+END FUNCTION
+
+FUNCTION HostOf (url AS String) AS String
+    VAR rest AS String
+    rest = url.Substring(7, url.Length - 7)
+    IF rest.Contains("/") THEN rest = rest.Substring(0, rest.IndexOf("/"))
+    RETURN rest
+END FUNCTION
+
+' ---------------------------------------------------------------- questions
+
+' The words of a question worth looking up, lower case, once each. A word
+' "site:host" is not looked up; it keeps the answers to that machine.
+VAR siteFilter AS String
+
+FUNCTION QueryWords (q AS String) AS Array OF String
+    VAR t AS String
+    VAR out AS Array OF String
+    VAR w AS String
+    VAR i AS Integer
+    VAR punct AS String
+    siteFilter = ""
+    t = " " + q.Lower() + " "
+    IF t.Contains(" site:") THEN
+        siteFilter = t.Substring(t.IndexOf(" site:") + 6, t.Length - t.IndexOf(" site:") - 6)
+        siteFilter = siteFilter.Substring(0, siteFilter.IndexOf(" ")).Trim()
+        t = t.Replace(" site:" + siteFilter, " ")
+    END IF
+    punct = ".,;:!?()[]{}""'<>/\|-_=+*&^%$#@~`"
+    FOR i = 0 TO punct.Length - 1
+        t = t.Replace(punct.CharAt(i), " ")
+    NEXT
+    FOR EACH w IN t.Split(" ")
+        IF w.Length >= 2 AND w.Length <= 20 AND NOT IGNORE.Contains("|" + w + "|") AND NOT out.Contains(w) AND out.Count < MAXWORDS THEN out.Add(w)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION Postings (word AS String) AS String
+    VAR b AS String
+    VAR line AS String
+    b = word.Substring(0, 1).Upper()
+    IF NOT "ABCDEFGHIJKLMNOPQRSTUVWXYZ".Contains(b) THEN b = "0"
+    line = FindLine(ReadOr(DATADIR + "\IDX\" + b + ".TXT", ""), word)
+    IF line = "" THEN RETURN ""
+    RETURN line.Substring(word.Length + 1, line.Length - word.Length - 1)
+END FUNCTION
+
+FUNCTION PageCount () AS Integer
+    VAR n AS Integer
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\DOCS.TXT", "").Lines()
+        IF line <> "" THEN n = n + 1
+    NEXT
+    RETURN n
+END FUNCTION
+
+' Fills found with "score|id", best first.
+SUB Search (words AS Array OF String)
+    VAR ids AS Array OF String
+    VAR scores AS Array OF Real
+    VAR hits AS Array OF Integer
+    VAR w AS String
+    VAR posting AS String
+    VAR list AS Array OF String
+    VAR id AS String
+    VAR tf AS Integer
+    VAR idf AS Real
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR doc AS String
+    VAR score AS Real
+    found.Clear()
+    n = PageCount()
+    IF n = 0 OR words.Count = 0 THEN RETURN
+    FOR EACH w IN words
+        list = Postings(w).Split(" ")
+        IF list.Count = 0 OR list[0] = "" THEN CONTINUE
+        idf = MATH.Log((n + 1) / list.Count) + 1
+        FOR EACH posting IN list
+            IF NOT posting.Contains(":") THEN CONTINUE
+            id = posting.Substring(0, posting.IndexOf(":"))
+            tf = Int(Val(posting.Substring(posting.IndexOf(":") + 1, posting.Length - posting.IndexOf(":") - 1)))
+            i = ids.IndexOf(id)
+            IF i < 0 THEN
+                ids.Add(id)
+                scores.Add(0)
+                hits.Add(0)
+                i = ids.Count - 1
+            END IF
+            scores[i] = scores[i] + (1 + MATH.Log(tf)) * idf
+            hits[i] = hits[i] + 1
+        NEXT
+    NEXT
+    FOR i = 0 TO ids.Count - 1
+        doc = FindLine(ReadOr(DATADIR + "\DOCS.TXT", ""), ids[i])
+        IF doc = "" THEN CONTINUE
+        IF siteFilter <> "" AND NOT HostOf(doc.Split("|")[1]).StartsWith(siteFilter) THEN CONTINUE
+        score = scores[i] * hits[i] / words.Count
+        IF doc.Split("|")[4] = "gone" THEN score = score / 2
+        found.Add(Str(Int(score * 1000)).PadLeft(12) + "|" + ids[i])
+    NEXT
+    found.Sort()
+    found.Reverse()
+END SUB
+
+' Every page of one machine, for "site:host" on its own.
+SUB SiteOnly ()
+    VAR line AS String
+    found.Clear()
+    FOR EACH line IN ReadOr(DATADIR + "\DOCS.TXT", "").Lines()
+        IF line <> "" AND HostOf(line.Split("|")[1]).StartsWith(siteFilter) THEN found.Add("1|" + line.Split("|")[0])
+    NEXT
+END SUB
+
+FUNCTION DocLine (id AS String) AS String
+    RETURN FindLine(ReadOr(DATADIR + "\DOCS.TXT", ""), id)
+END FUNCTION
+
+' A few lines of the page around the first of your words, with your words in bold.
+FUNCTION Snippet (id AS String, words AS Array OF String) AS String
+    VAR text AS String
+    VAR low AS String
+    VAR at AS Integer
+    VAR w AS String
+    VAR piece AS String
+    VAR out AS Array OF String
+    VAR t AS String
+    VAR bare AS String
+    text = ReadOr(DATADIR + "\TEXT\" + id + ".TXT", "")
+    IF text.Contains(Chr(10)) THEN text = text.Substring(text.IndexOf(Chr(10)) + 1, text.Length - text.IndexOf(Chr(10)) - 1)
+    low = text.Lower()
+    at = -1
+    FOR EACH w IN words
+        IF low.IndexOf(w) >= 0 AND (at < 0 OR low.IndexOf(w) < at) THEN at = low.IndexOf(w)
+    NEXT
+    IF at < 60 THEN
+        at = 0
+    ELSE
+        at = at - 60
+    END IF
+    piece = text.Substring(at, MATH.Min(220, text.Length - at))
+    FOR EACH t IN piece.Split(" ")
+        bare = t.Lower()
+        WHILE bare.Length > 0 AND NOT "abcdefghijklmnopqrstuvwxyz0123456789".Contains(bare.CharAt(bare.Length - 1))
+            bare = bare.Substring(0, bare.Length - 1)
+        END WHILE
+        IF words.Contains(bare) THEN
+            out.Add("<b>" + H(t) + "</b>")
+        ELSE
+            out.Add(H(t))
+        END IF
+    NEXT
+    t = out.Join(" ")
+    IF at > 0 THEN t = "..." + t
+    IF at + 220 < text.Length THEN t = t + "..."
+    RETURN t
+END FUNCTION
+
+' ---------------------------------------------------------------- page furniture
+
+FUNCTION Top (title AS String) AS String
+    RETURN "<html><head><title>" + H(title) + "</title></head>" _
+         + "<body bgcolor=""#FFFFFF"" text=""#000000"" link=""#660099"" vlink=""#660099"">"
+END FUNCTION
+
+FUNCTION AskBox (q AS String) AS String
+    RETURN "<form action=""index.asp"" method=""get""><p><input name=""q"" size=""50"" maxlength=""200"" value=""" + H(q) + """> " _
+         + "<input type=""submit"" value=""Ask!""></p></form>"
+END FUNCTION
+
+FUNCTION Stats () AS String
+    VAR s AS Array OF String
+    s = ReadOr(DATADIR + "\STATS.TXT", "").Lines()
+    IF s.Count < 4 THEN RETURN "Simms has not been round the network yet. Start C:\PROGRAMS\CRAWLER.SPK and press Crawl Now."
+    RETURN "Simms knows " + s[1] + " pages on " + s[2] + " machines. He last went round the network on " + s[0] + "."
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">AskSim on " + H(NET.HostName.Lower()) + " &middot; " + H(Stats()) _
+         + " &middot; <a href=""addurl.asp"">Add your site</a></font></center></body></html>"
+END FUNCTION

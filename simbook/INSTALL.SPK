@@ -13,6 +13,7 @@ VAR NL AS String
 SUB Main ()
     NL = Chr(10)
     IF NOT FS.Exists("C:\WEB\PICS") THEN FS.MakeDir("C:\WEB\PICS")
+
     MoveHomePage()
     Migrate()
     File0()

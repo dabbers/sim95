@@ -1,0 +1,756 @@
+' CRAWLER.SPK - AskSim's web crawler. Walks every web server on the network,
+' keeps a copy of each page, and builds the index the search pages read.
+'
+' A crawl:
+'   1. Starting points: every machine NET.Machines() can see (http://name/),
+'      the sites people submitted (C:\ASKDATA\SEEDS.TXT), and every page
+'      already known, to see whether it is still there.
+'   2. Fetch each page over port 80 (GET, the way Voyager does), at most
+'      PERHOST pages per machine and MAXPAGES in all, minding each machine's
+'      /robots.txt ("Disallow: /path" lines). Follow its links, to other
+'      machines too.
+'   3. Keep the page's text (TEXT\<id>.TXT) and a copy of the page itself with
+'      its links pointing back at the real site (CACHE\<id>.HTM).
+'   4. A known page that does not answer this time is not forgotten: it stays,
+'      marked "gone" since the first crawl that missed it, and its cached copy
+'      is what the search pages offer instead.
+'   5. Build the index: for every word, the pages it is on and how often.
+'
+'   C:\ASKDATA\DOCS.TXT       id|url|title|crawled|state|since   (state: ok or gone)
+'   C:\ASKDATA\TEXT\<id>.TXT  the page's title, a line break, then its text
+'   C:\ASKDATA\CACHE\<id>.HTM the page as it was, links made absolute
+'   C:\ASKDATA\IDX\<c>.TXT    word|id:count id:count ...  for words starting with c (0: digits)
+'   C:\ASKDATA\STATS.TXT      when, how many pages and machines, how long it took
+'   C:\ASKDATA\SEEDS.TXT      submitted sites, one URL per line
+'
+' Why the crawl is a timer and not a loop: in SIM95 a failed wait (a Connect
+' nobody answers, a Receive on a closed connection) can be caught with TRY, but
+' the handler it happened in is spoiled: the same error comes back the next
+' time it waits, and also at the next of the pauses the interpreter takes every
+' 512 statements. So each fetch starts in a timer tick of its own, pages arrive
+' through onMessage and onClose instead of Receive, and the whole tick sits in
+' a TRY with an empty CATCH and nothing after it, so a spoiled tick just ends.
+
+CONST DATA = "C:\ASKDATA"
+CONST PERHOST = 40
+CONST MAXPAGES = 500
+CONST TEXTMAX = 12000
+CONST CACHEMAX = 40000
+CONST EVERY = 60              ' minutes between crawls
+CONST PATIENCE = 6000         ' milliseconds to wait for a page
+CONST TITLEWEIGHT = 5         ' a word in the title counts this many times
+CONST STOPWORDS = "|a|an|the|and|or|of|to|in|on|at|by|for|is|it|its|be|as|are|was|with|this|that|from|you|your|i|me|my|we|our|he|she|they|them|but|not|no|so|if|do|does|did|have|has|had|can|will|just|all|any|there|here|what|where|who|how|which|when|why|about|into|out|up|than|then|also|more|some|very|would|could|should|been|were|these|those|their|his|her|him|am|get|got|one|nbsp|"
+
+VAR win AS GUI_Window
+VAR log AS GUI_ListBox
+VAR go AS GUI_Button
+VAR timer AS GUI_Timer
+VAR web AS NET_Socket
+VAR NL AS String
+
+' Where the crawl is: idle, start, gathering, next, wait, finish, indexing.
+' Ticks keep coming while a step waits (gathering, indexing), and do nothing then.
+VAR phase AS String = "idle"
+VAR started AS Integer
+VAR fetched AS Integer
+VAR kept AS Integer
+
+' One crawl's state
+VAR queue AS Array OF String
+VAR seen AS String
+VAR hosts AS Array OF String
+VAR hostPages AS Array OF Integer
+VAR robotHosts AS Array OF String
+VAR robotRules AS Array OF String
+VAR docUrls AS Array OF String
+VAR docLines AS Array OF String
+VAR fetchedOk AS String
+
+' The fetch in progress, and what it got
+VAR fUrl AS String
+VAR fRobots AS Bool
+VAR fNumber AS Integer
+VAR fParts AS Array OF String
+VAR fDone AS Bool
+VAR fSince AS Integer
+VAR fStatus AS Integer
+VAR fType AS String
+VAR fLocation AS String
+VAR fBody AS String
+VAR fError AS String
+
+SUB Main ()
+    NL = Chr(10)
+    win = GUI_Window.New("AskSim Crawler", 480, 280)
+    win.Icon = "network"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    log = GUI_ListBox.New(win)
+    log.Mono = TRUE
+    go = GUI_Button.New(win)
+    go.Text = "&Crawl Now"
+    go.onClick = Go_OnClick
+    Win_OnResize()
+    EnsureDirs()
+    web = NET_Socket.New()
+    web.onMessage = Web_OnMessage
+    web.onClose = Web_OnClose
+    Note("AskSim crawler on " + NET.HostName + ". Crawls every " + Str(EVERY) + " minutes.")
+    timer = GUI_Timer.New(win)
+    timer.Interval = 5000
+    timer.onTick = Timer_OnTick
+    timer.Start()
+    win.Status = LastCrawl()
+    win.Show()
+END SUB
+
+SUB Win_OnResize ()
+    log.SetBounds(0, 0, win.Width, win.Height - 36)
+    go.SetBounds(8, win.Height - 32, 120, 26)
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+SUB Note (text AS String)
+    log.Add(TIME.Clock + "  " + text)
+    IF log.Count > 400 THEN log.RemoveAt(0)
+    log.ScrollToEnd()
+END SUB
+
+SUB EnsureDirs ()
+    VAR d AS String
+    FOR EACH d IN ["", "\TEXT", "\CACHE", "\IDX"]
+        IF NOT FS.Exists(DATA + d) THEN FS.MakeDir(DATA + d)
+    NEXT
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION LastCrawl () AS String
+    VAR s AS String
+    s = ReadOr(DATA + "\STATS.TXT", "")
+    IF s = "" THEN RETURN "Not crawled yet"
+    RETURN "Last crawl: " + s.Lines()[0]
+END FUNCTION
+
+' Every tick moves the crawl one step. When idle, it checks whether a crawl is due.
+SUB Timer_OnTick ()
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
+    VAR stats AS Array OF String
+    SELECT CASE phase
+        CASE "idle"
+            IF NOT NET.Online THEN RETURN
+            stats = ReadOr(DATA + "\STATS.TXT", "").Lines()
+            IF stats.Count >= 5 THEN
+                IF TIME.Now - Int(Val(stats[4])) < EVERY * 60 THEN RETURN
+            END IF
+            Begin()
+        CASE "start"
+            Gather()
+        CASE "next"
+            NextPage()
+        CASE "wait"
+            IF fDone OR SYS.Ticks - fSince > PATIENCE THEN Arrived()
+        CASE "finish"
+            Finish()
+    END SELECT
+END SUB
+
+SUB Go_OnClick ()
+    IF phase <> "idle" THEN
+        Note("Already crawling.")
+        RETURN
+    END IF
+    Begin()
+END SUB
+
+' ---------------------------------------------------------------- URLs
+
+FUNCTION HostOf (url AS String) AS String
+    VAR rest AS String
+    rest = url.Substring(7, url.Length - 7)
+    IF rest.Contains("/") THEN rest = rest.Substring(0, rest.IndexOf("/"))
+    IF rest.Contains(":") THEN rest = rest.Substring(0, rest.IndexOf(":"))
+    RETURN rest
+END FUNCTION
+
+FUNCTION PortOf (url AS String) AS Integer
+    VAR rest AS String
+    rest = url.Substring(7, url.Length - 7)
+    IF rest.Contains("/") THEN rest = rest.Substring(0, rest.IndexOf("/"))
+    IF NOT rest.Contains(":") THEN RETURN 80
+    RETURN Int(Val(rest.Substring(rest.IndexOf(":") + 1, rest.Length - rest.IndexOf(":") - 1)))
+END FUNCTION
+
+FUNCTION PathOf (url AS String) AS String
+    VAR rest AS String
+    rest = url.Substring(7, url.Length - 7)
+    IF NOT rest.Contains("/") THEN RETURN "/"
+    RETURN rest.Substring(rest.IndexOf("/"), rest.Length - rest.IndexOf("/"))
+END FUNCTION
+
+' One spelling per page: lower case (SIM95 paths are not case-sensitive), no
+' #fragment, no ./ or dir/../
+FUNCTION Normal (url AS String) AS String
+    VAR path AS String
+    VAR query AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR p AS String
+    IF url.Contains("#") THEN url = url.Substring(0, url.IndexOf("#"))
+    path = PathOf(url)
+    query = ""
+    IF path.Contains("?") THEN
+        query = path.Substring(path.IndexOf("?"), path.Length - path.IndexOf("?"))
+        path = path.Substring(0, path.IndexOf("?"))
+    END IF
+    parts = path.Lower().Split("/")
+    FOR EACH p IN parts
+        IF p = ".." THEN
+            IF out.Count > 1 THEN out.RemoveAt(out.Count - 1)
+        ELSEIF p <> "." THEN
+            out.Add(p)
+        END IF
+    NEXT
+    path = out.Join("/")
+    IF NOT path.StartsWith("/") THEN path = "/" + path
+    ' A folder and its index page are the same page
+    IF path.EndsWith("/index.htm") THEN path = path.Substring(0, path.Length - 9)
+    IF path.EndsWith("/index.asp") AND query = "" THEN path = path.Substring(0, path.Length - 9)
+    IF PortOf(url) <> 80 THEN RETURN "http://" + HostOf(url).Lower() + ":" + Str(PortOf(url)) + path + query
+    RETURN "http://" + HostOf(url).Lower() + path + query
+END FUNCTION
+
+' A link as written on page base, made into a full URL; "" for ones not to follow.
+FUNCTION Resolve (link AS String, base AS String) AS String
+    VAR l AS String
+    VAR dir AS String
+    VAR colon AS Integer
+    VAR parts AS Array OF String
+    l = link.Trim().Replace("&amp;", "&")
+    IF l = "" OR l.StartsWith("#") THEN RETURN ""
+    IF l.Lower().StartsWith("http://") THEN RETURN Normal(l)
+    ' mailto:, ftp:, javascript: and friends - a colon before any / or ?
+    colon = l.IndexOf(":")
+    IF colon >= 0 AND (l.IndexOf("/") < 0 OR colon < l.IndexOf("/")) AND (l.IndexOf("?") < 0 OR colon < l.IndexOf("?")) THEN RETURN ""
+    IF l.StartsWith("/") THEN RETURN Normal("http://" + HostOf(base) + l)
+    dir = PathOf(base)
+    IF dir.Contains("?") THEN dir = dir.Substring(0, dir.IndexOf("?"))
+    parts = dir.Split("/")
+    dir = dir.Substring(0, dir.Length - parts[parts.Count - 1].Length)
+    RETURN Normal("http://" + HostOf(base) + dir + l)
+END FUNCTION
+
+' Links nobody wants a robot to follow: they change things.
+FUNCTION Harmless (url AS String) AS Bool
+    VAR p AS String
+    p = PathOf(url)
+    IF p.Contains("logout") OR p.Contains("delete") OR p.Contains("remove") OR p.Contains("vote.") OR p.Contains("poke.") THEN RETURN FALSE
+    IF p.Contains("?t=") OR p.Contains("&t=") THEN RETURN FALSE
+    RETURN NOT (p.EndsWith(".pic") OR p.EndsWith(".spk") OR p.EndsWith(".inc"))
+END FUNCTION
+
+' ---------------------------------------------------------------- fetching
+
+' Starts a GET, the way Voyager does. The page comes in through Web_OnMessage
+' until the server closes (Web_OnClose); Arrived picks it up from there.
+SUB StartFetch (url AS String)
+    VAR conn AS NET_Connection
+    fUrl = url
+    fNumber = fNumber + 1
+    fParts.Clear()
+    fDone = FALSE
+    fSince = SYS.Ticks
+    fError = ""
+    phase = "wait"
+    TRY
+        conn = web.Connect(HostOf(url), PortOf(url))
+        conn.Tag = Str(fNumber)
+        conn.Send("GET " + PathOf(url) + " HTTP/1.0" + NL + "Host: " + HostOf(url) + NL + "User-Agent: AskSim/1.0 (http://" + NET.HostName.Lower() + "/ask/)")
+    CATCH err
+        fError = err
+        fDone = TRUE
+    END TRY
+    ' Nothing else may wait in this tick: see the note at the top.
+END SUB
+
+SUB Web_OnMessage (conn AS NET_Connection, message AS String)
+    IF conn.Tag = Str(fNumber) AND NOT fDone THEN fParts.Add(message)
+END SUB
+
+SUB Web_OnClose (conn AS NET_Connection)
+    IF conn.Tag = Str(fNumber) THEN fDone = TRUE
+END SUB
+
+' Reads what the last fetch got into fStatus (0 when nobody answered), fType,
+' fLocation and fBody.
+SUB ReadResponse ()
+    VAR raw AS String
+    VAR head AS String
+    VAR line AS String
+    fStatus = 0
+    fType = ""
+    fLocation = ""
+    fBody = ""
+    web.Close()
+    raw = fParts.Join(NL)
+    IF fError <> "" THEN RETURN
+    IF NOT raw.StartsWith("HTTP/") THEN
+        IF fDone THEN
+            fError = "not a web server"
+        ELSE
+            fError = "no answer in " + Str(PATIENCE / 1000) + " seconds"
+        END IF
+        RETURN
+    END IF
+    fStatus = Int(Val(raw.Split(" ")[1]))
+    IF raw.Contains(NL + NL) THEN
+        head = raw.Substring(0, raw.IndexOf(NL + NL))
+        fBody = raw.Substring(head.Length + 2, raw.Length - head.Length - 2)
+    ELSE
+        head = raw
+    END IF
+    FOR EACH line IN head.Lines()
+        IF line.Lower().StartsWith("content-type:") THEN fType = line.Substring(13, line.Length - 13).Trim().Lower()
+        IF line.Lower().StartsWith("location:") THEN fLocation = line.Substring(9, line.Length - 9).Trim()
+    NEXT
+END SUB
+
+' robots.txt: "Disallow: /path" lines. "" when this host's rules are not known
+' yet, otherwise "yes" or "no".
+FUNCTION Allowed (url AS String) AS String
+    VAR i AS Integer
+    VAR rule AS String
+    i = robotHosts.IndexOf(HostOf(url))
+    IF i < 0 THEN RETURN ""
+    FOR EACH rule IN robotRules[i].Split("|")
+        IF rule <> "" AND PathOf(url).StartsWith(rule) THEN RETURN "no"
+    NEXT
+    RETURN "yes"
+END FUNCTION
+
+SUB LearnRobots (host AS String)
+    VAR rules AS String = "|"
+    VAR line AS String
+    VAR rule AS String
+    IF fStatus = 200 THEN
+        FOR EACH line IN fBody.Lines()
+            IF line.Lower().StartsWith("disallow:") THEN
+                rule = line.Substring(9, line.Length - 9).Trim().Lower()
+                IF rule <> "" THEN rules = rules + rule + "|"
+            END IF
+        NEXT
+        IF rules <> "|" THEN Note("  " + host + "/robots.txt keeps me out of " + rules.Substring(1, rules.Length - 2).Replace("|", ", "))
+    END IF
+    robotHosts.Add(host)
+    robotRules.Add(rules)
+END SUB
+
+SUB Enqueue (url AS String)
+    IF url = "" OR NOT url.StartsWith("http://") THEN RETURN
+    ' "localhost" means whoever is reading the page, not the machine it is on
+    IF HostOf(url) = "localhost" OR HostOf(url).StartsWith("127.") THEN RETURN
+    IF seen.Contains("|" + url + "|") OR NOT Harmless(url) THEN RETURN
+    seen = seen + url + "|"
+    queue.Add(url)
+END SUB
+
+FUNCTION TakeHost (host AS String) AS Bool
+    VAR i AS Integer
+    i = hosts.IndexOf(host)
+    IF i < 0 THEN
+        hosts.Add(host)
+        hostPages.Add(0)
+        i = hosts.Count - 1
+    END IF
+    IF hostPages[i] >= PERHOST THEN RETURN FALSE
+    hostPages[i] = hostPages[i] + 1
+    RETURN TRUE
+END FUNCTION
+
+' ---------------------------------------------------------------- pages
+
+' text between <tag ...> and </tag>, "" if there is none
+FUNCTION Between (html AS String, low AS String, tag AS String) AS String
+    VAR a AS Integer
+    VAR b AS Integer
+    a = low.IndexOf("<" + tag)
+    IF a < 0 THEN RETURN ""
+    a = a + low.Substring(a, low.Length - a).IndexOf(">") + 1
+    b = low.Substring(a, low.Length - a).IndexOf("</" + tag)
+    IF b < 0 THEN RETURN ""
+    RETURN html.Substring(a, b)
+END FUNCTION
+
+FUNCTION WithoutBlocks (html AS String, tag AS String) AS String
+    VAR low AS String
+    VAR a AS Integer
+    VAR b AS Integer
+    low = html.Lower()
+    a = low.IndexOf("<" + tag)
+    WHILE a >= 0
+        b = low.Substring(a, low.Length - a).IndexOf("</" + tag + ">")
+        IF b < 0 THEN
+            html = html.Substring(0, a)
+        ELSE
+            html = html.Substring(0, a) + " " + html.Substring(a + b + tag.Length + 3, html.Length - a - b - tag.Length - 3)
+        END IF
+        low = html.Lower()
+        a = low.IndexOf("<" + tag)
+    END WHILE
+    RETURN html
+END FUNCTION
+
+FUNCTION Decode (s AS String) AS String
+    RETURN s.Replace("&nbsp;", " ").Replace("&lt;", "<").Replace("&gt;", ">").Replace("&quot;", """").Replace("&#39;", "'").Replace("&middot;", "-").Replace("&raquo;", ">>").Replace("&laquo;", "<<").Replace("&copy;", "(c)").Replace("&amp;", "&")
+END FUNCTION
+
+' The words a person would read, on one line.
+FUNCTION PlainText (html AS String) AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR gt AS Integer
+    VAR t AS String
+    html = WithoutBlocks(WithoutBlocks(WithoutBlocks(html, "script"), "style"), "title")
+    parts = html.Split("<")
+    out.Add(parts[0])
+    FOR i = 1 TO parts.Count - 1
+        gt = parts[i].IndexOf(">")
+        IF gt >= 0 THEN
+            out.Add(parts[i].Substring(gt + 1, parts[i].Length - gt - 1))
+        ELSE
+            out.Add(parts[i])
+        END IF
+    NEXT
+    t = Decode(out.Join(" ")).Replace(Chr(13), " ").Replace(Chr(10), " ").Replace(Chr(9), " ")
+    WHILE t.Contains("  ")
+        t = t.Replace("  ", " ")
+    END WHILE
+    ' Tags around a word left a space before the punctuation after it
+    RETURN t.Replace(" ,", ",").Replace(" .", ".").Replace(" ;", ";").Replace(" :", ":").Replace(" !", "!").Replace(" ?", "?").Replace(" )", ")").Replace("( ", "(").Trim()
+END FUNCTION
+
+' Every link and picture on the page as a full URL, and the page itself with
+' them rewritten so the cached copy still points at the real site.
+VAR pageLinks AS Array OF String
+VAR pageCopy AS String
+
+SUB ReadLinks (html AS String, base AS String)
+    VAR low AS String
+    VAR attr AS String
+    VAR at AS Integer
+    VAR q AS String
+    VAR endAt AS Integer
+    VAR raw AS String
+    VAR full AS String
+    VAR rest AS String
+    pageLinks.Clear()
+    pageCopy = html
+    FOR EACH attr IN ["href=", "src="]
+        low = html.Lower()
+        rest = low
+        at = rest.IndexOf(attr)
+        WHILE at >= 0
+            rest = rest.Substring(at + attr.Length, rest.Length - at - attr.Length)
+            q = rest.CharAt(0)
+            IF q = """" OR q = "'" THEN
+                endAt = rest.Substring(1, rest.Length - 1).IndexOf(q)
+                IF endAt > 0 THEN
+                    raw = html.Substring(html.Length - rest.Length + 1, endAt)
+                    full = Resolve(raw, base)
+                    IF full <> "" AND raw <> full THEN pageCopy = pageCopy.Replace(attr.Substring(0, attr.Length - 1) + "=" + q + raw + q, attr.Substring(0, attr.Length - 1) + "=" + q + full + q)
+                    IF attr = "href=" AND full <> "" THEN pageLinks.Add(full)
+                END IF
+            END IF
+            at = rest.IndexOf(attr)
+        END WHILE
+    NEXT
+END SUB
+
+' ---------------------------------------------------------------- the crawl
+
+FUNCTION DocId (url AS String) AS String
+    VAR i AS Integer
+    VAR n AS Integer
+    i = docUrls.IndexOf(url)
+    IF i >= 0 THEN RETURN docLines[i].Split("|")[0]
+    n = Int(Val(ReadOr(DATA + "\NEXTDOC.TXT", "0"))) + 1
+    FS.Write(DATA + "\NEXTDOC.TXT", Str(n))
+    docUrls.Add(url)
+    docLines.Add(Str(n) + "|" + url + "|||new|")
+    RETURN Str(n)
+END FUNCTION
+
+SUB SetDoc (url AS String, line AS String)
+    docLines[docUrls.IndexOf(url)] = line
+END SUB
+
+FUNCTION Clean (s AS String) AS String
+    RETURN s.Replace("|", "/").Replace(Chr(10), " ").Replace(Chr(13), " ").Trim()
+END FUNCTION
+
+SUB Begin ()
+    VAR line AS String
+    phase = "start"
+    go.Enabled = FALSE
+    timer.Interval = 10
+    started = SYS.Ticks
+    fetched = 0
+    kept = 0
+    queue.Clear()
+    hosts.Clear()
+    hostPages.Clear()
+    robotHosts.Clear()
+    robotRules.Clear()
+    docUrls.Clear()
+    docLines.Clear()
+    seen = "|"
+    fetchedOk = "|"
+    EnsureDirs()
+    FOR EACH line IN ReadOr(DATA + "\DOCS.TXT", "").Lines()
+        IF line.Split("|").Count >= 6 THEN
+            docUrls.Add(line.Split("|")[1])
+            docLines.Add(line)
+        END IF
+    NEXT
+    Note("Crawl started. Looking for machines...")
+END SUB
+
+' Where to start: every machine that answers, submitted sites, known pages.
+SUB Gather ()
+    VAR m AS String
+    VAR line AS String
+    VAR url AS String
+    VAR machines AS Array OF String
+    phase = "gathering"
+    machines = NET.Machines()
+    FOR EACH m IN machines
+        Enqueue(Normal("http://" + m.Split(" ")[0] + "/"))
+    NEXT
+    Note("  " + Str(machines.Count) + " machines answered")
+    FOR EACH line IN ReadOr(DATA + "\SEEDS.TXT", "").Lines()
+        IF line.Trim().Lower().StartsWith("http://") THEN Enqueue(Normal(line.Trim()))
+    NEXT
+    FOR EACH url IN docUrls
+        Enqueue(url)
+    NEXT
+    phase = "next"
+END SUB
+
+' Takes the next page off the queue and starts fetching it (or its machine's
+' robots.txt first).
+SUB NextPage ()
+    VAR url AS String
+    VAR ok AS String
+    WHILE queue.Count > 0 AND fetched < MAXPAGES
+        url = queue[0]
+        ok = Allowed(url)
+        IF ok = "" THEN
+            fRobots = TRUE
+            StartFetch("http://" + HostOf(url) + "/robots.txt")
+            RETURN
+        END IF
+        queue.RemoveAt(0)
+        IF ok = "yes" AND TakeHost(HostOf(url)) THEN
+            fRobots = FALSE
+            fetched = fetched + 1
+            win.Status = "Crawling: " + Str(fetched) + " fetched, " + Str(queue.Count) + " to go - " + url
+            StartFetch(url)
+            RETURN
+        END IF
+    END WHILE
+    phase = "finish"
+END SUB
+
+' A page (or robots.txt) came in, or gave up: keep what it says.
+SUB Arrived ()
+    VAR url AS String
+    VAR id AS String
+    VAR title AS String
+    VAR text AS String
+    VAR link AS String
+    url = fUrl
+    ReadResponse()
+    phase = "next"
+    IF fRobots THEN
+        LearnRobots(HostOf(url))
+        RETURN
+    END IF
+    IF fStatus = 200 AND (fType.StartsWith("text/html") OR fType.StartsWith("text/plain")) THEN
+        id = DocId(url)
+        IF fType.StartsWith("text/html") THEN
+            title = Clean(PlainText(Between(fBody, fBody.Lower(), "title")))
+            text = PlainText(fBody)
+            ReadLinks(fBody, url)
+            FOR EACH link IN pageLinks
+                Enqueue(link)
+            NEXT
+        ELSE
+            title = ""
+            text = fBody.Replace(Chr(10), " ")
+            pageCopy = "<pre>" + fBody.Replace("&", "&amp;").Replace("<", "&lt;") + "</pre>"
+        END IF
+        IF title = "" THEN title = url
+        IF text.Length > TEXTMAX THEN text = text.Substring(0, TEXTMAX)
+        IF pageCopy.Length > CACHEMAX THEN pageCopy = pageCopy.Substring(0, CACHEMAX)
+        FS.Write(DATA + "\TEXT\" + id + ".TXT", title + NL + text)
+        FS.Write(DATA + "\CACHE\" + id + ".HTM", pageCopy)
+        SetDoc(url, id + "|" + url + "|" + title + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|ok|")
+        fetchedOk = fetchedOk + url + "|"
+        kept = kept + 1
+    ELSEIF (fStatus = 301 OR fStatus = 302) AND fLocation <> "" THEN
+        Enqueue(Resolve(fLocation, url))
+    ELSEIF fStatus = 0 THEN
+        Note("  " + url + ": " + fError)
+    END IF
+END SUB
+
+' Pages that did not answer are marked gone; then the index is rebuilt.
+SUB Finish ()
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR out AS String
+    VAR gone AS Integer
+    phase = "indexing"
+    FOR EACH line IN docLines
+        p = line.Split("|")
+        IF NOT fetchedOk.Contains("|" + p[1] + "|") AND p[4] = "ok" THEN SetDoc(p[1], p[0] + "|" + p[1] + "|" + p[2] + "|" + p[3] + "|gone|" + TIME.Date)
+    NEXT
+    FOR EACH line IN docLines
+        p = line.Split("|")
+        IF p[4] = "new" THEN
+            SetDoc(p[1], "")
+        ELSEIF p[4] = "gone" THEN
+            gone = gone + 1
+        END IF
+    NEXT
+    FOR EACH line IN docLines
+        IF line <> "" THEN out = out + line + NL
+    NEXT
+    FS.Write(DATA + "\DOCS.TXT", out)
+    Note("Fetched " + Str(fetched) + " pages from " + Str(hosts.Count) + " machines: " + Str(kept) + " indexed, " + Str(gone) + " not answering.")
+    BuildIndex()
+    FS.Write(DATA + "\STATS.TXT", TIME.Date + " " + TIME.Clock.Substring(0, 5) + NL + Str(kept + gone) + NL + Str(CountMachines(out)) + NL + Str(Int((SYS.Ticks - started) / 1000)) + NL + Str(TIME.Now))
+    Note("Done in " + Str(Int((SYS.Ticks - started) / 1000)) + " seconds.")
+    win.Status = LastCrawl()
+    go.Enabled = TRUE
+    timer.Interval = 5000
+    phase = "idle"
+END SUB
+
+FUNCTION CountMachines (docs AS String) AS Integer
+    VAR seenHosts AS String = "|"
+    VAR line AS String
+    VAR n AS Integer
+    FOR EACH line IN docs.Lines()
+        IF line = "" THEN CONTINUE
+        IF NOT seenHosts.Contains("|" + HostOf(line.Split("|")[1]) + "|") THEN
+            seenHosts = seenHosts + HostOf(line.Split("|")[1]) + "|"
+            n = n + 1
+        END IF
+    NEXT
+    RETURN n
+END FUNCTION
+
+' ---------------------------------------------------------------- the index
+
+FUNCTION WordsOf (text AS String) AS Array OF String
+    VAR t AS String
+    VAR out AS Array OF String
+    VAR w AS String
+    VAR i AS Integer
+    VAR punct AS String
+    t = text.Lower()
+    punct = ".,;:!?()[]{}""'<>/\|-_=+*&^%$#@~`" + Chr(9) + Chr(10) + Chr(13)
+    FOR i = 0 TO punct.Length - 1
+        t = t.Replace(punct.CharAt(i), " ")
+    NEXT
+    FOR EACH w IN t.Split(" ")
+        IF w.Length >= 2 AND w.Length <= 20 AND NOT STOPWORDS.Contains("|" + w + "|") THEN out.Add(w)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION Bucket (word AS String) AS Integer
+    VAR c AS Integer
+    c = Asc(word) - 97
+    IF c < 0 OR c > 25 THEN RETURN 26
+    RETURN c
+END FUNCTION
+
+SUB BuildIndex ()
+    VAR buckets AS Array OF String
+    VAR line AS String
+    VAR id AS String
+    VAR text AS String
+    VAR words AS Array OF String
+    VAR w AS String
+    VAR i AS Integer
+    VAR k AS Integer
+    VAR run AS Integer
+    VAR lines AS Array OF String
+    VAR out AS String
+    VAR last AS String
+    VAR word AS String
+    VAR names AS String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0"
+    FOR i = 0 TO 26
+        buckets.Add("")
+    NEXT
+    FOR EACH line IN ReadOr(DATA + "\DOCS.TXT", "").Lines()
+        IF line = "" THEN CONTINUE
+        id = line.Split("|")[0]
+        text = ReadOr(DATA + "\TEXT\" + id + ".TXT", "")
+        IF text = "" THEN CONTINUE
+        words = WordsOf(text)
+        FOR EACH w IN WordsOf(text.Lines()[0])
+            FOR k = 2 TO TITLEWEIGHT
+                words.Add(w)
+            NEXT
+        NEXT
+        words.Sort()
+        run = 0
+        FOR i = 0 TO words.Count - 1
+            run = run + 1
+            IF i = words.Count - 1 THEN
+                buckets[Bucket(words[i])] = buckets[Bucket(words[i])] + words[i] + "|" + id + ":" + Str(run) + NL
+            ELSEIF words[i + 1] <> words[i] THEN
+                buckets[Bucket(words[i])] = buckets[Bucket(words[i])] + words[i] + "|" + id + ":" + Str(run) + NL
+                run = 0
+            END IF
+        NEXT
+        SYS.Sleep(0)
+    NEXT
+    ' Each bucket: sort the postings so a word's are together, then one line per word
+    FOR i = 0 TO 26
+        lines = buckets[i].Lines()
+        lines.Sort()
+        out = ""
+        last = ""
+        FOR EACH line IN lines
+            IF line = "" THEN CONTINUE
+            word = line.Substring(0, line.IndexOf("|"))
+            IF word = last THEN
+                out = out + " " + line.Substring(word.Length + 1, line.Length - word.Length - 1)
+            ELSE
+                IF last <> "" THEN out = out + NL
+                out = out + line
+                last = word
+            END IF
+        NEXT
+        FS.Write(DATA + "\IDX\" + names.CharAt(i) + ".TXT", out + NL)
+        SYS.Sleep(0)
+    NEXT
+    Note("Index built.")
+END SUB

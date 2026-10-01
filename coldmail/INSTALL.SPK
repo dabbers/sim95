@@ -13,6 +13,8 @@ VAR NL AS String
 SUB Main ()
     NL = Chr(10)
     IF NOT FS.Exists("C:\WEB\MAIL") THEN FS.MakeDir("C:\WEB\MAIL")
+    IF NOT FS.Exists("C:\WEB\MAIL\DIST") THEN FS.MakeDir("C:\WEB\MAIL\DIST")
+    FS.Write("C:\WEB\MAIL\DIST\MANIFEST.TXT", "")
 
     File0()
     File1()
@@ -24,7 +26,9 @@ SUB Main ()
     File7()
     File8()
     File9()
-    Print("ColdMail is installed (10 files).")
+    File10()
+    File11()
+    Print("ColdMail is installed (12 files).")
     StartService("MAILD", "C:\PROGRAMS\MAILD.SPK", "MAIL.RUN")
     Print("Open http://" + NET.HostName.Lower() + "/mail/ in Voyager.")
 END SUB
@@ -97,6 +101,8 @@ SUB File0 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\MAIL\COMPOSE.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\0.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "0|C:\WEB\MAIL\COMPOSE.ASP" + NL)
 END SUB
 
 SUB File1 ()
@@ -121,9 +127,161 @@ SUB File1 ()
     t = t + "RESPONSE.Redirect(""inbox.asp?f="" + f + ""&why="" + UrlEnc(Str(gone) + "" letters deleted.""))" + NL
     t = t + "%>" + NL
     Put("C:\WEB\MAIL\DELETE.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\1.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "1|C:\WEB\MAIL\DELETE.ASP" + NL)
 END SUB
 
 SUB File2 ()
+    t = ""
+    t = t + "' GETMAIL.SPK - copies ColdMail from %HOST% onto this machine and starts your" + NL
+    t = t + "' own mail server. Save it as C:\MYFILES\GETMAIL.SPK in SPARK and press F5." + NL
+    t = t + "'" + NL
+    t = t + "' It fetches each file over the web (each one fits in a network message, which" + NL
+    t = t + "' the whole installer would not), writes it where it belongs, starts" + NL
+    t = t + "' C:\PROGRAMS\MAILD.SPK, and adds it to C:\SYSTEM\STARTUP. It also keeps a" + NL
+    t = t + "' copy of everything in C:\WEB\MAIL\DIST, so your machine can hand ColdMail on" + NL
+    t = t + "' to the next person in the same way. Your mail in C:\MAILDATA is never touched." + NL
+    t = t + "" + NL
+    t = t + "CONST FROM = ""%HOST%""" + NL
+    t = t + "" + NL
+    t = t + "VAR web AS NET_Socket" + NL
+    t = t + "VAR parts AS Array OF String" + NL
+    t = t + "VAR done AS Bool" + NL
+    t = t + "" + NL
+    t = t + "SUB Main ()" + NL
+    t = t + "    ' A failed Connect spoils the handler it happens in (see Fetch), so all of" + NL
+    t = t + "    ' it sits in a TRY with nothing after it." + NL
+    t = t + "    TRY" + NL
+    t = t + "        Install()" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "    END TRY" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB Install ()" + NL
+    t = t + "    VAR manifest AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    VAR task AS String" + NL
+    t = t + "    VAR shared AS String" + NL
+    t = t + "    web = NET_Socket.New()" + NL
+    t = t + "    web.onMessage = Web_OnMessage" + NL
+    t = t + "    web.onClose = Web_OnClose" + NL
+    t = t + "    Print(""Fetching ColdMail from "" + FROM + ""..."")" + NL
+    t = t + "    manifest = Fetch(""/mail/dist/manifest.txt"")" + NL
+    t = t + "    IF manifest = """" THEN RETURN" + NL
+    t = t + "    IF NOT FS.Exists(""C:\WEB\MAIL"") THEN FS.MakeDir(""C:\WEB\MAIL"")" + NL
+    t = t + "    IF NOT FS.Exists(""C:\WEB\MAIL\DIST"") THEN FS.MakeDir(""C:\WEB\MAIL\DIST"")" + NL
+    t = t + "    FOR EACH line IN manifest.Lines()" + NL
+    t = t + "        IF line.Split(""|"").Count < 2 THEN CONTINUE" + NL
+    t = t + "        text = Fetch(""/mail/dist/"" + line.Split(""|"")[0] + "".txt"")" + NL
+    t = t + "        IF text = """" THEN RETURN" + NL
+    t = t + "        FS.Write(line.Split(""|"")[1], text)" + NL
+    t = t + "        FS.Write(""C:\WEB\MAIL\DIST\"" + line.Split(""|"")[0] + "".TXT"", text)" + NL
+    t = t + "        shared = shared + line + Chr(10)" + NL
+    t = t + "        Print(""  wrote "" + line.Split(""|"")[1])" + NL
+    t = t + "        n = n + 1" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    FS.Write(""C:\WEB\MAIL\DIST\MANIFEST.TXT"", shared)" + NL
+    t = t + "    FS.Write(""C:\SYSTEM\STARTUP\MAIL.RUN"", ""C:\PROGRAMS\MAILD.SPK"")" + NL
+    t = t + "    FOR EACH task IN SYS.Tasks()" + NL
+    t = t + "        IF task.Split(""|"")[1].Upper() = ""MAILD"" THEN SYS.Kill(Int(Val(task.Split(""|"")[0])))" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    SYS.Run(""C:\PROGRAMS\MAILD.SPK"")" + NL
+    t = t + "    Print(""ColdMail is installed ("" + Str(n) + "" files) and your mail server is running."")" + NL
+    t = t + "    Print(""Open http://"" + NET.HostName.Lower() + ""/mail/ in Voyager and sign up."")" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' One file over the web. Answers come in through the socket's events; there is" + NL
+    t = t + "' no Receive, because a Receive that ends in ""connection closed"" would spoil" + NL
+    t = t + "' the handler: every later wait in it would fail with the same error." + NL
+    t = t + "FUNCTION Fetch (path AS String) AS String" + NL
+    t = t + "    VAR conn AS NET_Connection" + NL
+    t = t + "    VAR raw AS String" + NL
+    t = t + "    VAR since AS Integer" + NL
+    t = t + "    parts.Clear()" + NL
+    t = t + "    done = FALSE" + NL
+    t = t + "    TRY" + NL
+    t = t + "        conn = web.Connect(FROM, 80)" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "        Print(""Could not reach "" + FROM + "": "" + err)" + NL
+    t = t + "        RETURN """"" + NL
+    t = t + "    END TRY" + NL
+    t = t + "    conn.Send(""GET "" + path + "" HTTP/1.0"" + Chr(10) + ""Host: "" + FROM)" + NL
+    t = t + "    since = SYS.Ticks" + NL
+    t = t + "    WHILE NOT done AND SYS.Ticks - since < 10000" + NL
+    t = t + "        SYS.Sleep(50)" + NL
+    t = t + "    END WHILE" + NL
+    t = t + "    raw = parts.Join(Chr(10))" + NL
+    t = t + "    IF NOT raw.StartsWith(""HTTP/1.0 200"") OR NOT raw.Contains(Chr(10) + Chr(10)) THEN" + NL
+    t = t + "        Print(""Could not get "" + path + "" from "" + FROM + "": "" + raw.Lines()[0])" + NL
+    t = t + "        RETURN """"" + NL
+    t = t + "    END IF" + NL
+    t = t + "    RETURN raw.Substring(raw.IndexOf(Chr(10) + Chr(10)) + 2, raw.Length - raw.IndexOf(Chr(10) + Chr(10)) - 2)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB Web_OnMessage (conn AS NET_Connection, message AS String)" + NL
+    t = t + "    parts.Add(message)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB Web_OnClose (conn AS NET_Connection)" + NL
+    t = t + "    done = TRUE" + NL
+    t = t + "END SUB" + NL
+    Put("C:\WEB\MAIL\GETMAIL.TXT")
+    FS.Write("C:\WEB\MAIL\DIST\2.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "2|C:\WEB\MAIL\GETMAIL.TXT" + NL)
+END SUB
+
+SUB File3 ()
+    t = ""
+    t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' HOST.ASP - run ColdMail on your own machine. Hands out GETMAIL.SPK, a small" + NL
+    t = t + "' program that copies ColdMail from this machine over the web; and sends you" + NL
+    t = t + "' on to your own webmail once you have it." + NL
+    t = t + "VAR there AS String" + NL
+    t = t + "viewer = CurrentUser()" + NL
+    t = t + "there = REQUEST.Query(""go"").Trim().Lower()" + NL
+    t = t + "IF there <> """" THEN" + NL
+    t = t + "    IF OnlyFrom(there, ""abcdefghijklmnopqrstuvwxyz0123456789.-"") AND there.Length <= 40 THEN RESPONSE.Redirect(""http://"" + there + ""/mail/"")" + NL
+    t = t + "END IF" + NL
+    t = t + "%>" + NL
+    t = t + "<%= Top(""Host ColdMail"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr><td valign=""top"">" + NL
+    t = t + "<%= BoxTop(""Run ColdMail on your own machine"") %>" + NL
+    t = t + "<p><font size=""2"">Every SIM95 machine can be a mail server. Yours would give out" + NL
+    t = t + "addresses like <b>you@yourmachine</b>, keep its own mailboxes, and trade letters with" + NL
+    t = t + "<%= H(NET.HostName.Lower()) %> and every other ColdMail machine over port 25.</font></p>" + NL
+    t = t + "<ol><font size=""2"">" + NL
+    t = t + "<li>On your machine, open <b>Start &gt; Programs &gt; SPARK</b>.</li>" + NL
+    t = t + "<li>Copy the program below into it, save it as <tt>C:\MYFILES\GETMAIL.SPK</tt>, and press <b>F5</b>.</li>" + NL
+    t = t + "<li>It copies ColdMail from <b><%= H(NET.HostName.Lower()) %></b> file by file, starts your mail" + NL
+    t = t + "server, and sets it to start whenever your machine does.</li>" + NL
+    t = t + "<li>Then open your own webmail at <tt>http://yourmachine/mail/</tt>.</li>" + NL
+    t = t + "</font></ol>" + NL
+    t = t + "<form><textarea rows=""14"" cols=""76"" readonly><%= H(ReadOr(SERVER.MapPath(""/mail/getmail.txt""), """").Replace(""%HOST%"", NET.HostName.Lower())) %></textarea></form>" + NL
+    t = t + "<%= BoxTop(""Already running it?"") %>" + NL
+    t = t + "<form action=""host.asp"" method=""get"">" + NL
+    t = t + "<p><font size=""2"">Your machine's name:</font> <input name=""go"" size=""30"" maxlength=""40"">" + NL
+    t = t + "<input type=""submit"" value=""Go to my webmail""></p>" + NL
+    t = t + "</form>" + NL
+    t = t + "<%= BoxTop(""This mail server"") %>" + NL
+    t = t + "<p><font size=""2"">" + NL
+    t = t + "<% IF ServerAlive() THEN %>" + NL
+    t = t + "The mail server on <b><%= H(NET.HostName.Lower()) %></b> is <b><font color=""#008000"">running</font></b>, port 25." + NL
+    t = t + "<% ELSE %>" + NL
+    t = t + "The mail server on <b><%= H(NET.HostName.Lower()) %></b> is <b><font color=""#990000"">not running</font></b>; letters wait in the outbox until it starts." + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "<%= Str(Waiting()) %> letter(s) waiting to go out. <a href=""index.asp"">Use ColdMail here instead</a>." + NL
+    t = t + "</font></p>" + NL
+    t = t + "</td></tr></table>" + NL
+    t = t + "<%= Bottom() %>" + NL
+    Put("C:\WEB\MAIL\HOST.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\3.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "3|C:\WEB\MAIL\HOST.ASP" + NL)
+END SUB
+
+SUB File4 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -182,9 +340,11 @@ SUB File2 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\MAIL\INBOX.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\4.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "4|C:\WEB\MAIL\INBOX.ASP" + NL)
 END SUB
 
-SUB File3 ()
+SUB File5 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -212,6 +372,13 @@ SUB File3 ()
     t = t + "<li>Letters that cannot be delivered come back to you, with the reason</li>" + NL
     t = t + "<li>No ads. No spam filter either. It is 1996.</li>" + NL
     t = t + "</ul>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8""><tr><td bgcolor=""#EEF4FF""><font size=""2"">" + NL
+    t = t + "<b>Want your own mail server?</b> Every SIM95 machine can run one." + NL
+    t = t + "<a href=""host.asp""><b>Host ColdMail on your machine</b></a>: one small program copies it over" + NL
+    t = t + "from here, starts it, and gives you <tt>http://yourmachine/mail/</tt>.<br><br>" + NL
+    t = t + "Mail server on <%= H(NET.HostName.Lower()) %>:" + NL
+    t = t + "<% IF ServerAlive() THEN %><font color=""#008000""><b>running</b></font><% ELSE %><font color=""#990000""><b>not running</b></font><% END IF %>" + NL
+    t = t + "</font></td></tr></table>" + NL
     t = t + "</td>" + NL
     t = t + "<td width=""45%"" valign=""top"">" + NL
     t = t + "<%= Notice(problem) %>" + NL
@@ -237,9 +404,11 @@ SUB File3 ()
     t = t + "</tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\MAIL\INDEX.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\5.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "5|C:\WEB\MAIL\INDEX.ASP" + NL)
 END SUB
 
-SUB File4 ()
+SUB File6 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -266,9 +435,11 @@ SUB File4 ()
     t = t + "RESPONSE.Redirect(""inbox.asp"")" + NL
     t = t + "%>" + NL
     Put("C:\WEB\MAIL\JOIN.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\6.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "6|C:\WEB\MAIL\JOIN.ASP" + NL)
 END SUB
 
-SUB File5 ()
+SUB File7 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -281,9 +452,11 @@ SUB File5 ()
     t = t + "RESPONSE.Redirect(""inbox.asp"")" + NL
     t = t + "%>" + NL
     Put("C:\WEB\MAIL\LOGIN.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\7.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "7|C:\WEB\MAIL\LOGIN.ASP" + NL)
 END SUB
 
-SUB File6 ()
+SUB File8 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -294,9 +467,11 @@ SUB File6 ()
     t = t + "RESPONSE.Redirect(""index.asp?e=bye"")" + NL
     t = t + "%>" + NL
     Put("C:\WEB\MAIL\LOGOUT.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\8.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "8|C:\WEB\MAIL\LOGOUT.ASP" + NL)
 END SUB
 
-SUB File7 ()
+SUB File9 ()
     t = ""
     t = t + "' MAIL.SPK - ColdMail webmail, shared by every page in C:\WEB\MAIL." + NL
     t = t + "'" + NL
@@ -751,9 +926,11 @@ SUB File7 ()
     t = t + "         + ""</script>""" + NL
     t = t + "END FUNCTION" + NL
     Put("C:\WEB\MAIL\MAIL.SPK")
+    FS.Write("C:\WEB\MAIL\DIST\9.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "9|C:\WEB\MAIL\MAIL.SPK" + NL)
 END SUB
 
-SUB File8 ()
+SUB File10 ()
     t = ""
     t = t + "<%@ import file=""MAIL.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -792,9 +969,11 @@ SUB File8 ()
     t = t + "</td></tr></table>" + NL
     t = t + "<%= Bottom() %>" + NL
     Put("C:\WEB\MAIL\READ.ASP")
+    FS.Write("C:\WEB\MAIL\DIST\10.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "10|C:\WEB\MAIL\READ.ASP" + NL)
 END SUB
 
-SUB File9 ()
+SUB File11 ()
     t = ""
     t = t + "' MAILD.SPK - the ColdMail mail server. Listens on port 25 and delivers mail." + NL
     t = t + "'" + NL
@@ -820,6 +999,16 @@ SUB File9 ()
     t = t + "' The webmail (C:\WEB\MAIL\MAIL.SPK) reads and writes the same files." + NL
     t = t + "'" + NL
     t = t + "' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>." + NL
+    t = t + "'" + NL
+    t = t + "' One SIM95 quirk shapes the sending loop: a failed wait (a Connect nobody" + NL
+    t = t + "' answers, a Receive that times out) can be caught with TRY, but the handler it" + NL
+    t = t + "' happened in is spoiled: the error comes back at its next wait, and at the" + NL
+    t = t + "' next pause the interpreter takes every 512 statements. So after a failed" + NL
+    t = t + "' delivery the tick ends at once, noting only which letter and why" + NL
+    t = t + "' (pendingPath, pendingAnswer); the next tick, a fresh handler, writes down the" + NL
+    t = t + "' retry or the bounce before anything else. The whole tick sits in a TRY with" + NL
+    t = t + "' an empty CATCH and nothing after it, so a spoiled tick can only end. The" + NL
+    t = t + "' failed letter then waits for its retry time and cannot hold up the others." + NL
     t = t + "" + NL
     t = t + "CONST DATA = ""C:\MAILDATA""" + NL
     t = t + "CONST PORT = 25" + NL
@@ -829,6 +1018,11 @@ SUB File9 ()
     t = t + "VAR sock AS NET_Socket" + NL
     t = t + "VAR timer AS GUI_Timer" + NL
     t = t + "VAR busy AS Bool" + NL
+    t = t + "VAR busySince AS Integer      ' a tick cut short by a spoiled handler leaves busy set; this lets go" + NL
+    t = t + "VAR failed AS Bool            ' a wait failed in this tick: it must end now" + NL
+    t = t + "VAR pendingPath AS String     ' the letter it was, for the next tick to settle" + NL
+    t = t + "VAR pendingAnswer AS String" + NL
+    t = t + "VAR outSock AS NET_Socket" + NL
     t = t + "VAR retry AS Integer = 30" + NL
     t = t + "VAR tries AS Integer = 5" + NL
     t = t + "VAR received AS Integer" + NL
@@ -994,11 +1188,21 @@ SUB File9 ()
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- receiving" + NL
     t = t + "" + NL
+    t = t + "' An answer to the other server. It may already have hung up (it sends QUIT" + NL
+    t = t + "' and closes without waiting for ""221 Bye""); that is no reason to stop." + NL
+    t = t + "SUB Reply (conn AS NET_Connection, text AS String)" + NL
+    t = t + "    IF NOT conn.IsOpen THEN RETURN" + NL
+    t = t + "    TRY" + NL
+    t = t + "        conn.Send(text)" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "    END TRY" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
     t = t + "' Each connection's state lives in its Tag: helo|from|rcpt1,rcpt2" + NL
     t = t + "SUB Sock_OnConnect (conn AS NET_Connection)" + NL
     t = t + "    conn.Accept()" + NL
     t = t + "    conn.Tag = ""||""" + NL
-    t = t + "    conn.Send(""220 "" + NET.HostName + "" ColdMail ready"")" + NL
+    t = t + "    Reply(conn, ""220 "" + NET.HostName + "" ColdMail ready"")" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "SUB Sock_OnMessage (conn AS NET_Connection, message AS String)" + NL
@@ -1017,27 +1221,27 @@ SUB File9 ()
     t = t + "" + NL
     t = t + "    IF cmd.StartsWith(""HELO"") OR cmd.StartsWith(""EHLO"") THEN" + NL
     t = t + "        state[0] = arg.Trim()" + NL
-    t = t + "        conn.Send(""250 Hello "" + arg.Trim() + "", pleased to meet you"")" + NL
+    t = t + "        Reply(conn, ""250 Hello "" + arg.Trim() + "", pleased to meet you"")" + NL
     t = t + "    ELSEIF cmd.StartsWith(""MAIL FROM"") THEN" + NL
     t = t + "        state[1] = Bare(arg)" + NL
     t = t + "        state[2] = """"" + NL
-    t = t + "        conn.Send(""250 OK"")" + NL
+    t = t + "        Reply(conn, ""250 OK"")" + NL
     t = t + "    ELSEIF cmd.StartsWith(""RCPT TO"") THEN" + NL
     t = t + "        who = Bare(arg)" + NL
     t = t + "        IF state[1] = """" THEN" + NL
-    t = t + "            conn.Send(""503 MAIL FROM first"")" + NL
+    t = t + "            Reply(conn, ""503 MAIL FROM first"")" + NL
     t = t + "        ELSEIF NOT IsLocal(HostPart(who)) THEN" + NL
-    t = t + "            conn.Send(""551 I only take mail for "" + NET.HostName.Lower())" + NL
+    t = t + "            Reply(conn, ""551 I only take mail for "" + NET.HostName.Lower())" + NL
     t = t + "        ELSEIF NOT HasMailbox(UserPart(who)) THEN" + NL
-    t = t + "            conn.Send(""550 No such user here: "" + UserPart(who))" + NL
+    t = t + "            Reply(conn, ""550 No such user here: "" + UserPart(who))" + NL
     t = t + "        ELSE" + NL
     t = t + "            IF state[2] <> """" THEN state[2] = state[2] + "",""" + NL
     t = t + "            state[2] = state[2] + UserPart(who)" + NL
-    t = t + "            conn.Send(""250 OK"")" + NL
+    t = t + "            Reply(conn, ""250 OK"")" + NL
     t = t + "        END IF" + NL
     t = t + "    ELSEIF cmd.StartsWith(""DATA"") THEN" + NL
     t = t + "        IF state[2] = """" THEN" + NL
-    t = t + "            conn.Send(""503 RCPT TO first"")" + NL
+    t = t + "            Reply(conn, ""503 RCPT TO first"")" + NL
     t = t + "        ELSE" + NL
     t = t + "            body = """"" + NL
     t = t + "            IF message.Contains(Chr(10)) THEN body = message.Substring(message.IndexOf(Chr(10)) + 1, message.Length - message.IndexOf(Chr(10)) - 1)" + NL
@@ -1048,21 +1252,21 @@ SUB File9 ()
     t = t + "            Note(""Received mail from "" + state[1] + "" ("" + conn.FromAddress + "") for "" + state[2])" + NL
     t = t + "            state[1] = """"" + NL
     t = t + "            state[2] = """"" + NL
-    t = t + "            conn.Send(""250 OK delivered"")" + NL
+    t = t + "            Reply(conn, ""250 OK delivered"")" + NL
     t = t + "            Status()" + NL
     t = t + "        END IF" + NL
     t = t + "    ELSEIF cmd = ""RSET"" THEN" + NL
     t = t + "        state[1] = """"" + NL
     t = t + "        state[2] = """"" + NL
-    t = t + "        conn.Send(""250 OK"")" + NL
+    t = t + "        Reply(conn, ""250 OK"")" + NL
     t = t + "    ELSEIF cmd = ""NOOP"" THEN" + NL
-    t = t + "        conn.Send(""250 OK"")" + NL
+    t = t + "        Reply(conn, ""250 OK"")" + NL
     t = t + "    ELSEIF cmd = ""QUIT"" THEN" + NL
-    t = t + "        conn.Send(""221 Bye"")" + NL
+    t = t + "        Reply(conn, ""221 Bye"")" + NL
     t = t + "        conn.Close()" + NL
     t = t + "        RETURN" + NL
     t = t + "    ELSE" + NL
-    t = t + "        conn.Send(""500 What? I know HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP and QUIT"")" + NL
+    t = t + "        Reply(conn, ""500 What? I know HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP and QUIT"")" + NL
     t = t + "    END IF" + NL
     t = t + "    conn.Tag = state.Join(""|"")" + NL
     t = t + "END SUB" + NL
@@ -1086,19 +1290,49 @@ SUB File9 ()
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "SUB Timer_OnTick ()" + NL
+    t = t + "    TRY" + NL
+    t = t + "        Tick()" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "    END TRY" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB Tick ()" + NL
     t = t + "    VAR f AS String" + NL
-    t = t + "    IF busy THEN RETURN" + NL
+    t = t + "    IF busy AND TIME.Now - busySince < 20 THEN RETURN" + NL
     t = t + "    busy = TRUE" + NL
+    t = t + "    busySince = TIME.Now" + NL
     t = t + "    FS.Write(DATA + ""\ALIVE.TXT"", Str(TIME.Now))" + NL
+    t = t + "    failed = FALSE" + NL
+    t = t + "    IF pendingPath <> """" THEN Settle()" + NL
     t = t + "    TRY" + NL
     t = t + "        FOR EACH f IN Spooled()" + NL
     t = t + "            Attempt(DATA + ""\SPOOL\"" + f)" + NL
+    t = t + "            IF failed THEN RETURN" + NL
     t = t + "        NEXT" + NL
     t = t + "    CATCH err" + NL
+    t = t + "        IF failed THEN RETURN" + NL
     t = t + "        Note(""ERROR "" + err)" + NL
     t = t + "    END TRY" + NL
     t = t + "    busy = FALSE" + NL
     t = t + "    Status()" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Finishes the letter a spoiled tick left behind." + NL
+    t = t + "SUB Settle ()" + NL
+    t = t + "    VAR path AS String" + NL
+    t = t + "    VAR answer AS String" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    VAR head AS String" + NL
+    t = t + "    path = pendingPath" + NL
+    t = t + "    answer = pendingAnswer" + NL
+    t = t + "    pendingPath = """"" + NL
+    t = t + "    pendingAnswer = """"" + NL
+    t = t + "    IF NOT IsNothing(outSock) THEN outSock.Close()" + NL
+    t = t + "    IF answer = """" THEN answer = ""421 interrupted""" + NL
+    t = t + "    IF NOT FS.Exists(path) THEN RETURN" + NL
+    t = t + "    text = FS.Read(path)" + NL
+    t = t + "    head = text.Substring(0, text.IndexOf(Chr(10) + Chr(10)))" + NL
+    t = t + "    Conclude(path, Header(head, ""X-Sender""), Header(head, ""X-Recipient""), Int(Val(Header(head, ""X-Tries""))), text.Substring(head.Length + 2, text.Length - head.Length - 2), answer)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "SUB Attempt (path AS String)" + NL
@@ -1134,7 +1368,16 @@ SUB File9 ()
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL
     t = t + "" + NL
+    t = t + "    pendingPath = path" + NL
+    t = t + "    pendingAnswer = """"" + NL
     t = t + "    answer = Transfer(sender, recipient, letter)" + NL
+    t = t + "    IF failed THEN RETURN" + NL
+    t = t + "    pendingPath = """"" + NL
+    t = t + "    Conclude(path, sender, recipient, n, letter, answer)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' What happens to a letter after one try at sending it." + NL
+    t = t + "SUB Conclude (path AS String, sender AS String, recipient AS String, n AS Integer, letter AS String, answer AS String)" + NL
     t = t + "    IF answer.StartsWith(""250"") THEN" + NL
     t = t + "        Note(""Sent "" + sender + "" -> "" + recipient)" + NL
     t = t + "        sent = sent + 1" + NL
@@ -1154,14 +1397,16 @@ SUB File9 ()
     t = t + "' Hands one letter to the recipient's mail server. Returns its final answer:" + NL
     t = t + "' ""250 ..."" delivered, ""5xx ..."" refused for good, anything else: try later." + NL
     t = t + "FUNCTION Transfer (sender AS String, recipient AS String, letter AS String) AS String" + NL
-    t = t + "    VAR out AS NET_Socket" + NL
     t = t + "    VAR conn AS NET_Connection" + NL
     t = t + "    VAR answer AS String" + NL
-    t = t + "    out = NET_Socket.New()" + NL
+    t = t + "    outSock = NET_Socket.New()" + NL
     t = t + "    TRY" + NL
-    t = t + "        conn = out.Connect(HostPart(recipient), PORT)" + NL
+    t = t + "        conn = outSock.Connect(HostPart(recipient), PORT)" + NL
     t = t + "    CATCH err" + NL
-    t = t + "        RETURN ""421 "" + err" + NL
+    t = t + "        failed = TRUE" + NL
+    t = t + "        pendingAnswer = ""421 "" + err" + NL
+    t = t + "        busy = FALSE" + NL
+    t = t + "        RETURN pendingAnswer" + NL
     t = t + "    END TRY" + NL
     t = t + "    TRY" + NL
     t = t + "        answer = conn.Receive(5000)" + NL
@@ -1179,13 +1424,21 @@ SUB File9 ()
     t = t + "        IF NOT answer.StartsWith(""250"") THEN THROW answer" + NL
     t = t + "        conn.Send(""QUIT"")" + NL
     t = t + "    CATCH err" + NL
+    t = t + "        ' An answer we THREW ourselves leaves the handler fine; a failed Receive does not." + NL
+    t = t + "        IF NOT (err.StartsWith(""5"") OR err.StartsWith(""4"") OR err.StartsWith(""2"")) THEN" + NL
+    t = t + "            failed = TRUE" + NL
+    t = t + "            pendingAnswer = ""421 "" + err" + NL
+    t = t + "            busy = FALSE" + NL
+    t = t + "            RETURN pendingAnswer" + NL
+    t = t + "        END IF" + NL
     t = t + "        answer = err" + NL
-    t = t + "        IF NOT (answer.StartsWith(""5"") OR answer.StartsWith(""4"")) THEN answer = ""421 "" + answer" + NL
     t = t + "    END TRY" + NL
-    t = t + "    out.Close()" + NL
+    t = t + "    outSock.Close()" + NL
     t = t + "    RETURN answer" + NL
     t = t + "END FUNCTION" + NL
     Put("C:\PROGRAMS\MAILD.SPK")
+    FS.Write("C:\WEB\MAIL\DIST\11.TXT", t)
+    FS.Append("C:\WEB\MAIL\DIST\MANIFEST.TXT", "11|C:\PROGRAMS\MAILD.SPK" + NL)
 END SUB
 
 SUB StartService (name AS String, program AS String, runFile AS String)

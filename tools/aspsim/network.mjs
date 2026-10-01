@@ -68,6 +68,7 @@ class Widget {
     else if (this.type === "Window" && (p === "Title" || p === "Text")) this.props.Title = v;
     else this.props[p] = v;
     if (this.type === "Timer" && p === "Enabled") v ? this.call("Start") : this.call("Stop");
+    if (this.type === "Timer" && p === "Interval" && this.timer) { clearInterval(this.timer); this.timer = setInterval(() => this.fire("onTick"), Math.max(1, v)); }
   }
   call(m, ...a) {
     switch (m) {

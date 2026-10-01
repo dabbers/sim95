@@ -71,10 +71,40 @@ const apps = {
 ' ColdMail without losing any mail. Then open http://YOURNAME/mail/ in Voyager.`,
     copy: [["coldmail/WEB/MAIL", "C:\\WEB\\MAIL"], ["coldmail/PROGRAMS", "C:\\PROGRAMS"]],
     dirs: ["C:\\WEB\\MAIL"],
+    // Numbered copies of every file, served as plain text, for GETMAIL.SPK
+    // (see coldmail/WEB/MAIL/GETMAIL.TXT) to fetch one at a time.
+    dist: "C:\\WEB\\MAIL\\DIST",
     first: [],
     last: [`StartService("MAILD", "C:\\PROGRAMS\\MAILD.SPK", "MAIL.RUN")`],
     url: "/mail/",
     code: () => startService,
+  },
+  asksim: {
+    title: "AskSim",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
+' search pages in C:\\WEB\\ASK and the crawler in C:\\PROGRAMS\\CRAWLER.SPK, starts
+' the crawler (it goes round the network straight away, then every hour), and
+' adds it to C:\\SYSTEM\\STARTUP. The index in C:\\ASKDATA is kept, so running
+' this again upgrades AskSim. Then open http://YOURNAME/ask/ in Voyager.`,
+    copy: [["asksim/WEB/ASK", "C:\\WEB\\ASK"], ["asksim/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: ["C:\\WEB\\ASK"],
+    first: [],
+    last: [`StartService("CRAWLER", "C:\\PROGRAMS\\CRAWLER.SPK", "ASKSIM.RUN")`],
+    url: "/ask/",
+    code: () => startService,
+  },
+  eliza: {
+    title: "ELIZA-95",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95
+' in C:\\WEB\\BOT. Conversations live in C:\\BOTDATA. If AskSim is installed on
+' this machine too, ELIZA-95 answers "what is ...?" from its index. Then open
+' http://YOURNAME/bot/ in Voyager.`,
+    copy: [["eliza/WEB/BOT", "C:\\WEB\\BOT"]],
+    dirs: ["C:\\WEB\\BOT"],
+    first: [],
+    last: [],
+    url: "/bot/",
+    code: () => "",
   },
 };
 
@@ -93,6 +123,7 @@ VAR NL AS String
 SUB Main ()
     NL = Chr(10)
 ${app.dirs.map((d) => `    IF NOT FS.Exists(${lit(d)}) THEN FS.MakeDir(${lit(d)})`).join("\n")}
+${app.dist ? `    IF NOT FS.Exists(${lit(app.dist)}) THEN FS.MakeDir(${lit(app.dist)})\n    FS.Write(${lit(app.dist + "\\MANIFEST.TXT")}, "")` : ""}
 ${app.first.map((s) => "    " + s).join("\n")}
 ${files.map((f, i) => `    File${i}()`).join("\n")}
     Print("${app.title} is installed (${files.length} files).")
@@ -110,7 +141,9 @@ END SUB
     if (lines[lines.length - 1] === "") lines.pop();
     out += `\nSUB File${i} ()\n    t = ""\n`;
     for (const l of lines) out += `    t = t + ${lit(l)} + NL\n`;
-    out += `    Put(${lit(f.dest)})\nEND SUB\n`;
+    out += `    Put(${lit(f.dest)})\n`;
+    if (app.dist) out += `    FS.Write(${lit(app.dist + "\\" + i + ".TXT")}, t)\n    FS.Append(${lit(app.dist + "\\MANIFEST.TXT")}, ${lit(i + "|" + f.dest)} + NL)\n`;
+    out += `END SUB\n`;
   });
   out += app.code();
   fs.writeFileSync(path.join(root, key, "INSTALL.SPK"), out);

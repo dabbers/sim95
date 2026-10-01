@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 let failures = 0;
 async function test(name, fn) {
   try { await fn(); console.log("ok    " + name); }
-  catch (e) { failures++; console.log("FAIL  " + name + "\n      " + (e.stack || e).toString().split("\n").slice(0, 4).join("\n      ")); }
+  catch (e) { failures++; console.log("FAIL  " + name + "\n      " + (e.message || e) + "\n      " + String(e.stack || "").split("\n").slice(1, 3).join("\n      ")); }
 }
 const ok = (r) => {
   assert.equal(r.status, "200 OK", r.url + " -> " + r.status + "\n" + r.body.slice(-400));
@@ -42,7 +42,10 @@ async function install(m) {
   return m.output(pid);
 }
 const maild = (m) => m.kernel.ps().find((p) => p.name === "MAILD")?.pid;
-const serverLog = (m) => m.widgets(maild(m), "ListBox")[0].get("Items").join("\n");
+const serverLog = (m) => {
+  if (!maild(m)) throw new Error("no mail server running on " + m.stack.hostname() + ": " + JSON.stringify(m.ui.dialogs) + " " + m.errors.join("; "));
+  return m.widgets(maild(m), "ListBox")[0].get("Items").join("\n");
+};
 async function join(m, u, name, pw = "secret") {
   const b = browser(m);
   const r = ok(await b.post("/mail/join.asp", { name, u, pw, pw2: pw }));
@@ -59,7 +62,7 @@ const bravo = await net.boot("BRAVO");
 await test("the installer writes the pages and the server, starts it, and adds it to startup", async () => {
   const said = await install(alpha);
   await install(bravo);
-  assert.match(said, /ColdMail is installed \(10 files\)/);
+  assert.match(said, /ColdMail is installed \(12 files\)/);
   assert.match(said, /started C:\\PROGRAMS\\MAILD.SPK/);
   for (const f of fs.readdirSync(path.join(root, "coldmail/WEB/MAIL"))) assert.equal(alpha.read("C:\\WEB\\MAIL\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB/MAIL", f), "utf8"), f);
   assert.equal(alpha.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
@@ -212,6 +215,70 @@ await test("the mail server speaks SMTP to anyone who connects", async () => {
   assert.match(await ask("WHAT"), /^500/);
   assert.match(await ask("QUIT"), /^221 Bye/);
   await arrives(alpha, "ann", "by hand");
+});
+
+await test("letters for dead machines don't hold up the rest, and nothing crashes", async () => {
+  for (const host of ["gone1", "gone2", "gone3"]) ok(await ann.post("/mail/compose.asp", { to: "zed@" + host, subject: "Into the void " + host, text: "?" }));
+  ok(await ann.post("/mail/compose.asp", { to: "bob@bravo", subject: "Behind the void", text: "!" }));
+  await arrives(bravo, "bob", "Behind the void");
+  for (const host of ["gone1", "gone2", "gone3"]) await arrives(alpha, "ann", "Undeliverable: Into the void " + host);
+  assert.deepEqual(alpha.ui.dialogs, [], "no runtime errors");
+  assert.ok(alpha.running(maild(alpha)));
+});
+
+await test("the front page offers to host ColdMail, and says whether the server runs", async () => {
+  const r = ok(await rawBrowser(alpha).get("/mail/"));
+  assert.match(r.body, /<a href="host.asp"><b>Host ColdMail on your machine<\/b><\/a>/);
+  assert.match(r.body, /Mail server on alpha:\s*<font color="#008000"><b>running<\/b>/);
+  const h = ok(await rawBrowser(alpha).get("/mail/host.asp"));
+  assert.match(h.body, /CONST FROM = &quot;alpha&quot;/);
+  assert.match(h.body, /is <b><font color="#008000">running<\/font><\/b>, port 25/);
+  const go = await alpha.request("GET", "/mail/host.asp?go=Charlie");
+  assert.ok(go.headers.includes("Location: http://charlie/mail/"));
+  assert.equal((await alpha.request("GET", "/mail/host.asp?go=" + encodeURIComponent("evil/path?x"))).status, "200 OK");
+});
+
+// The program in host.asp's text box, the way a visitor copies it out
+const decode = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+async function bootstrapFrom(m) {
+  const body = (await m.request("GET", "/mail/host.asp")).body;
+  return decode(body.slice(body.indexOf("readonly>") + 9, body.indexOf("</textarea>")));
+}
+
+await test("GETMAIL.SPK copies ColdMail onto another machine, which can then mail back", async () => {
+  const charlie = await net.boot("CHARLIE");
+  charlie.run("C:\\PROGRAMS\\HTTPD.SPK");
+  charlie.write("C:\\MYFILES\\GETMAIL.SPK", await bootstrapFrom(alpha));
+  alpha.run("C:\\PROGRAMS\\HTTPD.SPK");
+  const pid = charlie.run("C:\\MYFILES\\GETMAIL.SPK");
+  await net.until(() => !charlie.running(pid), 30000, "GETMAIL");
+  const said = charlie.output(pid);
+  assert.match(said, /ColdMail is installed \(12 files\) and your mail server is running/, said + JSON.stringify(charlie.ui.dialogs));
+  for (const f of fs.readdirSync(path.join(root, "coldmail/WEB/MAIL"))) assert.equal(charlie.read("C:\\WEB\\MAIL\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB/MAIL", f), "utf8"), f);
+  assert.equal(charlie.read("C:\\PROGRAMS\\MAILD.SPK"), fs.readFileSync(path.join(root, "coldmail/PROGRAMS/MAILD.SPK"), "utf8"));
+  assert.equal(charlie.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
+  await net.until(() => maild(charlie), 10000, "charlie's mail server");
+  const dee = await join(charlie, "dee", "Dee Charlie");
+  ok(await dee.post("/mail/compose.asp", { to: "ann@alpha", subject: "Hello from Charlie", text: "I host my own now." }));
+  await arrives(alpha, "ann", "Hello from Charlie");
+
+  // ...and Charlie can hand it on in turn
+  const delta = await net.boot("DELTA");
+  delta.write("C:\\MYFILES\\GETMAIL.SPK", await bootstrapFrom(charlie));
+  assert.match(delta.read("C:\\MYFILES\\GETMAIL.SPK"), /CONST FROM = "charlie"/);
+  const p2 = delta.run("C:\\MYFILES\\GETMAIL.SPK");
+  await net.until(() => !delta.running(p2), 30000, "GETMAIL from charlie");
+  assert.match(delta.output(p2), /ColdMail is installed \(12 files\)/);
+  assert.deepEqual([...charlie.ui.dialogs, ...delta.ui.dialogs], []);
+});
+
+await test("GETMAIL says so when the machine it comes from isn't there", async () => {
+  const echo = await net.boot("ECHO");
+  echo.write("C:\\MYFILES\\GETMAIL.SPK", (await bootstrapFrom(alpha)).replace('CONST FROM = "alpha"', 'CONST FROM = "nowhere"'));
+  const pid = echo.run("C:\\MYFILES\\GETMAIL.SPK");
+  await net.until(() => !echo.running(pid), 30000, "GETMAIL");
+  assert.match(echo.output(pid), /Could not reach nowhere: Unknown host/);
+  assert.ok(!echo.exists("C:\\WEB\\MAIL"));
 });
 
 await test("long folders and long letters still fit on one page", async () => {
