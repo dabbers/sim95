@@ -1,0 +1,86 @@
+<html><head><title>About SimTube - movies for the SIM95 network</title>
+<meta name="description" content="SimTube is a free movie site for the SIM95 network: watch, upload, rate and comment on SimMovies, and play them in SimPlayer, the streaming movie player for SIM95.">
+<meta name="keywords" content="video, videos, movies, movie, streaming, streaming video, player, media player, realplayer, windows media player, upload, watch, broadcast, tv, television, cartoons, animation, funny, dancing baby, all your base, simtube, simplayer, smv">
+</head>
+<body bgcolor="#FFFFFF">
+<table width="100%" cellpadding="6" cellspacing="0"><tr><td><font size="6"><b>Sim</b></font><font size="6"><b><font color="#CC0000">[</font>Tube<font color="#CC0000">]</font></b></font><br><font size="1" color="#808080">Your 16-colour television</font></td></tr></table>
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#CC0000"><font size="1">&nbsp;</font></td></tr></table>
+<h2><font color="#CC0000">About SimTube</font></h2>
+<p><b>SimTube is the movie site for the SIM95 network.</b> Watch the latest cartoons,
+put up your own, give them stars and say what you think. It is free and anyone can join.</p>
+
+<h3>Watching</h3>
+<p>SimTube movies play in <b>SimPlayer</b>, the movie player for SIM95 (<tt>C:\PROGRAMS\PLAYER.SPK</tt>).
+Each movie's page has its address, like <tt>http://<i>machine</i>/tube/movie.asp?v=1</tt>.
+Paste it into SimPlayer's Address box and press Enter. SimPlayer shows <i>Buffering...</i>
+while the first part arrives, then starts playing while the rest download. It has Play/Pause,
+Stop, Rewind, a frame at a time (the &lt; and &gt; buttons), a seek bar you can click or drag,
+Loop, and Mute (yes, SimMovies beep).</p>
+<p>No SimPlayer on your machine? <a href="getplay.asp">Get SimPlayer</a> and save it as
+<tt>C:\PROGRAMS\PLAYER.SPK</tt>.</p>
+
+<h3>Making a movie</h3>
+<p>A SimMovie (<tt>.SMV</tt>) is a text file you can write in Notes or make with a SPARK
+program. It starts with a header, then a line holding just a full stop, then one line for
+each frame:</p>
+<pre>SIMMOVIE 1
+title=Ball
+author=ann
+width=160
+height=120
+fps=10
+frames=3
+bg=0
+thumb=1
+.
+*C12;D20,60,10
+C0;F10,50,21,21;C12;D30,60,10
+C0;F20,50,21,21;C12;D40,60,10;S440,50</pre>
+<p>Header: <tt>title</tt>, <tt>author</tt>, <tt>width</tt> and <tt>height</tt> (up to 320 by 240),
+<tt>fps</tt> (frames a second, 1 to 30), <tt>frames</tt>, <tt>bg</tt> (the background colour),
+<tt>thumb</tt> (which frame is the movie's picture; the first, if not given) and <tt>about</tt>.</p>
+<p>A frame is drawing commands separated by semicolons. A frame that starts with
+<tt>*</tt> is a <b>keyframe</b>: it starts from a blank screen, and SimPlayer can jump
+straight to it. Any other frame draws over the one before, so only what moves need be drawn
+again. A frame of just <tt>-</tt> changes nothing.</p>
+<table border="1" cellpadding="3" cellspacing="0">
+<tr><td><tt>C</tt><i>n</i></td><td>drawing colour, 0 to 15</td></tr>
+<tr><td><tt>B</tt><i>n</i></td><td>background colour (for <tt>X</tt>)</td></tr>
+<tr><td><tt>X</tt></td><td>clear the screen</td></tr>
+<tr><td><tt>F</tt><i>x,y,w,h</i></td><td>filled box</td></tr>
+<tr><td><tt>R</tt><i>x,y,w,h</i></td><td>box</td></tr>
+<tr><td><tt>D</tt><i>x,y,r</i></td><td>filled circle</td></tr>
+<tr><td><tt>O</tt><i>x,y,r</i></td><td>circle</td></tr>
+<tr><td><tt>L</tt><i>x1,y1,x2,y2,...</i></td><td>lines joining the points</td></tr>
+<tr><td><tt>P</tt><i>x1,y1,x2,y2,...</i></td><td>polygon</td></tr>
+<tr><td><tt>Q</tt><i>x1,y1,x2,y2,...</i></td><td>filled polygon</td></tr>
+<tr><td><tt>T</tt><i>x,y,words</i></td><td>text (no semicolons in it)</td></tr>
+<tr><td><tt>I</tt><i>x,y,name</i></td><td>a picture</td></tr>
+<tr><td><tt>S</tt><i>freq,ms</i></td><td>a beep (unless SimPlayer is muted)</td></tr>
+</table>
+<p>A picture is defined on a line of its own, before it is used, with the rows of a
+Sketch <tt>.PIC</tt> joined by <tt>|</tt>: <tt>!ball|SIM95PIC 4 2|0CC0|C00C</tt>.
+Colours: 0 black, 1 maroon, 2 green, 3 olive, 4 navy, 5 purple, 6 teal, 7 silver, 8 gray,
+9 red, 10 lime, 11 yellow, 12 blue, 13 magenta, 14 cyan, 15 white.</p>
+
+<h3>Long movies</h3>
+<p>Everything on the SIM95 network travels in messages of up to 64K, so SimTube cuts every
+movie into parts of 15K. <tt>movie.asp?v=1</tt> answers with a <b>manifest</b>
+(<tt>video/x-simmovie</tt>) that lists them:</p>
+<pre>SIMMOVIE-PARTS 1
+title=Dancing Baby
+width=160
+height=120
+fps=10
+frames=240
+parts=4
+part=movie.asp?v=2&amp;p=1
+part=movie.asp?v=2&amp;p=2
+...</pre>
+<p>An upload can be up to 60K. Put a longer movie up in pieces: upload the start, then
+send the rest with <b>Add More Frames</b> on its page. You can do the same on your own disk:
+SimPlayer opens a manifest file and its parts from the same folder.</p>
+
+<p><a href="index.asp"><b>Go to SimTube</b></a></p>
+<hr><center><font size="1" color="#808080">SimTube: movies, cartoons and streaming video for SIM95.</font></center>
+</body></html>

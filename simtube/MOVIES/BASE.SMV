@@ -1,0 +1,353 @@
+SIMMOVIE 1
+title=All Your Base
+author=SimTube
+width=200
+height=120
+fps=10
+frames=342
+bg=0
+thumb=160
+about=In A.D. 2101, war was beginning. A faithful translation of the arcade classic.
+.
+*C15;T10,86,In
+C15;T10,86,In A;S880,15
+C15;T10,86,In A.D
+C15;T10,86,In A.D. ;S880,15
+C15;T10,86,In A.D. 21
+C15;T10,86,In A.D. 2101;S880,15
+C15;T10,100,Wa
+C15;T10,100,War ;S880,15
+C15;T10,100,War wa
+C15;T10,100,War was ;S880,15
+C15;T10,100,War was be
+C15;T10,100,War was begi;S880,15
+C15;T10,100,War was beginn
+C15;T10,100,War was beginnin;S880,15
+C15;T10,100,War was beginning.
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C15;T10,86,Ca
+C15;T10,86,Capt;S880,15
+C15;T10,86,Captai
+C15;T10,86,Captain:;S880,15
+C15;T10,86,Captain: W
+C15;T10,86,Captain: Wha;S880,15
+C15;T10,86,Captain: What 
+C15;T10,86,Captain: What ha;S880,15
+C15;T10,86,Captain: What happ
+C15;T10,86,Captain: What happen;S880,15
+C15;T10,86,Captain: What happen?
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C15;T10,86,Me
+C15;T10,86,Mech;S880,15
+C15;T10,86,Mechan
+C15;T10,86,Mechanic;S880,15
+C15;T10,86,Mechanic: 
+C15;T10,86,Mechanic: So;S880,15
+C15;T10,86,Mechanic: Some
+C15;T10,86,Mechanic: Somebo;S880,15
+C15;T10,86,Mechanic: Somebody
+C15;T10,86,Mechanic: Somebody s;S880,15
+C15;T10,86,Mechanic: Somebody set
+C15;T10,100,up
+C15;T10,100,up u;S880,15
+C15;T10,100,up us 
+C15;T10,100,up us th;S880,15
+C15;T10,100,up us the 
+C15;T10,100,up us the bo;S880,15
+C15;T10,100,up us the bomb
+C15;T10,100,up us the bomb.;S880,15
+C15;F0,0,200,80;S110,80
+C0;F0,0,200,80;S110,80
+C15;F0,0,200,80;S110,80
+C0;F0,0,200,80;S110,80
+C0;F0,0,200,80
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C15;T10,86,Op
+C15;T10,86,Oper;S880,15
+C15;T10,86,Operat
+C15;T10,86,Operator;S880,15
+C15;T10,86,Operator: 
+C15;T10,86,Operator: We;S880,15
+C15;T10,86,Operator: We g
+C15;T10,86,Operator: We get;S880,15
+C15;T10,86,Operator: We get s
+C15;T10,86,Operator: We get sig;S880,15
+C15;T10,86,Operator: We get signa
+C15;T10,86,Operator: We get signal.;S880,15
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C15;T10,86,Ca
+C15;T10,86,Capt;S880,15
+C15;T10,86,Captai
+C15;T10,86,Captain:;S880,15
+C15;T10,86,Captain: W
+C15;T10,86,Captain: Wha;S880,15
+C15;T10,86,Captain: What!
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C15;T10,86,Op
+C15;T10,86,Oper;S880,15
+C15;T10,86,Operat
+C15;T10,86,Operator;S880,15
+C15;T10,86,Operator: 
+C15;T10,86,Operator: Ma;S880,15
+C15;T10,86,Operator: Main
+C15;T10,86,Operator: Main s;S880,15
+C15;T10,86,Operator: Main scr
+C15;T10,86,Operator: Main scree;S880,15
+C15;T10,86,Operator: Main screen
+C15;T10,100,tu
+C15;T10,100,turn;S880,15
+C15;T10,100,turn o
+C15;T10,100,turn on.;S880,15
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C8;Q70,30,130,30,120,70,80,70;C7;Q85,40,115,40,108,62,92,62;C12;D92,48,3;D108,48,3;C0;L94,56,100,58,106,56;C15;T10,86,CA
+C15;T10,86,CATS;S880,15
+C15;T10,86,CATS: 
+C15;T10,86,CATS: Ho;S880,15
+C15;T10,86,CATS: How 
+C15;T10,86,CATS: How ar;S880,15
+C15;T10,86,CATS: How are 
+C15;T10,86,CATS: How are yo;S880,15
+C15;T10,86,CATS: How are you
+C15;T10,100,ge
+C15;T10,100,gent;S880,15
+C15;T10,100,gentle
+C15;T10,100,gentleme;S880,15
+C15;T10,100,gentlemen 
+C15;T10,100,gentlemen !!;S880,15
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C8;Q70,30,130,30,120,70,80,70;C7;Q85,40,115,40,108,62,92,62;C12;D92,48,3;D108,48,3;C0;L94,56,100,58,106,56;C11;T10,86,CA
+C11;T10,86,CATS;S880,15
+C11;T10,86,CATS: 
+C11;T10,86,CATS: Al;S880,15
+C11;T10,86,CATS: All 
+C11;T10,86,CATS: All yo;S880,15
+C11;T10,86,CATS: All your
+C11;T10,86,CATS: All your b;S880,15
+C11;T10,86,CATS: All your bas
+C11;T10,86,CATS: All your base;S880,15
+C11;T10,100,ar
+C11;T10,100,are ;S880,15
+C11;T10,100,are be
+C11;T10,100,are belo;S880,15
+C11;T10,100,are belong
+C11;T10,100,are belong t;S880,15
+C11;T10,100,are belong to 
+C11;T10,100,are belong to us;S880,15
+C11;T10,100,are belong to us.
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C8;Q70,30,130,30,120,70,80,70;C7;Q85,40,115,40,108,62,92,62;C12;D92,48,3;D108,48,3;C0;L94,56,100,58,106,56;C15;T10,86,CA
+C15;T10,86,CATS;S880,15
+C15;T10,86,CATS: 
+C15;T10,86,CATS: Yo;S880,15
+C15;T10,86,CATS: You 
+C15;T10,86,CATS: You ar;S880,15
+C15;T10,86,CATS: You are 
+C15;T10,86,CATS: You are on;S880,15
+C15;T10,86,CATS: You are on t
+C15;T10,86,CATS: You are on the;S880,15
+C15;T10,86,CATS: You are on the w
+C15;T10,86,CATS: You are on the way;S880,15
+C15;T10,100,to
+C15;T10,100,to d;S880,15
+C15;T10,100,to des
+C15;T10,100,to destr;S880,15
+C15;T10,100,to destruc
+C15;T10,100,to destructi;S880,15
+C15;T10,100,to destruction
+C15;T10,100,to destruction.;S880,15
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C15;T10,86,Ca
+C15;T10,86,Capt;S880,15
+C15;T10,86,Captai
+C15;T10,86,Captain:;S880,15
+C15;T10,86,Captain: T
+C15;T10,86,Captain: Tak;S880,15
+C15;T10,86,Captain: Take 
+C15;T10,86,Captain: Take of;S880,15
+C15;T10,86,Captain: Take off 
+C15;T10,86,Captain: Take off ev;S880,15
+C15;T10,86,Captain: Take off ever
+C15;T10,86,Captain: Take off every;S880,15
+C15;T10,100,'Z
+C15;T10,100,'ZIG;S880,15
+C15;T10,100,'ZIG' 
+C15;T10,100,'ZIG' !!;S880,15
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C7;Q100,30,130,60,100,52,70,60;C12;F97,52,7,8;C15;T10,86,Ca
+C15;T10,86,Capt;S880,15
+C15;T10,86,Captai
+C15;T10,86,Captain:;S880,15
+C15;T10,86,Captain: F
+C15;T10,86,Captain: For;S880,15
+C15;T10,86,Captain: For g
+C15;T10,86,Captain: For gre;S880,15
+C15;T10,86,Captain: For great
+C15;T10,86,Captain: For great j;S880,15
+C15;T10,86,Captain: For great jus
+C15;T10,86,Captain: For great justi;S880,15
+C15;T10,86,Captain: For great justice
+C15;T10,86,Captain: For great justice.;S880,15
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+*C14;T70,40,HA HA HA HA ....
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-

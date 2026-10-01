@@ -31,6 +31,7 @@ VAR cAsk AS GUI_CheckBox
 VAR cBot AS GUI_CheckBox
 VAR cGeo AS GUI_CheckBox
 VAR cPal AS GUI_CheckBox
+VAR cTube AS GUI_CheckBox
 VAR cGames AS GUI_CheckBox
 VAR cFrost AS GUI_CheckBox
 VAR cFav AS GUI_CheckBox
@@ -86,6 +87,7 @@ SUB Main ()
     cFav = Check("Simxplorer favorites", 220, 172)
     cGeo = Check("GeoSimies: homepages, guestbooks", 220, 192)
     cPal = Check("SimPal: accounts and money", 10, 212)
+    cTube = Check("SimTube: movies and comments", 220, 212)
     goBtn = GUI_Button.New(win)
     goBtn.SetBounds(330, 48, 100, 26)
     goBtn.Text = "Move In"
@@ -158,6 +160,8 @@ FUNCTION SetName (s AS String) AS String
             RETURN "GeoSimies"
         CASE "PAL"
             RETURN "SimPal"
+        CASE "TUBE"
+            RETURN "SimTube"
     END SELECT
     RETURN "Favorites"
 END FUNCTION
@@ -181,6 +185,8 @@ FUNCTION SetPath (s AS String) AS String
             RETURN "C:\GEODATA"
         CASE "PAL"
             RETURN "C:\PALDATA"
+        CASE "TUBE"
+            RETURN "C:\TUBEDATA"
     END SELECT
     RETURN "C:\SYSTEM\FAVORITE.TXT"
 END FUNCTION
@@ -197,7 +203,7 @@ END FUNCTION
 FUNCTION Skip (path AS String) AS Bool
     VAR p AS String
     p = path.Upper()
-    RETURN p = "C:\BOOKDATA\SESSIONS" OR p = "C:\MAILDATA\SESSIONS" OR p = "C:\MAILDATA\ALIVE.TXT" OR p = "C:\GEODATA\SESSIONS" OR p = "C:\PALDATA\SESSIONS" OR p = "C:\PALDATA\LOCK"
+    RETURN p = "C:\BOOKDATA\SESSIONS" OR p = "C:\MAILDATA\SESSIONS" OR p = "C:\MAILDATA\ALIVE.TXT" OR p = "C:\GEODATA\SESSIONS" OR p = "C:\PALDATA\SESSIONS" OR p = "C:\PALDATA\LOCK" OR p = "C:\TUBEDATA\SESSIONS"
 END FUNCTION
 
 ' Where a web app keeps its pages here (SimBook's pictures and GeoSimies'
@@ -262,6 +268,7 @@ SUB Go_Click ()
     IF cFav.Checked THEN all.Add("FAV")
     IF cGeo.Checked THEN all.Add("GEO")
     IF cPal.Checked THEN all.Add("PAL")
+    IF cTube.Checked THEN all.Add("TUBE")
     IF all.Count = 0 THEN
         Warn("Tick what to move in.")
         RETURN
@@ -271,6 +278,11 @@ SUB Go_Click ()
         IF s = "PAL" AND HasData(SetPath(s)) THEN
             ' two ledgers can't be added together without making or losing money
             Warn("This machine already has SimPal accounts in C:\PALDATA, and two SimPal ledgers can't be joined without money going missing. SimPal is skipped." + EOL + EOL + "To move it anyway, rename C:\PALDATA here first.")
+            CONTINUE
+        END IF
+        IF s = "TUBE" AND HasData(SetPath(s)) THEN
+            ' movies are numbered: two SimTubes' numbers would collide
+            Warn("This machine already has SimTube movies in C:\TUBEDATA, and two SimTubes can't be joined: their movie numbers would collide. SimTube is skipped." + EOL + EOL + "To move it anyway, rename C:\TUBEDATA here first.")
             CONTINUE
         END IF
         IF HasData(SetPath(s)) THEN

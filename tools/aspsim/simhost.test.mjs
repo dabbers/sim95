@@ -279,6 +279,7 @@ await test("Move In brings GeoSimies homepages and SimPal money, and never merge
   assert.match(asked, /already has GeoSimies data/);
   assert.match(asked, /two SimPal ledgers can't be joined/);
   assert.doesNotMatch(asked, /already has SimPal data/);
+  assert.doesNotMatch(asked, /SimTube/, "no movies on either machine: nothing to say");
 });
 
 await test("Vapor knows web apps live in folders here", async () => {

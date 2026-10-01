@@ -1,0 +1,1062 @@
+' PLAYER.SPK - SimPlayer, the movie player for SIM95. Plays SimMovies (.SMV)
+' from this disk or from the web, such as the ones on SimTube.
+'
+'   SPARK C:\PROGRAMS\PLAYER.SPK C:\MYFILES\DANCE.SMV
+'   SPARK C:\PROGRAMS\PLAYER.SPK http://alpha/tube/movie.asp?v=2
+'
+' A SimMovie is text: a header, then one line per frame of drawing commands
+' for a GUI_Canvas (see simtube/README.md). A long one is cut into parts of
+' about 15K, each small enough for one network message, and a manifest
+' (it starts "SIMMOVIE-PARTS 1") says where the parts are. SimPlayer fetches
+' the parts one at a time and starts playing as soon as it has a few seconds
+' in hand, like the streaming players do.
+'
+' Fetches go one at a time and start in a timer tick of their own, inside a
+' TRY with an empty CATCH (see SIM95-NOTES.md); pages come in through the
+' socket's events. Playback runs off a second timer and SYS.Ticks, so a movie
+' plays at its own speed whatever the timer manages.
+'
+' For the curious (and for tests): the window's Tag says what is going on,
+'   state|frame|frames|loaded|parts in|parts|loop|mute
+
+CONST AHEAD = 3             ' seconds of movie in hand before playing
+CONST PATIENCE = 8000       ' ms to wait for a web server
+CONST MAXTRIES = 3
+CONST MINW = 336
+
+VAR EOL AS String
+VAR win AS GUI_Window
+VAR bar AS GUI_Menu
+VAR addrLabel AS GUI_Label
+VAR addr AS GUI_TextBox
+VAR openBtn AS GUI_Button
+VAR screen AS GUI_Canvas
+VAR info AS GUI_Label
+VAR seekBar AS GUI_Canvas
+VAR playBtn AS GUI_Button
+VAR stopBtn AS GUI_Button
+VAR rewBtn AS GUI_Button
+VAR backBtn AS GUI_Button
+VAR fwdBtn AS GUI_Button
+VAR loopBox AS GUI_CheckBox
+VAR muteBox AS GUI_CheckBox
+VAR timeLabel AS GUI_Label
+VAR ticker AS GUI_Timer
+VAR fetcher AS GUI_Timer
+VAR web AS NET_Socket
+
+' the movie
+VAR source AS String          ' the file or URL it came from
+VAR mTitle AS String
+VAR mAuthor AS String
+VAR mW AS Integer = 160
+VAR mH AS Integer = 120
+VAR mFps AS Integer = 10
+VAR mFrames AS Integer        ' as the header says; the frames themselves win once all are in
+VAR mBg AS Integer
+VAR frames AS Array OF String
+VAR picNames AS Array OF String
+VAR picData AS Array OF String
+VAR partRefs AS Array OF String
+VAR partsIn AS Integer
+VAR allIn AS Bool
+VAR remote AS Bool
+VAR gotHeader AS Bool
+
+' playing
+VAR state AS String = "empty"   ' empty, buffering, playing, paused, stopped, ended, error
+VAR problem AS String
+VAR cur AS Integer = -1         ' the frame on the screen
+VAR wantPlay AS Bool
+VAR t0 AS Integer               ' SYS.Ticks when frame f0 was due
+VAR f0 AS Integer
+VAR dragging AS Bool
+VAR drawing AS Bool
+
+' one fetch at a time
+VAR fetching AS Bool
+VAR fFirst AS Bool              ' the first thing at the address (a movie or a manifest)
+VAR fUrl AS String
+VAR fNumber AS Integer
+VAR fParts AS Array OF String
+VAR fDone AS Bool
+VAR fSince AS Integer
+VAR fError AS String
+VAR wantFirst AS Bool
+VAR tries AS Integer
+
+' ================================================================ start
+
+SUB Main ()
+    EOL = Chr(10)
+    win = GUI_Window.New("SimPlayer", MINW, 260)
+    win.Icon = "app"
+    win.onClose = Win_OnClose
+    win.onKey = Player_OnKey
+    bar = GUI_Menu.New(win)
+    bar.onSelect = Menu_OnSelect
+    bar.AddMenu("&File")
+    bar.AddItem("&File", "&Open File..." + Chr(9) + "Ctrl+O")
+    bar.AddItem("&File", "Open &URL..." + Chr(9) + "Ctrl+L")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "E&xit")
+    bar.AddMenu("&Play")
+    bar.AddItem("&Play", "&Play/Pause" + Chr(9) + "Space")
+    bar.AddItem("&Play", "&Stop")
+    bar.AddItem("&Play", "&Rewind" + Chr(9) + "Home")
+    bar.AddItem("&Play", "Step &Forward" + Chr(9) + "ArrowRight")
+    bar.AddItem("&Play", "Step &Back" + Chr(9) + "ArrowLeft")
+    bar.AddSeparator("&Play")
+    bar.AddItem("&Play", "&Loop")
+    bar.AddItem("&Play", "&Mute")
+    bar.AddMenu("&Help")
+    bar.AddItem("&Help", "&About SimPlayer")
+
+    addrLabel = GUI_Label.New(win)
+    addrLabel.Text = "Address:"
+    addr = GUI_TextBox.New(win)
+    addr.onEnter = Open_Click
+    openBtn = GUI_Button.New(win)
+    openBtn.Text = "&Open"
+    openBtn.onClick = Open_Click
+    screen = GUI_Canvas.New(win)
+    screen.onDraw = Screen_OnDraw
+    screen.onKey = Player_OnKey
+    screen.onMouseDown = Screen_OnMouseDown
+    info = GUI_Label.New(win)
+    info.Bold = TRUE
+    seekBar = GUI_Canvas.New(win)
+    seekBar.onDraw = Seek_OnDraw
+    seekBar.onMouseDown = Seek_OnMouseDown
+    seekBar.onMouseMove = Seek_OnMouseMove
+    seekBar.onMouseUp = Seek_OnMouseUp
+    playBtn = GUI_Button.New(win)
+    playBtn.Text = "&Play"
+    playBtn.onClick = Play_Click
+    stopBtn = GUI_Button.New(win)
+    stopBtn.Text = "&Stop"
+    stopBtn.onClick = Stop_Click
+    rewBtn = GUI_Button.New(win)
+    rewBtn.Text = "Re&wind"
+    rewBtn.onClick = Rewind_Click
+    backBtn = GUI_Button.New(win)
+    backBtn.Text = "<"
+    backBtn.onClick = Back_Click
+    fwdBtn = GUI_Button.New(win)
+    fwdBtn.Text = ">"
+    fwdBtn.onClick = Fwd_Click
+    loopBox = GUI_CheckBox.New(win)
+    loopBox.Text = "&Loop"
+    loopBox.onChange = Loop_Change
+    muteBox = GUI_CheckBox.New(win)
+    muteBox.Text = "&Mute"
+    muteBox.onChange = Mute_Change
+    timeLabel = GUI_Label.New(win)
+    timeLabel.Align = "right"
+
+    web = NET_Socket.New()
+    web.onMessage = Web_OnMessage
+    web.onClose = Web_OnClose
+    ticker = GUI_Timer.New(win)
+    ticker.Interval = 50
+    ticker.onTick = Ticker_OnTick
+    ticker.Start()
+    fetcher = GUI_Timer.New(win)
+    fetcher.Interval = 100
+    fetcher.onTick = Fetcher_OnTick
+    fetcher.Start()
+
+    Layout()
+    win.Show()
+    Splash()
+    Refresh()
+    IF SYS.Args.Count > 0 THEN
+        addr.Text = SYS.Args[0]
+        OpenMovie(SYS.Args[0])
+    ELSE
+        addr.Focus()
+    END IF
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+' Everything sized round the picture: at least MINW wide, the controls below.
+SUB Layout ()
+    VAR cw AS Integer
+    VAR sh AS Integer
+    VAR y AS Integer
+    cw = MATH.Max(MINW, mW + 16)
+    sh = MATH.Max(120, mH)
+    addrLabel.SetBounds(8, 8, 52, 16)
+    addr.SetBounds(62, 4, cw - 62 - 64, 22)
+    openBtn.SetBounds(cw - 60, 4, 52, 22)
+    screen.SetBounds(Int((cw - mW) / 2), 32 + Int((sh - mH) / 2), mW, mH)
+    y = 32 + sh + 6
+    info.SetBounds(8, y, cw - 16, 16)
+    seekBar.SetBounds(8, y + 20, cw - 16, 14)
+    y = y + 40
+    playBtn.SetBounds(8, y, 56, 24)
+    stopBtn.SetBounds(68, y, 48, 24)
+    rewBtn.SetBounds(120, y, 60, 24)
+    backBtn.SetBounds(184, y, 24, 24)
+    fwdBtn.SetBounds(210, y, 24, 24)
+    loopBox.SetBounds(8, y + 30, 56, 18)
+    muteBox.SetBounds(68, y + 30, 56, 18)
+    timeLabel.SetBounds(cw - 128, y + 4, 120, 16)
+    win.Width = cw
+    win.Height = y + 54
+END SUB
+
+' Nothing loaded yet: the SimPlayer card.
+SUB Splash ()
+    VAR i AS Integer
+    screen.Background = 4
+    screen.Clear()
+    FOR i = 0 TO 7
+        screen.SetColor(4)
+        IF i MOD 2 = 1 THEN screen.SetColor(12)
+        screen.FillRect(0, Int(mH * i / 8), mW, 2)
+    NEXT
+    ' the S logo
+    screen.SetColor(9)
+    screen.FillRect(Int(mW / 2) - 16, Int(mH / 2) - 34, 32, 32)
+    screen.SetColor(15)
+    screen.FillRect(Int(mW / 2) - 8, Int(mH / 2) - 29, 18, 4)
+    screen.FillRect(Int(mW / 2) - 10, Int(mH / 2) - 25, 5, 6)
+    screen.FillRect(Int(mW / 2) - 8, Int(mH / 2) - 20, 16, 4)
+    screen.FillRect(Int(mW / 2) + 5, Int(mH / 2) - 16, 5, 6)
+    screen.FillRect(Int(mW / 2) - 10, Int(mH / 2) - 10, 18, 4)
+    screen.SetColor(15)
+    screen.Text(Int(mW / 2) - 32, Int(mH / 2) + 6, "SimPlayer")
+    screen.SetColor(14)
+    screen.Text(Int(mW / 2) - 38, Int(mH / 2) + 22, "Version 1.0")
+END SUB
+
+' ================================================================ opening
+
+SUB Reset ()
+    frames.Clear()
+    picNames.Clear()
+    picData.Clear()
+    partRefs.Clear()
+    partsIn = 0
+    allIn = FALSE
+    gotHeader = FALSE
+    mTitle = ""
+    mAuthor = ""
+    mFps = 10
+    mFrames = 0
+    mBg = 0
+    cur = -1
+    problem = ""
+    fetching = FALSE
+    wantFirst = FALSE
+    tries = 0
+END SUB
+
+SUB OpenMovie (where AS String)
+    VAR text AS String
+    where = where.Trim()
+    IF where = "" THEN RETURN
+    Reset()
+    source = where
+    wantPlay = TRUE
+    IF where.Lower().StartsWith("http://") THEN
+        remote = TRUE
+        state = "buffering"
+        wantFirst = TRUE
+        win.Title = "SimPlayer - " + where
+        Refresh()
+        RETURN
+    END IF
+    remote = FALSE
+    IF NOT FS.Exists(where) THEN
+        Fail("There is no file called " + where + ".")
+        RETURN
+    END IF
+    text = FS.Read(where)
+    TakeFirst(text, DirOf(where))
+    ' the parts of a movie on this disk are all here at once
+    WHILE state <> "error" AND partsIn < partRefs.Count
+        IF NOT FS.Exists(partRefs[partsIn]) THEN
+            Fail("A part of this movie is missing: " + partRefs[partsIn])
+            RETURN
+        END IF
+        AddPart(FS.Read(partRefs[partsIn]))
+    END WHILE
+END SUB
+
+SUB Fail (why AS String)
+    state = "error"
+    problem = why
+    wantPlay = FALSE
+    Refresh()
+END SUB
+
+' The first thing read from an address: a whole movie, or a manifest that
+' lists its parts.
+SUB TakeFirst (text AS String, base AS String)
+    VAR lines AS Array OF String
+    VAR line AS String
+    lines = text.Lines()
+    IF lines.Count > 0 AND lines[0].StartsWith("SIMMOVIE-PARTS") THEN
+        FOR EACH line IN lines
+            IF line.StartsWith("part=") THEN
+                partRefs.Add(Resolve(line.Substring(5, line.Length - 5).Trim(), base))
+            ELSE
+                HeaderLine(line)
+            END IF
+        NEXT
+        IF partRefs.Count = 0 THEN
+            Fail("That manifest lists no parts.")
+            RETURN
+        END IF
+        Opened()
+        RETURN
+    END IF
+    IF lines.Count = 0 OR NOT lines[0].StartsWith("SIMMOVIE ") THEN
+        Fail("That is not a SimMovie. A SimMovie starts with the line SIMMOVIE 1.")
+        RETURN
+    END IF
+    partRefs.Add(source)
+    AddPart(text)
+END SUB
+
+SUB HeaderLine (line AS String)
+    VAR field AS String
+    VAR value AS String
+    IF line.IndexOf("=") < 1 THEN RETURN
+    field = line.Substring(0, line.IndexOf("=")).Trim().Lower()
+    value = line.Substring(line.IndexOf("=") + 1, line.Length - line.IndexOf("=") - 1)
+    SELECT CASE field
+        CASE "title"
+            mTitle = value
+        CASE "author"
+            mAuthor = value
+        CASE "width"
+            mW = Clamp(Int(Val(value)), 16, 320)
+        CASE "height"
+            mH = Clamp(Int(Val(value)), 16, 240)
+        CASE "fps"
+            mFps = Clamp(Int(Val(value)), 1, 30)
+        CASE "frames"
+            mFrames = MATH.Max(0, Int(Val(value)))
+        CASE "bg"
+            mBg = Clamp(Int(Val(value)), 0, 15)
+    END SELECT
+END SUB
+
+FUNCTION Clamp (n AS Integer, lo AS Integer, hi AS Integer) AS Integer
+    IF n < lo THEN RETURN lo
+    IF n > hi THEN RETURN hi
+    RETURN n
+END FUNCTION
+
+' The header is in: size the window to the picture.
+SUB Opened ()
+    IF gotHeader THEN RETURN
+    gotHeader = TRUE
+    Layout()
+    screen.Background = mBg
+    screen.Clear()
+    IF mTitle = "" THEN mTitle = "Untitled"
+    win.Title = "SimPlayer - " + mTitle
+    IF wantPlay THEN state = "buffering"
+END SUB
+
+' One part: frames, and pictures for them. The first part starts with the header.
+SUB AddPart (text AS String)
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR line AS String
+    lines = text.Lines()
+    i = 0
+    IF lines.Count > 0 AND lines[0].StartsWith("SIMMOVIE ") THEN
+        i = 1
+        WHILE i < lines.Count
+            IF lines[i] = "." THEN BREAK
+            ' a manifest has said all this already
+            IF NOT gotHeader THEN HeaderLine(lines[i])
+            i = i + 1
+        END WHILE
+        i = i + 1
+    END IF
+    Opened()
+    WHILE i < lines.Count
+        line = lines[i]
+        i = i + 1
+        IF line = "" OR line.StartsWith("'") THEN CONTINUE
+        IF line.StartsWith("!") THEN
+            AddPicture(line.Substring(1, line.Length - 1))
+        ELSE
+            frames.Add(line)
+        END IF
+    END WHILE
+    partsIn = partsIn + 1
+    IF partsIn >= partRefs.Count THEN
+        allIn = TRUE
+        mFrames = frames.Count
+    END IF
+    Refresh()
+END SUB
+
+' !name|SIM95PIC w h|row|row...
+SUB AddPicture (line AS String)
+    VAR at AS Integer
+    at = line.IndexOf("|")
+    IF at < 1 THEN RETURN
+    picNames.Add(line.Substring(0, at))
+    picData.Add(line.Substring(at + 1, line.Length - at - 1).Replace("|", EOL))
+END SUB
+
+' Where a part is, from what the manifest says and where the manifest was.
+FUNCTION Resolve (ref AS String, base AS String) AS String
+    VAR host AS String
+    IF ref.Lower().StartsWith("http://") THEN RETURN ref
+    IF base.Lower().StartsWith("http://") THEN
+        IF ref.StartsWith("/") THEN
+            host = base.Substring(7, base.Length - 7)
+            IF host.IndexOf("/") >= 0 THEN host = host.Substring(0, host.IndexOf("/"))
+            RETURN "http://" + host + ref
+        END IF
+        RETURN base + ref
+    END IF
+    IF ref.Contains(":\") THEN RETURN ref
+    RETURN base + ref
+END FUNCTION
+
+' The folder an address is in, with its slash: http://a/tube/ or C:\MYFILES\
+FUNCTION DirOf (where AS String) AS String
+    VAR i AS Integer
+    VAR sep AS String
+    sep = "\"
+    IF where.Lower().StartsWith("http://") THEN
+        sep = "/"
+        IF where.IndexOf("?") >= 0 THEN where = where.Substring(0, where.IndexOf("?"))
+        IF where.Substring(7, where.Length - 7).IndexOf("/") < 0 THEN RETURN where + "/"
+    END IF
+    FOR i = where.Length - 1 TO 0 STEP -1
+        IF where.CharAt(i) = sep THEN RETURN where.Substring(0, i + 1)
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION Total () AS Integer
+    IF allIn THEN RETURN frames.Count
+    RETURN MATH.Max(mFrames, frames.Count)
+END FUNCTION
+
+' Enough is here to play: all of it, or a few seconds past this frame.
+FUNCTION Ready () AS Bool
+    IF frames.Count = 0 THEN RETURN FALSE
+    IF allIn THEN RETURN TRUE
+    RETURN frames.Count - 1 - cur >= mFps * AHEAD
+END FUNCTION
+
+FUNCTION Percent () AS Integer
+    IF partRefs.Count = 0 THEN RETURN 0
+    RETURN Int(partsIn * 100 / partRefs.Count)
+END FUNCTION
+
+' ================================================================ playing
+
+SUB Ticker_OnTick ()
+    IF drawing THEN RETURN
+    drawing = TRUE
+    TRY
+        PlayStep()
+    CATCH err
+        win.Status = "Could not draw frame " + Str(cur + 1) + ": " + err
+    END TRY
+    drawing = FALSE
+END SUB
+
+SUB PlayStep ()
+    VAR want AS Integer
+    VAR last AS Integer
+    IF state = "buffering" THEN
+        IF wantPlay AND Ready() THEN BeginPlay()
+        RETURN
+    END IF
+    IF state <> "playing" THEN RETURN
+    want = f0 + Int((SYS.Ticks - t0) * mFps / 1000)
+    last = Total() - 1
+    IF want > last AND allIn THEN
+        IF cur < last THEN ShowFrame(last, TRUE)
+        IF loopBox.Checked THEN
+            ShowFrame(0, TRUE)
+            t0 = SYS.Ticks
+            f0 = 0
+        ELSE
+            state = "ended"
+            wantPlay = FALSE
+        END IF
+        Refresh()
+        RETURN
+    END IF
+    IF want > frames.Count - 1 THEN
+        ' caught up with the download: wait for more
+        IF cur < frames.Count - 1 THEN ShowFrame(frames.Count - 1, TRUE)
+        state = "buffering"
+        Refresh()
+        RETURN
+    END IF
+    IF want > cur THEN
+        ShowFrame(want, TRUE)
+        Refresh()
+    END IF
+END SUB
+
+SUB BeginPlay ()
+    IF cur >= Total() - 1 THEN cur = -1
+    IF cur < 0 THEN ShowFrame(0, TRUE)
+    t0 = SYS.Ticks
+    f0 = cur
+    state = "playing"
+    wantPlay = TRUE
+    Refresh()
+END SUB
+
+SUB Pause ()
+    wantPlay = FALSE
+    IF state = "playing" OR state = "buffering" THEN state = "paused"
+    Refresh()
+END SUB
+
+FUNCTION HasMovie () AS Bool
+    RETURN frames.Count > 0
+END FUNCTION
+
+' Frame n on the screen. Going forward, the frames in between are drawn over
+' what is there (from a keyframe, if one comes first); anywhere else, from the
+' keyframe before n.
+SUB ShowFrame (n AS Integer, sound AS Bool)
+    VAR start AS Integer
+    VAR i AS Integer
+    IF n < 0 OR n >= frames.Count THEN RETURN
+    start = n
+    WHILE start > 0 AND NOT frames[start].StartsWith("*")
+        IF start = cur + 1 AND cur >= 0 AND n > cur THEN BREAK
+        start = start - 1
+    END WHILE
+    IF NOT frames[start].StartsWith("*") AND start = 0 THEN Blank()
+    FOR i = start TO n
+        DrawFrame(frames[i], sound AND i = n)
+    NEXT
+    cur = n
+END SUB
+
+SUB Blank ()
+    screen.Background = mBg
+    screen.Clear()
+    screen.SetColor(0)
+END SUB
+
+SUB DrawFrame (line AS String, sound AS Bool)
+    VAR c AS String
+    IF line.StartsWith("*") THEN
+        Blank()
+        line = line.Substring(1, line.Length - 1)
+    END IF
+    IF line = "-" OR line = "" THEN RETURN
+    FOR EACH c IN line.Split(";")
+        IF c <> "" THEN DrawCmd(c, sound)
+    NEXT
+END SUB
+
+' One command: a letter and its numbers.
+SUB DrawCmd (c AS String, sound AS Bool)
+    VAR op AS String
+    VAR rest AS String
+    VAR n AS Array OF Integer
+    VAR i AS Integer
+    VAR at AS Integer
+    op = c.CharAt(0)
+    rest = c.Substring(1, c.Length - 1)
+    SELECT CASE op
+        CASE "C"
+            screen.SetColor(Clamp(Int(Val(rest)), 0, 15))
+        CASE "B"
+            screen.Background = Clamp(Int(Val(rest)), 0, 15)
+        CASE "X"
+            screen.Clear()
+        CASE "T"
+            ' T x,y,text: the text runs to the end of the command
+            n = Nums(rest, 2)
+            at = SecondComma(rest)
+            IF n.Count = 2 AND at > 0 THEN screen.Text(n[0], n[1], rest.Substring(at + 1, rest.Length - at - 1))
+        CASE "I"
+            n = Nums(rest, 2)
+            at = SecondComma(rest)
+            IF n.Count = 2 AND at > 0 THEN
+                i = picNames.IndexOf(rest.Substring(at + 1, rest.Length - at - 1))
+                IF i >= 0 THEN screen.Picture(n[0], n[1], picData[i])
+            END IF
+        CASE "S"
+            n = Nums(rest, 2)
+            IF sound AND NOT muteBox.Checked AND n.Count = 2 THEN SYS.Beep(Clamp(n[0], 37, 8000), Clamp(n[1], 1, 1000))
+        CASE "R"
+            n = Nums(rest, 4)
+            IF n.Count = 4 THEN screen.Rect(n[0], n[1], n[2], n[3])
+        CASE "F"
+            n = Nums(rest, 4)
+            IF n.Count = 4 THEN screen.FillRect(n[0], n[1], n[2], n[3])
+        CASE "O"
+            n = Nums(rest, 3)
+            IF n.Count = 3 THEN screen.Circle(n[0], n[1], n[2])
+        CASE "D"
+            n = Nums(rest, 3)
+            IF n.Count = 3 THEN screen.FillCircle(n[0], n[1], n[2])
+        CASE "L"
+            n = Nums(rest, 0)
+            FOR i = 0 TO Int(n.Count / 2) - 2
+                screen.Line(n[i * 2], n[i * 2 + 1], n[i * 2 + 2], n[i * 2 + 3])
+            NEXT
+        CASE "P"
+            n = Nums(rest, 0)
+            IF n.Count >= 4 THEN
+                FOR i = 0 TO Int(n.Count / 2) - 1
+                    screen.Line(n[i * 2], n[i * 2 + 1], n[((i + 1) * 2) MOD (Int(n.Count / 2) * 2)], n[((i + 1) * 2) MOD (Int(n.Count / 2) * 2) + 1])
+                NEXT
+            END IF
+        CASE "Q"
+            n = Nums(rest, 0)
+            IF n.Count >= 6 THEN FillPoly(n)
+    END SELECT
+END SUB
+
+' Where the text of T x,y,text (or the name of I x,y,name) starts, less one.
+FUNCTION SecondComma (s AS String) AS Integer
+    VAR a AS Integer
+    VAR b AS Integer
+    a = s.IndexOf(",")
+    IF a < 0 THEN RETURN -1
+    b = s.Substring(a + 1, s.Length - a - 1).IndexOf(",")
+    IF b < 0 THEN RETURN -1
+    RETURN a + 1 + b
+END FUNCTION
+
+' The numbers in "10,20,30". most > 0 reads only that many (T and I have
+' text after theirs).
+FUNCTION Nums (s AS String, most AS Integer) AS Array OF Integer
+    VAR out AS Array OF Integer
+    VAR p AS String
+    FOR EACH p IN s.Split(",")
+        IF most > 0 AND out.Count >= most THEN BREAK
+        out.Add(Int(Val(p.Trim())))
+    NEXT
+    RETURN out
+END FUNCTION
+
+' A filled polygon, a row at a time: where each row crosses the edges, in
+' pairs.
+SUB FillPoly (p AS Array OF Integer)
+    VAR k AS Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR y AS Integer
+    VAR top AS Integer
+    VAR bottom AS Integer
+    VAR x1 AS Integer
+    VAR y1 AS Integer
+    VAR x2 AS Integer
+    VAR y2 AS Integer
+    VAR xs AS Array OF Integer
+    k = Int(p.Count / 2)
+    top = p[1]
+    bottom = p[1]
+    FOR i = 1 TO k - 1
+        top = MATH.Min(top, p[i * 2 + 1])
+        bottom = MATH.Max(bottom, p[i * 2 + 1])
+    NEXT
+    FOR y = top TO bottom
+        xs.Clear()
+        FOR i = 0 TO k - 1
+            j = (i + 1) MOD k
+            x1 = p[i * 2]
+            y1 = p[i * 2 + 1]
+            x2 = p[j * 2]
+            y2 = p[j * 2 + 1]
+            IF (y1 <= y AND y2 > y) OR (y2 <= y AND y1 > y) THEN xs.Add(x1 + Int((y - y1) * (x2 - x1) / (y2 - y1)))
+        NEXT
+        xs.Sort()
+        FOR i = 0 TO xs.Count - 2
+            IF i MOD 2 = 0 THEN screen.Line(xs[i], y, xs[i + 1], y)
+        NEXT
+    NEXT
+END SUB
+
+' ================================================================ the controls
+
+SUB Play_Click ()
+    IF state = "playing" OR (state = "buffering" AND wantPlay) THEN
+        Pause()
+        RETURN
+    END IF
+    IF NOT HasMovie() AND NOT remote THEN RETURN
+    IF state = "error" THEN RETURN
+    IF state = "ended" OR cur >= Total() - 1 THEN cur = -1
+    wantPlay = TRUE
+    IF Ready() THEN
+        BeginPlay()
+    ELSE
+        state = "buffering"
+        Refresh()
+    END IF
+END SUB
+
+SUB Stop_Click ()
+    IF NOT HasMovie() THEN RETURN
+    wantPlay = FALSE
+    ShowFrame(0, FALSE)
+    state = "stopped"
+    Refresh()
+END SUB
+
+SUB Rewind_Click ()
+    SeekFrame(0)
+END SUB
+
+SUB Back_Click ()
+    IF NOT HasMovie() THEN RETURN
+    Pause()
+    IF state = "stopped" OR state = "ended" THEN state = "paused"
+    IF cur > 0 THEN ShowFrame(cur - 1, FALSE)
+    Refresh()
+END SUB
+
+SUB Fwd_Click ()
+    IF NOT HasMovie() THEN RETURN
+    Pause()
+    IF state = "stopped" OR state = "ended" THEN state = "paused"
+    IF cur < frames.Count - 1 THEN ShowFrame(cur + 1, TRUE)
+    Refresh()
+END SUB
+
+' Anywhere in what has arrived so far; playing carries on from there.
+SUB SeekFrame (n AS Integer)
+    IF NOT HasMovie() THEN RETURN
+    n = Clamp(n, 0, frames.Count - 1)
+    ShowFrame(n, FALSE)
+    IF state = "playing" THEN
+        t0 = SYS.Ticks
+        f0 = n
+    ELSEIF state = "stopped" OR state = "ended" THEN
+        state = "paused"
+    END IF
+    Refresh()
+END SUB
+
+SUB Loop_Change ()
+    bar.SetChecked("Loop", loopBox.Checked)
+    Refresh()
+END SUB
+
+SUB Mute_Change ()
+    bar.SetChecked("Mute", muteBox.Checked)
+    Refresh()
+END SUB
+
+SUB Open_Click ()
+    OpenMovie(addr.Text)
+END SUB
+
+SUB OpenFile ()
+    VAR dlg AS GUI_FileDialog
+    VAR path AS String
+    dlg = GUI_FileDialog.New(win)
+    dlg.Title = "Open a SimMovie"
+    dlg.Filter = "*.SMV"
+    dlg.Path = "C:\MYFILES"
+    path = dlg.ShowOpen()
+    IF path <> "" THEN
+        addr.Text = path
+        OpenMovie(path)
+    END IF
+END SUB
+
+SUB Player_OnKey (k AS String)
+    SELECT CASE k
+        CASE "Space"
+            Play_Click()
+        CASE "ArrowRight", "."
+            Fwd_Click()
+        CASE "ArrowLeft", ","
+            Back_Click()
+        CASE "Home"
+            Rewind_Click()
+        CASE "Ctrl+O"
+            OpenFile()
+        CASE "Ctrl+L"
+            addr.Focus()
+            addr.SelectAll()
+    END SELECT
+END SUB
+
+SUB Screen_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    Play_Click()
+END SUB
+
+SUB Screen_OnDraw (canvas AS GUI_Canvas)
+    IF cur >= 0 THEN
+        ShowFrame(cur, FALSE)
+    ELSEIF NOT HasMovie() AND state = "empty" THEN
+        Splash()
+    END IF
+END SUB
+
+SUB Menu_OnSelect (item AS String)
+    VAR box AS GUI_MessageBox
+    SELECT CASE item
+        CASE "Open File..."
+            OpenFile()
+        CASE "Open URL..."
+            addr.Focus()
+            addr.SelectAll()
+        CASE "Exit"
+            SYS.Exit(0)
+        CASE "Play/Pause"
+            Play_Click()
+        CASE "Stop"
+            Stop_Click()
+        CASE "Rewind"
+            Rewind_Click()
+        CASE "Step Forward"
+            Fwd_Click()
+        CASE "Step Back"
+            Back_Click()
+        CASE "Loop"
+            loopBox.Checked = NOT loopBox.Checked
+            Loop_Change()
+        CASE "Mute"
+            muteBox.Checked = NOT muteBox.Checked
+            Mute_Change()
+        CASE "About SimPlayer"
+            box = GUI_MessageBox.New(win)
+            box.Title = "About SimPlayer"
+            box.Text = "SimPlayer 1.0 for SIM95" + EOL + EOL + "Plays SimMovies (.SMV) from your disk or the web, and streams the long ones while they download." + EOL + EOL + "Find movies on SimTube."
+            box.Show()
+    END SELECT
+END SUB
+
+' ================================================================ the seek bar
+
+SUB Seek_OnDraw (canvas AS GUI_Canvas)
+    DrawSeek()
+END SUB
+
+SUB DrawSeek ()
+    VAR w AS Integer
+    VAR t AS Integer
+    VAR x AS Integer
+    w = seekBar.Width
+    t = MATH.Max(1, Total() - 1)
+    seekBar.Background = 7
+    seekBar.Clear()
+    seekBar.SetColor(8)
+    seekBar.Line(0, 0, w - 1, 0)
+    seekBar.Line(0, 0, 0, 13)
+    seekBar.SetColor(15)
+    seekBar.Line(0, 13, w - 1, 13)
+    ' downloaded, and played
+    IF HasMovie() THEN
+        seekBar.SetColor(6)
+        seekBar.FillRect(2, 5, Int((w - 4) * MATH.Min(1, (frames.Count - 1) / t)), 4)
+        x = Int((w - 12) * MATH.Max(0, cur) / t)
+        seekBar.SetColor(4)
+        seekBar.FillRect(2, 5, x, 4)
+        ' the thumb
+        seekBar.SetColor(7)
+        seekBar.FillRect(x + 1, 1, 10, 12)
+        seekBar.SetColor(15)
+        seekBar.Line(x + 1, 1, x + 10, 1)
+        seekBar.Line(x + 1, 1, x + 1, 12)
+        seekBar.SetColor(0)
+        seekBar.Line(x + 1, 12, x + 10, 12)
+        seekBar.Line(x + 10, 1, x + 10, 12)
+    END IF
+END SUB
+
+FUNCTION FrameAt (x AS Integer) AS Integer
+    RETURN Int(MATH.Max(0, x - 6) * MATH.Max(1, Total() - 1) / MATH.Max(1, seekBar.Width - 12))
+END FUNCTION
+
+SUB Seek_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    dragging = TRUE
+    SeekFrame(FrameAt(x))
+END SUB
+
+SUB Seek_OnMouseMove (x AS Integer, y AS Integer)
+    IF dragging THEN SeekFrame(FrameAt(x))
+END SUB
+
+SUB Seek_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
+    IF dragging THEN SeekFrame(FrameAt(x))
+    dragging = FALSE
+END SUB
+
+' ================================================================ what it says
+
+FUNCTION Clock (n AS Integer) AS String
+    VAR s AS Integer
+    s = Int(MATH.Max(0, n) / mFps)
+    RETURN Str(Int(s / 60)) + ":" + Str(100 + s MOD 60).Substring(1, 2)
+END FUNCTION
+
+SUB Refresh ()
+    VAR what AS String
+    VAR flag AS String
+    SELECT CASE state
+        CASE "empty"
+            what = "Ready. Open a SimMovie (.SMV) from your disk, or type its address."
+        CASE "buffering"
+            what = "Buffering... " + Str(Percent()) + "%"
+            IF NOT gotHeader THEN what = what + "  (connecting to " + HostOf(source) + ")"
+        CASE "playing"
+            what = "Playing"
+        CASE "paused"
+            what = "Paused"
+        CASE "stopped"
+            what = "Stopped"
+        CASE "ended"
+            what = "Finished"
+        CASE "error"
+            what = problem
+    END SELECT
+    IF remote AND NOT allIn AND state <> "buffering" AND state <> "error" THEN what = what + "  (" + Str(Percent()) + "% downloaded)"
+    IF muteBox.Checked AND state <> "error" THEN what = what + "  [muted]"
+    win.Status = what
+    IF state = "playing" OR (state = "buffering" AND wantPlay) THEN
+        playBtn.Text = "&Pause"
+    ELSE
+        playBtn.Text = "&Play"
+    END IF
+    IF gotHeader THEN
+        info.Text = mTitle
+        IF mAuthor <> "" THEN info.Text = mTitle + "  -  by " + mAuthor
+        timeLabel.Text = Clock(MATH.Max(cur, 0)) + " / " + Clock(Total())
+    ELSE
+        info.Text = ""
+        timeLabel.Text = "0:00 / 0:00"
+    END IF
+    DrawSeek()
+    flag = "0|0"
+    IF loopBox.Checked THEN flag = "1|0"
+    IF muteBox.Checked THEN flag = flag.Substring(0, 2) + "1"
+    win.Tag = state + "|" + Str(cur) + "|" + Str(Total()) + "|" + Str(frames.Count) + "|" + Str(partsIn) + "|" + Str(partRefs.Count) + "|" + flag
+END SUB
+
+FUNCTION HostOf (url AS String) AS String
+    VAR h AS String
+    IF NOT url.Lower().StartsWith("http://") THEN RETURN url
+    h = url.Substring(7, url.Length - 7)
+    IF h.IndexOf("/") >= 0 THEN h = h.Substring(0, h.IndexOf("/"))
+    RETURN h
+END FUNCTION
+
+' ================================================================ the web
+
+SUB Fetcher_OnTick ()
+    TRY
+        FetchStep()
+    CATCH err
+    END TRY
+END SUB
+
+SUB FetchStep ()
+    IF fetching THEN
+        IF fDone OR SYS.Ticks - fSince > PATIENCE THEN Arrived()
+        RETURN
+    END IF
+    IF NOT remote OR state = "error" THEN RETURN
+    IF wantFirst THEN
+        wantFirst = FALSE
+        fFirst = TRUE
+        ' (last thing in the tick: it may be spoiled)
+        StartFetch(source)
+        RETURN
+    END IF
+    IF partsIn < partRefs.Count THEN
+        fFirst = FALSE
+        StartFetch(partRefs[partsIn])
+    END IF
+END SUB
+
+SUB StartFetch (url AS String)
+    VAR conn AS NET_Connection
+    VAR host AS String
+    VAR path AS String
+    fetching = TRUE
+    fUrl = url
+    fNumber = fNumber + 1
+    fParts.Clear()
+    fDone = FALSE
+    fError = ""
+    fSince = SYS.Ticks
+    host = url.Substring(7, url.Length - 7)
+    IF host.IndexOf("/") < 0 THEN host = host + "/"
+    path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
+    host = host.Substring(0, host.IndexOf("/"))
+    TRY
+        conn = web.Connect(host, 80)
+        conn.Tag = Str(fNumber)
+        conn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: SimPlayer/1.0 (SIM95)" + EOL + "Accept: video/x-simmovie")
+    CATCH err
+        fError = err
+        fDone = TRUE
+    END TRY
+END SUB
+
+SUB Web_OnMessage (conn AS NET_Connection, message AS String)
+    IF conn.Tag = Str(fNumber) AND NOT fDone THEN fParts.Add(message)
+END SUB
+
+SUB Web_OnClose (conn AS NET_Connection)
+    IF conn.Tag = Str(fNumber) THEN fDone = TRUE
+END SUB
+
+' A fetch finished (or gave up): the body, or "" with fError saying why.
+FUNCTION Body () AS String
+    VAR raw AS String
+    raw = fParts.Join(EOL)
+    IF fError <> "" THEN RETURN ""
+    IF raw = "" THEN
+        fError = "no answer"
+        RETURN ""
+    END IF
+    IF NOT raw.StartsWith("HTTP/1.0 200") THEN
+        fError = raw.Lines()[0]
+        RETURN ""
+    END IF
+    IF NOT raw.Contains(EOL + EOL) THEN RETURN ""
+    RETURN raw.Substring(raw.IndexOf(EOL + EOL) + 2, raw.Length - raw.IndexOf(EOL + EOL) - 2)
+END FUNCTION
+
+SUB Arrived ()
+    VAR text AS String
+    fetching = FALSE
+    TRY
+        web.Close()
+    CATCH err
+    END TRY
+    IF NOT remote OR source = "" THEN RETURN
+    text = Body()
+    IF text = "" THEN
+        tries = tries + 1
+        IF fError = "" THEN fError = "it was empty"
+        IF tries >= MAXTRIES OR fError.StartsWith("HTTP") THEN
+            Fail("Could not get " + fUrl + " (" + fError + ").")
+        ELSEIF fFirst THEN
+            wantFirst = TRUE
+        END IF
+        RETURN
+    END IF
+    tries = 0
+    IF fFirst THEN
+        TakeFirst(text, DirOf(fUrl))
+    ELSE
+        AddPart(text)
+    END IF
+END SUB

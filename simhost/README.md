@@ -15,6 +15,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | GeoSimies | `http://HOST/geo/` | `C:\WEB\GEO`  |
 | ELIZA-95 | `http://HOST/eliza/` | `C:\WEB\ELIZA` |
 | SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
+| SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
 `http://HOST/` becomes a front page that lists them. Each app keeps its data
@@ -57,7 +58,8 @@ Run `C:\PROGRAMS\MOVEIN.SPK` on the host for each old machine:
    * Frostbird;
    * Simxplorer favorites;
    * GeoSimies homepages and guestbooks (their neighborhood folders too);
-   * SimPal accounts and money.
+   * SimPal accounts and money;
+   * SimTube movies, ratings and comments.
 3. Press **Move In**.
 
 It copies over the old machine's Files service (port 139, on by default),
@@ -69,7 +71,8 @@ only adds to it:
 * Files that exist on both machines keep the host's copy.
 * SimPal is never merged: two ledgers can't be added together without money
   appearing or vanishing, so if the host already has SimPal accounts, Move
-  In skips it and says so.
+  In skips it and says so. SimTube is the same: its movie numbers would
+  collide.
 * Lists that can be joined line by line get the lines they're missing:
   favorites, Vapor's library and SimBook's member list.
 
