@@ -84,10 +84,35 @@ VAR fSince AS Integer
 VAR fError AS String
 VAR wantFirst AS Bool
 VAR tries AS Integer
+VAR inside AS Bool              ' a window of Simxplorer's, not a program of its own
+VAR isOpen AS Bool
 
 ' ================================================================ start
 
 SUB Main ()
+    IF SYS.Args.Count > 0 THEN
+        OpenPlayer(SYS.Args[0], FALSE)
+    ELSE
+        OpenPlayer("", FALSE)
+    END IF
+END SUB
+
+' Opens the player and the movie at where (if any). Simxplorer has this same
+' player built in (tools/build-installer.mjs renames everything Mv...) and
+' calls it with embedded = TRUE: then it is one of the browser's windows, and
+' closing it closes only the window. Opening another movie reuses the window.
+SUB OpenPlayer (where AS String, embedded AS Bool)
+    IF isOpen THEN
+        win.Show()
+        win.Focus()
+        IF where <> "" THEN
+            addr.Text = where
+            OpenMovie(where)
+        END IF
+        RETURN
+    END IF
+    inside = embedded
+    isOpen = TRUE
     EOL = Chr(10)
     win = GUI_Window.New("SimPlayer", MINW, 260)
     win.Icon = "app"
@@ -99,7 +124,11 @@ SUB Main ()
     bar.AddItem("&File", "&Open File..." + Chr(9) + "Ctrl+O")
     bar.AddItem("&File", "Open &URL..." + Chr(9) + "Ctrl+L")
     bar.AddSeparator("&File")
-    bar.AddItem("&File", "E&xit")
+    IF inside THEN
+        bar.AddItem("&File", "&Close")
+    ELSE
+        bar.AddItem("&File", "E&xit")
+    END IF
     bar.AddMenu("&Play")
     bar.AddItem("&Play", "&Play/Pause" + Chr(9) + "Space")
     bar.AddItem("&Play", "&Stop")
@@ -170,16 +199,25 @@ SUB Main ()
     win.Show()
     Splash()
     Refresh()
-    IF SYS.Args.Count > 0 THEN
-        addr.Text = SYS.Args[0]
-        OpenMovie(SYS.Args[0])
+    IF where <> "" THEN
+        addr.Text = where
+        OpenMovie(where)
     ELSE
         addr.Focus()
     END IF
 END SUB
 
 SUB Win_OnClose ()
-    SYS.Exit(0)
+    IF NOT inside THEN SYS.Exit(0)
+    ' inside Simxplorer: stop, and close just this window
+    isOpen = FALSE
+    state = "empty"
+    ticker.Stop()
+    fetcher.Stop()
+    TRY
+        win.Destroy()
+    CATCH err
+    END TRY
 END SUB
 
 ' Everything sized round the picture: at least MINW wide, the controls below.
@@ -815,8 +853,8 @@ SUB Menu_OnSelect (item AS String)
         CASE "Open URL..."
             addr.Focus()
             addr.SelectAll()
-        CASE "Exit"
-            SYS.Exit(0)
+        CASE "Exit", "Close"
+            Win_OnClose()
         CASE "Play/Pause"
             Play_Click()
         CASE "Stop"

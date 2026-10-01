@@ -1,7 +1,8 @@
 <%@ import file="TUBE.SPK" %>
 <%
 ' WATCH.ASP?v=N - one movie: its picture and details, where to play it, stars and comments.
-' Voyager can't play a movie, so this page hands over its address for SimPlayer.
+' Simxplorer plays the movie itself (SimPlayer is built in); Voyager can't, so
+' this page also hands over its address for SimPlayer on its own.
 VAR id AS String
 VAR line AS String
 VAR all AS Array OF String
@@ -34,13 +35,14 @@ Rating: <%= Stars(Rating(id)) %> (<%= Plural(RatingCount(id), "rating", "ratings
 <% IF VF(line, 10) <> "" THEN %><p><%= Br(Unesc(VF(line, 10))) %></p><% END IF %>
 
 <%= BoxTop("Watch It") %>
-<p><font size="2">This movie plays in <b>SimPlayer</b>. Open SimPlayer (<tt>C:\PROGRAMS\PLAYER.SPK</tt>),
-paste this address into its Address box and press Enter. It starts as soon as the first part is in.</font></p>
+<p><font size="4"><b><a href="movie.asp?v=<%= id %>" type="<%= MIME %>">&gt; Play Movie</a></b></font>
+<font size="2">(<%= Plural(Int(Val(VF(line, 8))), "part", "parts") %>)</font></p>
+<p><font size="2">In <b>Simxplorer</b>, click Play: SimPlayer is built in, and pops up to play it.
+In Voyager, use <b>SimPlayer</b> on its own (<a href="getplay.asp">get it from Vapor</a>): paste this
+address into its Address box and press Enter. It starts as soon as the first part is in.</font></p>
 <form><input id="url" size="56" value="<%= H(MovieUrl(id)) %>" readonly></form>
-<p><font size="2"><a href="movie.asp?v=<%= id %>" type="<%= MIME %>">movie.asp?v=<%= id %></a>
-(a <tt><%= MIME %></tt> SimMovie, <%= Plural(Int(Val(VF(line, 8))), "part", "parts") %>)
-&middot; From SPARK: <tt>SYS.Start("C:\PROGRAMS\PLAYER.SPK", "<%= H(MovieUrl(id)) %>")</tt>
-&middot; No SimPlayer? <a href="getplay.asp">Get it here</a>.</font></p>
+<p><font size="2">(a <tt><%= MIME %></tt> SimMovie) &middot; From SPARK:
+<tt>SYS.Start("C:\PROGRAMS\PLAYER.SPK", "<%= H(MovieUrl(id)) %>")</tt></font></p>
 
 <%= BoxTop("Rate This Movie") %>
 <% IF viewer <> "" THEN %>

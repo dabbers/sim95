@@ -23,8 +23,8 @@ END SELECT
 <%= Notice(problem) %>
 <%= BoxTop("Featured Movies") %>
 <%= Grid(Newest(GRIDSIZE)) %>
-<p><font size="2">SimTube movies play in <b>SimPlayer</b>. Click a movie, then open its address in SimPlayer.
-No SimPlayer yet? <a href="getplay.asp">Get SimPlayer</a>.</font></p>
+<p><font size="2">Click a movie, then <b>Play</b>: Simxplorer plays it in its built-in SimPlayer.
+On Voyager? <a href="getplay.asp">Get SimPlayer</a> from Vapor.</font></p>
 </td>
 <td width="210" valign="top" bgcolor="#EEEEEE">
 <% IF viewer <> "" THEN

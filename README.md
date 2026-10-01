@@ -24,8 +24,10 @@ A series of programs for the sim95 playground
 * [`simpal/`](simpal/) – SimPal, a late-90s PayPal: send and request
   SimBucks, and a Pay with SimPal button for any web site, on a crash-proof
   ledger.
-* [`simtube/`](simtube/) – SimTube, a movie site, and SimPlayer, a streaming
-  player for SimMovies (canvas drawing, one line a frame).
+* [`simtube/`](simtube/) – SimTube, a movie site for SimMovies (canvas
+  drawing, one line a frame).
+* [`simplayer/`](simplayer/) – SimPlayer, the streaming movie player: a
+  Vapor app of its own, and built into Simxplorer.
 * [`simhost/`](simhost/) – SimHost: every web app on one machine, each in a
   folder of its own, and Move In to bring the other machines' data over.
 * [`simstats/`](simstats/) – SimStats, Hitbox-style web statistics for any

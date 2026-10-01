@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { browser, MESSAGE_LIMIT } from "./sim.mjs";
 import { Network } from "./network.mjs";
+import { simxplorerSource } from "../simxplorer-source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let failures = 0;
@@ -234,7 +235,7 @@ await test("Voyager across the network: the tags' pictures are shown, cookies ke
 
 // ---------------------------------------------------------------- Simxplorer
 
-charlie.write("C:\\PROGRAMS\\SIMXPLOR.SPK", fs.readFileSync(path.join(root, "simxplorer/src/JSCRIPT.SPK"), "utf8") + "\n" + fs.readFileSync(path.join(root, "simxplorer/src/BROWSER.SPK"), "utf8"));
+charlie.write("C:\\PROGRAMS\\SIMXPLOR.SPK", simxplorerSource());
 const ie = charlie.run("C:\\PROGRAMS\\SIMXPLOR.SPK", ["http://bravo/plain.htm"]);
 const win = () => charlie.widgets(ie, "Window")[0];
 const view = () => charlie.widgets(ie, "HtmlView")[0];

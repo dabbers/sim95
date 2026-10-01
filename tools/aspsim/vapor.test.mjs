@@ -51,7 +51,8 @@ await test("the store's web site offers Vapor for download", async () => {
   assert.match(r, /<b>Get Vapor<\/b>/);
   assert.match(r, /<a href="getvapor.asp"><b>getvapor.asp<\/b><\/a>/);
   assert.match(r, /<b>SimDOOM<\/b>[\s\S]*build [0-9a-f]{8}/);
-  assert.match(r, /No apps on the shelves yet/);
+  assert.match(r, /<b>SimPlayer<\/b>/, "every store stocks SimPlayer");
+  assert.match(entry("SIMPLAYR"), /^SIMPLAYR\|SimPlayer\|\d+\|\d+\|ok\|Multimedia\|.*\|program\|[0-9a-f]{8}\|C:\\PROGRAMS\\PLAYER.SPK\|/);
   assert.match(r, /CONST FROM = &quot;alpha&quot;/);
   r = await alpha.fetch("ALPHA", "/vapor/getvapor.asp");
   assert.match(r, /Content-Type: text\/plain/);
@@ -125,7 +126,7 @@ await test("BRAVO's store shows apps and games; Half-Life 3 is coming soon", asy
   await wait(() => B.pid() && B.items().length > 0, "Vapor on bravo", 30000);
   B.menu("Refresh");
   await wait(() => B.items().includes("- APPS -") && B.items().includes("- GAMES -"), "the headings: " + B.items().join(" / "));
-  assert.deepEqual(B.items().map((i) => i.trim()), ["- APPS -", "Clippy", "ELIZA-95", "Frostbird", "- GAMES -", "SimDOOM", "Snake 95", "Half-Life 3"]);
+  assert.deepEqual(B.items().map((i) => i.trim()), ["- APPS -", "Clippy", "ELIZA-95", "Frostbird", "SimPlayer", "- GAMES -", "SimDOOM", "Snake 95", "Half-Life 3"]);
   await B.select("Half-Life 3");
   await wait(() => B.button("Coming soon"), "Coming soon");
   assert.equal(B.button("Coming soon").get("Enabled"), false);

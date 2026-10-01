@@ -229,16 +229,27 @@ SUB ShowTab (t AS String)
     VAR line AS String
     VAR pass AS Integer
     VAR heading AS Bool
+    VAR shelf AS Array OF String
     tab = t
     games.Clear()
     listed.Clear()
     IF t = "STORE" THEN
-        ' apps first, then games, each under a heading
+        ' apps first (A to Z), then games (as the store has them), each under a heading
         FOR pass = 0 TO 1
             heading = FALSE
+            shelf.Clear()
             FOR EACH line IN catalog
                 IF Field(line, 7) = "client" THEN CONTINUE
                 IF (Field(line, 7) = "game") <> (pass = 1) THEN CONTINUE
+                IF pass = 0 THEN
+                    shelf.Add(Field(line, 1).Upper() + "|" + line)
+                ELSE
+                    shelf.Add("|" + line)
+                END IF
+            NEXT
+            IF pass = 0 THEN shelf.Sort()
+            FOR EACH line IN shelf
+                line = line.Substring(line.IndexOf("|") + 1, line.Length - line.IndexOf("|") - 1)
                 IF NOT heading THEN
                     heading = TRUE
                     listed.Add("")
