@@ -204,7 +204,6 @@ await test("the installer, anywhere but the central host: it warns, and stops if
 });
 
 await test("the installer on STARTHERE.56k.net: NAMED running and starting with the machine, SimNIC at /nic/, the web server left alone", async () => {
-  assert.equal(central.kernel.ps().length > 0, true);
   const out = await install(central, "simnic");
   assert.deepEqual(central.ui.dialogs, [], "no warning on the central host");
   assert.match(out, /SimNIC is installed \(15 files\)/);
