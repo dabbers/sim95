@@ -1,0 +1,170 @@
+' DIG.SPK - asks a SimDNS name server about a name, like dig on Unix.
+' From the Terminal or the Sim Shell:
+'     DIG www.coolsite.sim               where is it? (the CNAMEs to its machine)
+'     DIG coolsite.sim MX                its mail machine (also TXT, NS, SOA, ANY)
+'     DIG www.coolsite.sim ANY @bravo    ask BRAVO instead of the usual server
+'     DIG SET dnsbox                     use DNSBOX's SimDNS from now on
+'     DIG SET NONE                       stop using SimDNS (machine names only)
+'     DIG SET                            which name server is set?
+' The name server is kept in C:\SYSTEM\RESOLV.INI, which Simxplorer's
+' Options and every program that uses RESOLVE.SPK read. The builder joins
+' RESOLVE.SPK onto the end of this file.
+
+VAR digReply AS String
+VAR digSock AS NET_Socket
+
+SUB Main ()
+    VAR args AS Array OF String
+    VAR a AS String
+    VAR name AS String
+    VAR qtype AS String = "A"
+    VAR server AS String
+    VAR addr AS String
+    VAR conn AS NET_Connection
+    VAR started AS Integer
+    VAR failed AS String
+    FOR EACH a IN SYS.Args
+        IF a.Trim() <> "" THEN args.Add(a.Trim())
+    NEXT
+    IF args.Count = 0 THEN
+        Print("Usage: DIG name [type] [@server]      types: A CNAME MX TXT NS SOA ANY")
+        Print("       DIG SET machine                  make machine this computer's name server")
+        RETURN
+    END IF
+    IF args[0].Upper() = "SET" THEN
+        SetServer(args)
+        RETURN
+    END IF
+    RsConfig()
+    FOR EACH a IN args
+        IF a.StartsWith("@") THEN
+            server = a.Substring(1, a.Length - 1).Lower()
+        ELSEIF "|A|CNAME|MX|TXT|NS|SOA|ANY|".Contains("|" + a.Upper() + "|") AND name <> "" THEN
+            qtype = a.Upper()
+        ELSE
+            name = a.Lower()
+        END IF
+    NEXT
+    IF name = "" THEN
+        Print("Which name? For example:  DIG www.coolsite.sim")
+        RETURN
+    END IF
+    IF server = "" THEN server = RsNameServer()
+    IF server = "" THEN
+        Print(";; No name server is set. Say which machine runs SimDNS:  DIG SET machine")
+        RETURN
+    END IF
+    Print("")
+    Print("; <<>> DiG 2.1 for SIM95 (SimDNS) <<>> " + name + " " + qtype)
+    addr = NET.Resolve(server)
+    IF addr = "" THEN
+        Print(";; connection failed: there is no machine called " + server)
+        RETURN
+    END IF
+    digSock = NET_Socket.New()
+    digSock.onMessage = Dig_OnMessage
+    started = SYS.Ticks
+    TRY
+        conn = digSock.Connect(addr, RSPORT)
+        conn.Send("QUERY " + RsFull(name) + " " + qtype)
+    CATCH err
+        failed = err
+    END TRY
+    ' A refused Connect spoils this handler (SIM95-NOTES.md): no more waiting.
+    IF failed <> "" THEN
+        Print(";; connection to " + server + " (" + addr + ") port 53 failed: " + failed.Split(":")[0] + ". Is NAMED.SPK running there?")
+        SYS.Exit(0)
+    END IF
+    WHILE digReply = "" AND SYS.Ticks - started < 3000
+        SYS.Sleep(50)
+    END WHILE
+    IF digReply = "" THEN
+        Print(";; connection timed out; no answer from " + server)
+        SYS.Exit(0)
+    END IF
+    Show(name, qtype, server, addr, SYS.Ticks - started)
+    SYS.Exit(0)
+END SUB
+
+SUB Dig_OnMessage (conn AS NET_Connection, message AS String)
+    digReply = message
+    conn.Close()
+END SUB
+
+' Prints the answer the way dig did, and where a machine name leads.
+SUB Show (name AS String, qtype AS String, server AS String, addr AS String, ms AS Integer)
+    VAR lines AS Array OF String
+    VAR w AS Array OF String
+    VAR i AS Integer
+    VAR status AS String
+    VAR last AS String
+    VAR machine AS String
+    lines = digReply.Lines()
+    status = lines[0].Split(" ")[0]
+    IF status = "OK" THEN status = "NOERROR"
+    Print(";; ->>HEADER<<- status: " + status + ", answers: " + Str(lines.Count - 1))
+    IF lines[0].Contains(" ") THEN Print(";; " + lines[0].Substring(lines[0].IndexOf(" ") + 1, lines[0].Length - lines[0].IndexOf(" ") - 1))
+    Print("")
+    Print(";; QUESTION SECTION:")
+    Print(";" + (RsFull(name) + ".").PadRight(31) + " IN  " + qtype)
+    IF lines.Count > 1 THEN
+        Print("")
+        Print(";; ANSWER SECTION:")
+        FOR i = 1 TO lines.Count - 1
+            w = lines[i].Split(" ")
+            IF w.Count < 4 THEN CONTINUE
+            Print((w[0] + ".").PadRight(24) + " " + w[1].PadRight(6) + " IN  " + w[2].PadRight(6) + " " + Rest(w, 3))
+            IF w[2] = "CNAME" THEN last = w[3]
+            IF w[2] = "A" THEN last = ""
+        NEXT
+    END IF
+    ' a CNAME chain that ends at a name SimDNS doesn't know ends at a machine
+    IF last <> "" THEN
+        machine = last
+        FOR i = 1 TO lines.Count - 1
+            IF lines[i].StartsWith(last + " ") THEN machine = ""
+        NEXT
+        IF machine <> "" THEN
+            Print("")
+            Print(";; " + machine + " is a SIM95 machine name: " + Where(machine) + " (asked SIM95, not SimDNS)")
+        END IF
+    END IF
+    Print("")
+    Print(";; Query time: " + Str(ms) + " msec")
+    Print(";; SERVER: " + server + " (" + addr + ") port 53")
+    Print(";; WHEN: " + TIME.Date + " " + TIME.Clock)
+END SUB
+
+FUNCTION Where (machine AS String) AS String
+    VAR a AS String
+    a = NET.Resolve(machine)
+    IF a = "" THEN RETURN "not on the network now"
+    RETURN a
+END FUNCTION
+
+FUNCTION Rest (w AS Array OF String, at AS Integer) AS String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    FOR i = at TO w.Count - 1
+        out.Add(w[i])
+    NEXT
+    RETURN out.Join(" ")
+END FUNCTION
+
+SUB SetServer (args AS Array OF String)
+    IF args.Count < 2 THEN
+        IF RsNameServer() = "" THEN
+            Print("No name server is set: names are SIM95 machine names only.")
+        ELSE
+            Print("The name server is " + RsNameServer() + " (C:\SYSTEM\RESOLV.INI).")
+        END IF
+        RETURN
+    END IF
+    IF args[1].Upper() = "NONE" THEN
+        RsSave("")
+        Print("No name server now: names are SIM95 machine names only.")
+        RETURN
+    END IF
+    RsSave(args[1])
+    Print("The name server is now " + args[1].Lower() + " (C:\SYSTEM\RESOLV.INI). Simxplorer uses it too.")
+END SUB

@@ -1,0 +1,317 @@
+' RESOLVE.SPK - the SimDNS resolver: asks the name server named in
+' C:\SYSTEM\RESOLV.INI which machine a name like www.coolsite.sim is on.
+'
+' A library, not a program: a program has it joined on the end (the builder
+' does this for Simxplorer and DIG; copy C:\PROGRAMS\RESOLVE.SPK onto the end
+' of your own). Every name in it starts with Rs, so it can't clash.
+'
+' C:\SYSTEM\RESOLV.INI, shared by every program on the machine:
+'     nameserver=dnsbox          the machine running NAMED.SPK
+'     search=coolsite.sim        optional: then "www" means www.coolsite.sim
+'
+' How to use it without ever waiting in the wrong place (SIM95-NOTES.md):
+'   1. RsWants(host)  - does this name need asking? FALSE for addresses,
+'                       plain machine names, names already known, or when
+'                       there is no name server (or it isn't answering).
+'   2. RsAsk(host, address) - sends the question to the name server at that
+'                       address. It is a Connect: let it be the last thing
+'                       the handler does.
+'   3. RsBusy()       - TRUE while the answer is on its way. After RSWAIT
+'                       with no answer the server is left alone for RSQUIET,
+'                       and every name goes to SIM95 as before.
+'   4. RsTarget(host) - where to connect: the machine name (or address) the
+'                       name server gave, or the name itself when SimDNS
+'                       doesn't know it, for SIM95 to look up.
+' Answers are kept for their TTL; names SimDNS doesn't know for RSNEG.
+
+CONST RSINI = "C:\SYSTEM\RESOLV.INI"
+CONST RSPORT = 53
+CONST RSWAIT = 2000             ' ms to wait for an answer
+CONST RSQUIET = 30000            ' ms to leave a silent name server alone
+CONST RSNEG = 60000             ' ms to remember that SimDNS doesn't know a name
+CONST RSMOST = 100              ' names kept
+
+VAR rsServer AS String
+VAR rsSearch AS String
+VAR rsRead AS Bool
+VAR rsReadAt AS Integer
+VAR rsSock AS NET_Socket
+VAR rsName AS Array OF String       ' the name as asked, lower case
+VAR rsTo AS Array OF String         ' where it is ("" when SimDNS doesn't know it)
+VAR rsCanon AS Array OF String      ' its last name in DNS before the machine
+VAR rsUntil AS Array OF Integer     ' SYS.Ticks when it is forgotten
+VAR rsAsking AS String
+VAR rsAskAt AS Integer
+VAR rsRefused AS Bool
+VAR rsDown AS Bool
+VAR rsDownAt AS Integer
+VAR rsWhy AS String                 ' the last thing that went wrong
+VAR rsLastReply AS String           ' the last answer, as it came
+
+' Reads RESOLV.INI (again after a few seconds, so a new setting takes).
+SUB RsConfig ()
+    VAR line AS String
+    VAR low AS String
+    IF rsRead AND SYS.Ticks - rsReadAt < 3000 THEN RETURN
+    rsRead = TRUE
+    rsReadAt = SYS.Ticks
+    rsServer = ""
+    rsSearch = ""
+    TRY
+        IF FS.Exists(RSINI) THEN
+            FOR EACH line IN FS.Read(RSINI).Lines()
+                low = line.Trim().Lower()
+                IF low.StartsWith("nameserver=") THEN rsServer = low.Substring(11, low.Length - 11).Trim()
+                IF low.StartsWith("search=") THEN rsSearch = low.Substring(7, low.Length - 7).Trim()
+            NEXT
+        END IF
+    CATCH err
+    END TRY
+    IF rsSearch.StartsWith(".") THEN rsSearch = rsSearch.Substring(1, rsSearch.Length - 1)
+    IF rsSearch.EndsWith(".") THEN rsSearch = rsSearch.Substring(0, rsSearch.Length - 1)
+END SUB
+
+' The name server (a machine name or address), or "" for none.
+FUNCTION RsNameServer () AS String
+    RsConfig()
+    RETURN rsServer
+END FUNCTION
+
+' Makes server this machine's name server ("" for none), keeping the rest
+' of RESOLV.INI, and forgets everything it knew.
+SUB RsSave (server AS String)
+    VAR out AS Array OF String
+    VAR line AS String
+    TRY
+        IF FS.Exists(RSINI) THEN
+            FOR EACH line IN FS.Read(RSINI).Lines()
+                IF line.Trim() <> "" AND NOT line.Trim().Lower().StartsWith("nameserver=") THEN out.Add(line)
+            NEXT
+        END IF
+        out.Insert(0, "nameserver=" + server.Trim().Lower())
+        FS.Write(RSINI, out.Join(Chr(10)) + Chr(10))
+    CATCH err
+        rsWhy = err
+    END TRY
+    rsRead = FALSE
+    RsForget()
+END SUB
+
+SUB RsForget ()
+    rsName.Clear()
+    rsTo.Clear()
+    rsCanon.Clear()
+    rsUntil.Clear()
+    rsDown = FALSE
+    rsAsking = ""
+END SUB
+
+FUNCTION RsIsAddress (s AS String) AS Bool
+    VAR p AS String
+    VAR i AS Integer
+    IF s.Split(".").Count <> 4 THEN RETURN FALSE
+    FOR EACH p IN s.Split(".")
+        IF p = "" OR p.Length > 3 THEN RETURN FALSE
+        FOR i = 0 TO p.Length - 1
+            IF NOT "0123456789".Contains(p.CharAt(i)) THEN RETURN FALSE
+        NEXT
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' The name the server is asked about: lower case, the search domain added
+' to a single word.
+FUNCTION RsFull (host AS String) AS String
+    VAR h AS String
+    h = host.Trim().Lower()
+    IF h.EndsWith(".") THEN h = h.Substring(0, h.Length - 1)
+    IF NOT h.Contains(".") AND rsSearch <> "" THEN h = h + "." + rsSearch
+    RETURN h
+END FUNCTION
+
+' Where a name is in the list of answers, or -1 (old answers are dropped).
+FUNCTION RsFind (host AS String) AS Integer
+    VAR i AS Integer
+    i = rsName.IndexOf(host.Trim().Lower())
+    IF i < 0 THEN RETURN -1
+    IF SYS.Ticks > rsUntil[i] THEN
+        rsName.RemoveAt(i)
+        rsTo.RemoveAt(i)
+        rsCanon.RemoveAt(i)
+        rsUntil.RemoveAt(i)
+        RETURN -1
+    END IF
+    RETURN i
+END FUNCTION
+
+FUNCTION RsWants (host AS String) AS Bool
+    VAR h AS String
+    RsConfig()
+    h = host.Trim().Lower()
+    IF rsServer = "" OR h = "" OR h = "localhost" THEN RETURN FALSE
+    IF rsDown AND SYS.Ticks - rsDownAt < RSQUIET THEN RETURN FALSE
+    IF RsIsAddress(h) THEN RETURN FALSE
+    IF NOT h.Contains(".") AND rsSearch = "" THEN RETURN FALSE
+    IF h = rsServer OR h = NET.HostName.Lower() THEN RETURN FALSE
+    RETURN RsFind(h) < 0
+END FUNCTION
+
+' Sends the question. A Connect, so it must be the last thing its handler
+' does: if the name server refuses, the handler is spoiled (SIM95-NOTES.md).
+SUB RsAsk (host AS String, address AS String)
+    VAR conn AS NET_Connection
+    IF IsNothing(rsSock) THEN
+        rsSock = NET_Socket.New()
+        rsSock.onMessage = Rs_OnMessage
+    END IF
+    rsAsking = host.Trim().Lower()
+    rsAskAt = SYS.Ticks
+    rsRefused = FALSE
+    TRY
+        conn = rsSock.Connect(address, RSPORT)
+        conn.Tag = "rs:" + rsAsking
+        conn.Send("QUERY " + RsFull(rsAsking) + " A")
+    CATCH err
+        rsRefused = TRUE
+    END TRY
+END SUB
+
+' Gives up on the name server for a while: every name goes to SIM95.
+SUB RsGiveUp (why AS String)
+    rsWhy = why
+    rsDown = TRUE
+    rsDownAt = SYS.Ticks
+    rsAsking = ""
+END SUB
+
+FUNCTION RsBusy () AS Bool
+    IF rsAsking = "" THEN RETURN FALSE
+    IF rsRefused THEN
+        RsGiveUp("the name server " + rsServer + " refused")
+        RETURN FALSE
+    END IF
+    IF SYS.Ticks - rsAskAt > RSWAIT THEN
+        RsGiveUp("no answer from the name server " + rsServer)
+        RETURN FALSE
+    END IF
+    RETURN TRUE
+END FUNCTION
+
+SUB Rs_OnMessage (conn AS NET_Connection, message AS String)
+    VAR h AS String
+    IF NOT conn.Tag.StartsWith("rs:") THEN RETURN
+    h = conn.Tag.Substring(3, conn.Tag.Length - 3)
+    conn.Tag = ""
+    TRY
+        conn.Close()
+    CATCH err
+    END TRY
+    RsTake(h, message)
+    IF h = rsAsking THEN rsAsking = ""
+END SUB
+
+' Learns an answer: follows its CNAMEs to an address, or to the machine
+' name the chain ends at.
+SUB RsTake (host AS String, reply AS String)
+    VAR lines AS Array OF String
+    VAR w AS Array OF String
+    VAR cur AS String
+    VAR onward AS String
+    VAR target AS String
+    VAR canon AS String
+    VAR ttl AS Integer = 3600
+    VAR hops AS Integer
+    VAR i AS Integer
+    rsLastReply = reply
+    lines = reply.Lines()
+    IF lines.Count = 0 THEN RETURN
+    IF lines[0].StartsWith("NXDOMAIN") THEN
+        RsKeep(host, "", "", RSNEG)
+        RETURN
+    END IF
+    IF NOT lines[0].StartsWith("OK") THEN
+        rsWhy = lines[0]
+        RsKeep(host, "", "", 10000)
+        RETURN
+    END IF
+    cur = RsFull(host)
+    canon = cur
+    FOR hops = 0 TO 8
+        onward = ""
+        FOR i = 1 TO lines.Count - 1
+            w = lines[i].Split(" ")
+            IF w.Count >= 4 THEN
+                IF w[0] = cur AND w[2] = "A" AND target = "" THEN target = w[3]
+                IF w[0] = cur AND w[2] = "CNAME" THEN onward = w[3]
+                IF w[0] = cur AND (w[2] = "A" OR w[2] = "CNAME") AND Int(Val(w[1])) < ttl THEN ttl = Int(Val(w[1]))
+            END IF
+        NEXT
+        IF target <> "" THEN
+            canon = cur
+            BREAK
+        END IF
+        IF onward = "" THEN BREAK
+        canon = cur
+        cur = onward
+    NEXT
+    IF target = "" THEN
+        ' a name with no CNAME and no address: not one to connect to
+        IF cur = RsFull(host) THEN
+            RsKeep(host, "", "", RSNEG)
+            RETURN
+        END IF
+        ' the end of the chain: a SIM95 machine name
+        target = cur
+    END IF
+    IF ttl < 5 THEN ttl = 5
+    RsKeep(host, target, canon, ttl * 1000)
+END SUB
+
+SUB RsKeep (host AS String, target AS String, canon AS String, ms AS Integer)
+    VAR i AS Integer
+    VAR h AS String
+    h = host.Trim().Lower()
+    i = rsName.IndexOf(h)
+    IF i >= 0 THEN
+        rsName.RemoveAt(i)
+        rsTo.RemoveAt(i)
+        rsCanon.RemoveAt(i)
+        rsUntil.RemoveAt(i)
+    END IF
+    IF rsName.Count >= RSMOST THEN
+        rsName.RemoveAt(0)
+        rsTo.RemoveAt(0)
+        rsCanon.RemoveAt(0)
+        rsUntil.RemoveAt(0)
+    END IF
+    rsName.Add(h)
+    rsTo.Add(target)
+    rsCanon.Add(canon)
+    rsUntil.Add(SYS.Ticks + ms)
+END SUB
+
+' Where to connect for host: what SimDNS said, or host itself.
+FUNCTION RsTarget (host AS String) AS String
+    VAR i AS Integer
+    i = RsFind(host)
+    IF i < 0 THEN RETURN host
+    IF rsTo[i] = "" THEN RETURN host
+    RETURN rsTo[i]
+END FUNCTION
+
+' The name host's machine was found under (www.coolsite.sim), or host.
+FUNCTION RsCanonical (host AS String) AS String
+    VAR i AS Integer
+    i = RsFind(host)
+    IF i < 0 THEN RETURN host
+    IF rsTo[i] = "" THEN RETURN host
+    RETURN rsCanon[i]
+END FUNCTION
+
+' Did SimDNS answer for host (so RsTarget is its machine)?
+FUNCTION RsKnown (host AS String) AS Bool
+    VAR i AS Integer
+    i = RsFind(host)
+    IF i < 0 THEN RETURN FALSE
+    RETURN rsTo[i] <> ""
+END FUNCTION

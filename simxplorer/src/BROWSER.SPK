@@ -17,7 +17,9 @@
 '
 ' Files: C:\SYSTEM\SIMXPLOR.INI (home, search, mail), C:\SYSTEM\FAVORITE.TXT
 ' (title|url), C:\SYSTEM\HISTORY.TXT (when|title|url), and Voyager's
-' C:\SYSTEM\COOKIES.TXT (HOST|name|value).
+' C:\SYSTEM\COOKIES.TXT (HOST|name|value). Names like www.coolsite.sim are
+' asked of the SimDNS name server in C:\SYSTEM\RESOLV.INI (the builder adds
+' simdns/src/RESOLVE.SPK, the Rs... names): see AskFirst.
 
 CONST APPTITLE = "Simxplorer"
 CONST APPAGENT = "Mozilla/2.0 (compatible; Simxplorer 3.02; SIM95)"
@@ -693,21 +695,25 @@ SUB Tick ()
         END TRY
     END IF
     ' Last of all, because it may be spoiled: start the next fetch. Only one
-    ' Connect a tick: the page, else a script's request, else a picture.
-    IF resolving THEN RETURN
+    ' Connect a tick: the page, else a script's request, else a picture. A
+    ' name the name server must be asked about first takes a tick of its own.
+    IF resolving OR RsBusy() THEN RETURN
     IF NOT fetching AND NOT busy AND pPending THEN
+        IF AskFirst(pUrl, TRUE) THEN RETURN
         StartFetch("page", pUrl, "")
         RETURN
     END IF
     ' (spaced out even when ticks come late and all at once: answers that
     ' arrive together can lose their last message, see SIM95-NOTES.md)
     IF xState.IndexOf("wait") >= 0 AND SYS.Ticks - xLast >= TICKMS THEN
+        IF AskFirst(xUrl[xState.IndexOf("wait")], FALSE) THEN RETURN
         xLast = SYS.Ticks
         StartXhr(xSerial[xState.IndexOf("wait")])
         RETURN
     END IF
     IF NOT fetching AND NOT busy THEN
         IF imgWant.Count > 0 THEN
+            IF AskFirst(imgWant[0], FALSE) THEN RETURN
             fSrc = imgSrc[0]
             imgSrc.RemoveAt(0)
             fUrl = imgWant[0]
@@ -727,6 +733,36 @@ SUB Oops (problem AS String)
 END SUB
 
 ' ================================================================ fetching
+
+' A name the SimDNS name server may know (www.coolsite.sim) is asked about
+' before anything is fetched from it: the name server's address (one
+' lookup at a time, like any other), then the question, which is a Connect
+' and so ends the tick. TRUE when it asked; the answer comes to RESOLVE.SPK,
+' and while it is on its way (RsBusy) nothing else starts. A name server
+' that is down or silent is left alone for a while, and names go to SIM95
+' as before. The address bar, the Host header and the cookies keep the
+' name as typed; only the connection goes to the machine SimDNS named.
+FUNCTION AskFirst (url AS String, isPage AS Bool) AS Bool
+    VAR host AS String
+    VAR server AS String
+    VAR addr AS String
+    IF NOT url.Lower().StartsWith("http:") THEN RETURN FALSE
+    host = HostOf(url)
+    IF host = "" OR NOT RsWants(host) THEN RETURN FALSE
+    IF isPage THEN
+        progress.Value = 5
+        SetStatus("Looking up " + host + "...")
+        DrawThrob()
+    END IF
+    server = RsNameServer()
+    addr = Lookup(server)
+    IF addr = "" THEN
+        RsGiveUp("there is no machine called " + server)
+        RETURN FALSE
+    END IF
+    RsAsk(host, addr)
+    RETURN TRUE
+END FUNCTION
 
 ' The address of a host. Only one lookup is ever under way (the tick waits
 ' for it); an address found is kept for DNSKEEP. "" when nobody has the name.
@@ -793,7 +829,9 @@ SUB StartFetch (kind AS String, url AS String, src AS String)
         RETURN
     END IF
     mine = fNumber
-    addr = Lookup(HostOf(url))
+    ' (www.coolsite.sim: to the machine SimDNS said it is on)
+    IF kind = "page" AND RsKnown(HostOf(url)) THEN SetStatus("Connecting to " + RsTarget(HostOf(url)) + "...")
+    addr = Lookup(RsTarget(HostOf(url)))
     ' (Stop, or another page, while we looked)
     IF mine <> fNumber THEN RETURN
     IF addr = "" THEN
@@ -1065,7 +1103,7 @@ SUB StartXhr (serial AS Integer)
         xState[i] = "done"
         RETURN
     END IF
-    addr = Lookup(HostOf(url))
+    addr = Lookup(RsTarget(HostOf(url)))
     i = xSerial.IndexOf(serial)
     IF i < 0 THEN RETURN
     IF addr = "" THEN
@@ -2721,6 +2759,8 @@ FUNCTION AboutPage (what AS String) AS String
                     IF pair.StartsWith("home=") THEN optHome = UrlDec(pair.Substring(5, pair.Length - 5)).Trim()
                     IF pair.StartsWith("search=") THEN optSearch = UrlDec(pair.Substring(7, pair.Length - 7)).Trim()
                     IF pair.StartsWith("mail=") THEN optMail = UrlDec(pair.Substring(5, pair.Length - 5)).Trim()
+                    ' the name server is every program's: C:\SYSTEM\RESOLV.INI
+                    IF pair.StartsWith("dns=") THEN RsSave(UrlDec(pair.Substring(4, pair.Length - 4)).Trim())
                     IF pair = "cookies=1" THEN
                         TRY
                             FS.Write(JARFILE, "")
@@ -2738,6 +2778,8 @@ FUNCTION AboutPage (what AS String) AS String
                  + "<tr><td>Search page:</td><td><input name=""search"" size=""40"" value=""" + Esc(optSearch) + """></td></tr>" _
                  + "<tr><td></td><td><font size=""2"">%s is where your words go, as in http://asksim/index.asp?q=%s. The Address bar searches there too: type <tt>? chess</tt> or <tt>go chess</tt>.</font></td></tr>" _
                  + "<tr><td>Mail:</td><td><input name=""mail"" size=""40"" value=""" + Esc(optMail) + """></td></tr>" _
+                 + "<tr><td>Name server:</td><td><input name=""dns"" size=""40"" value=""" + Esc(RsNameServer()) + """></td></tr>" _
+                 + "<tr><td></td><td><font size=""2"">The machine running SimDNS, which knows names like www.coolsite.sim. Leave it empty for machine names only. Every program on this computer uses it (C:\SYSTEM\RESOLV.INI).</font></td></tr>" _
                  + "<tr><td></td><td><input type=""submit"" value=""OK""></td></tr></table></form>" _
                  + "<hr><p><a href=""about:options?cookies=1"">Delete all cookies</a> &middot; <a href=""about:history?clear=1"">Clear History</a></p></body></html>"
         CASE "search"

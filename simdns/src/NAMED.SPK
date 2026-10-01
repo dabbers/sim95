@@ -1,0 +1,753 @@
+' NAMED.SPK - SimDNS, the name server (BIND's was called named). Listens on
+' port 53 and says which machine a name like www.coolsite.sim is on.
+'
+' SIM95 gives every machine one name and nothing can give it another, so
+' SimDNS doesn't hand out addresses: it points names at machine names.
+' Addresses change every time a machine starts; machine names don't. So
+' the usual record is a CNAME to a machine:
+'
+'     www    IN  CNAME  alpha
+'
+' and whoever asks then finds ALPHA the ordinary SIM95 way.
+'
+' The protocol: one question a message, one answer a message.
+'     C: QUERY www.coolsite.sim A
+'     S: OK
+'        www.coolsite.sim 300 CNAME alpha
+' The type is A, CNAME, MX, TXT, NS, SOA or ANY (A when left out). The
+' answer is OK and one "name ttl type value" line per record (none when the
+' name is there but has nothing of that type), or NXDOMAIN (no such name),
+' or SERVFAIL and why. CNAMEs are followed through this server's own zones,
+' up to MAXCHAIN of them; a chain that ends at a name SimDNS doesn't know
+' ends at a machine name. A fourth word, NORECURSE, means "answer from your
+' own zones only", which is how one SimDNS asks another.
+'
+' C:\DNS\NAMED.CNF says which zones this server has (named.boot style):
+'     directory   C:\DNS
+'     primary     coolsite.sim   COOLSITE.SIM
+'     forwarders  dnsbox
+' Questions about other names go to the first forwarder, if there is one,
+' and a zone can hand a part of itself to another SimDNS with an NS record
+' (dab  IN  NS  bravo). Either way that is one hop: the server asked is told
+' NORECURSE, so two servers can never bounce a question back and forth.
+'
+' Zone files and NAMED.CNF are looked at every few seconds and loaded again
+' when they change (SIM95 has no file times, so the text is compared). The
+' registrar (/dns/) writes them; so can you, with Notes.
+'
+' Answers are sent, and the connection is closed a little later by the
+' asker or by us: a close can overtake the last message (SIM95-NOTES.md).
+
+CONST DNSDIR = "C:\DNS"
+CONST CONFIG = "C:\DNS\NAMED.CNF"
+CONST PORT = 53
+CONST MAXCHAIN = 8
+CONST MAXREPLY = 60000          ' an answer is one network message: 64K at most
+CONST FWDWAIT = 3000            ' ms to wait for a forwarder or a delegated server
+CONST LOOKEVERY = 3000          ' ms between looks at the zone files
+CONST LINGER = 2000             ' ms an answered connection stays open
+CONST DEFTTL = 3600
+
+VAR NL AS String
+VAR win AS GUI_Window
+VAR log AS GUI_ListBox
+VAR sock AS NET_Socket
+VAR fwd AS NET_Socket
+VAR timer AS GUI_Timer
+VAR questions AS Integer
+VAR lookedAt AS Integer
+
+' zones, as loaded
+VAR cnfText AS String
+VAR zOrigin AS Array OF String
+VAR zFile AS Array OF String
+VAR zText AS Array OF String       ' each file as it was loaded, to see changes
+VAR forwarders AS Array OF String
+VAR problems AS Integer
+
+' records: name (lower case, no last dot), ttl, type, value
+VAR rName AS Array OF String
+VAR rTtl AS Array OF Integer
+VAR rType AS Array OF String
+VAR rValue AS Array OF String
+
+' answered connections, closed after LINGER
+VAR lingerConn AS Array OF NET_Connection
+VAR lingerAt AS Array OF Integer
+
+' questions passed on to another server
+VAR pConn AS Array OF NET_Connection
+VAR pQuestion AS Array OF String
+VAR pServer AS Array OF String
+VAR pState AS Array OF String      ' "wait" (to send), "sent"
+VAR pSince AS Array OF Integer
+VAR pSerial AS Array OF Integer
+VAR serials AS Integer
+VAR passTo AS String               ' set by Answer: the server to ask instead
+
+' other servers' addresses, looked up one at a time (SIM95-NOTES.md)
+VAR resolving AS Bool
+VAR resolvingSince AS Integer
+VAR aName AS Array OF String
+VAR aAddr AS Array OF String
+VAR aAt AS Array OF Integer
+
+' what RecordsAt found
+VAR gAny AS Bool
+VAR gCname AS Integer
+
+SUB Main ()
+    NL = Chr(10)
+    win = GUI_Window.New("SimDNS Name Server", 460, 240)
+    win.Icon = "network"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    log = GUI_ListBox.New(win)
+    log.Mono = TRUE
+    Win_OnResize()
+    IF NOT FS.Exists(DNSDIR) THEN FS.MakeDir(DNSDIR)
+    LoadAll()
+
+    sock = NET_Socket.New()
+    sock.onConnect = Sock_OnConnect
+    sock.onMessage = Sock_OnMessage
+    sock.onError = Sock_OnError
+    sock.Listen(PORT)
+    Note("Listening on port " + Str(PORT) + " as " + NET.HostName.Lower())
+    fwd = NET_Socket.New()
+    fwd.onMessage = Fwd_OnMessage
+    fwd.onError = Sock_OnError
+
+    timer = GUI_Timer.New(win)
+    timer.Interval = 100
+    timer.onTick = Timer_OnTick
+    timer.Start()
+    lookedAt = SYS.Ticks
+    Status()
+    win.Show()
+END SUB
+
+SUB Win_OnResize ()
+    log.SetBounds(0, 0, win.Width, win.Height)
+END SUB
+
+SUB Win_OnClose ()
+    sock.Close()
+    SYS.Exit(0)
+END SUB
+
+SUB Sock_OnError (message AS String)
+    Note("ERROR " + message)
+    IF message.Contains("in use") THEN Note("Is another name server already running? See Tasks.")
+END SUB
+
+SUB Note (text AS String)
+    log.Add(TIME.Clock + "  " + text)
+    IF log.Count > 300 THEN log.RemoveAt(0)
+    log.ScrollToEnd()
+END SUB
+
+SUB Status ()
+    win.Status = NET.HostName.Lower() + " port " + Str(PORT) + " - " + Str(zOrigin.Count) + " zones, " + Str(rName.Count) + " records, " + Str(questions) + " questions"
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    TRY
+        IF FS.Exists(path) THEN RETURN FS.Read(path)
+    CATCH err
+    END TRY
+    RETURN fallback
+END FUNCTION
+
+' ---------------------------------------------------------------- loading
+
+SUB LoadAll ()
+    VAR line AS String
+    VAR w AS Array OF String
+    VAR dir AS String
+    VAR n AS Integer
+    VAR i AS Integer
+    VAR path AS String
+    zOrigin.Clear()
+    zFile.Clear()
+    zText.Clear()
+    forwarders.Clear()
+    rName.Clear()
+    rTtl.Clear()
+    rType.Clear()
+    rValue.Clear()
+    problems = 0
+    dir = DNSDIR
+    cnfText = ReadOr(CONFIG, "")
+    IF NOT FS.Exists(CONFIG) THEN Note("No " + CONFIG + " yet: no zones")
+    FOR EACH line IN cnfText.Lines()
+        n = n + 1
+        w = Words(NoComment(line))
+        IF w.Count = 0 THEN CONTINUE
+        SELECT CASE w[0].Lower()
+            CASE "directory"
+                IF w.Count > 1 THEN dir = w[1]
+            CASE "primary", "zone"
+                IF w.Count < 3 THEN
+                    Problem("NAMED.CNF line " + Str(n) + ": say primary <domain> <file>")
+                ELSE
+                    path = w[2]
+                    IF NOT path.Contains(":\") THEN path = dir + "\" + path
+                    LoadZone(Clean(w[1]), path.Upper())
+                END IF
+            CASE "forwarders", "forwarder"
+                FOR i = 1 TO w.Count - 1
+                    forwarders.Add(w[i].Lower().Replace(";", ""))
+                NEXT
+            CASE ELSE
+                Problem("NAMED.CNF line " + Str(n) + ": what is " + w[0] + "?")
+        END SELECT
+    NEXT
+    Note("Loaded " + Str(zOrigin.Count) + " zones, " + Str(rName.Count) + " records" + Plural(problems, " problem"))
+END SUB
+
+FUNCTION Plural (n AS Integer, what AS String) AS String
+    IF n = 0 THEN RETURN ""
+    IF n = 1 THEN RETURN ", 1" + what
+    RETURN ", " + Str(n) + what + "s"
+END FUNCTION
+
+SUB Problem (text AS String)
+    problems = problems + 1
+    Note(text)
+END SUB
+
+SUB LoadZone (origin AS String, path AS String)
+    VAR text AS String
+    IF origin = "" THEN
+        Problem("NAMED.CNF: a zone with no name")
+        RETURN
+    END IF
+    IF zOrigin.IndexOf(origin) >= 0 THEN
+        Problem("NAMED.CNF: " + origin + " is there twice")
+        RETURN
+    END IF
+    text = ReadOr(path, "")
+    IF NOT FS.Exists(path) THEN Problem(origin + ": there is no " + path)
+    zOrigin.Add(origin)
+    zFile.Add(path)
+    zText.Add(text)
+    ParseZone(origin, text, path.Split("\")[path.Split("\").Count - 1])
+END SUB
+
+' One zone file: BIND's format, the parts SIM95 needs.
+'   $TTL 300
+'   @      IN  SOA    alpha hostmaster ( 1 )
+'   @      IN  NS     alpha
+'   @      IN  CNAME  alpha        ; the domain itself is on ALPHA
+'   www        CNAME  alpha
+'   shop       CNAME  www          ; a name in this zone, since it has one
+'   old        A      65.16.0.7    ; an address (it changes when ALPHA restarts)
+'   @          MX     10 alpha
+'   @          TXT    "Best viewed in Simxplorer"
+'   dab        NS     bravo        ; dab.coolsite.sim is BRAVO's to answer
+' A name ending in a dot is complete; @ is the zone; any other name is in
+' the zone (www is www.coolsite.sim). A line that starts with a space is
+' about the name above it. CNAME and MX point at names: one with a dot is
+' taken as it is, and a single word is a name in this zone if the zone has
+' it, or else a SIM95 machine. NS points at the machine running SimDNS.
+SUB ParseZone (origin AS String, text AS String, fname AS String)
+    VAR lines AS Array OF String
+    VAR line AS String
+    VAR raw AS String
+    VAR w AS Array OF String
+    VAR owner AS String
+    VAR ttl AS Integer = DEFTTL
+    VAR n AS Integer
+    VAR at AS Integer
+    VAR rt AS String
+    VAR value AS String
+    VAR first AS Integer
+    VAR i AS Integer
+    VAR here AS String
+    first = rName.Count
+    owner = origin
+    lines = text.Lines()
+    n = 0
+    WHILE n < lines.Count
+        raw = lines[n].Replace(Chr(9), " ").Replace(Chr(13), "")
+        n = n + 1
+        line = NoComment(raw)
+        ' ( ... ) runs over several lines (an SOA, usually)
+        IF line.Contains("(") AND NOT line.Contains(")") THEN
+            WHILE n < lines.Count AND NOT line.Contains(")")
+                line = line + " " + NoComment(lines[n].Replace(Chr(9), " "))
+                n = n + 1
+            END WHILE
+        END IF
+        line = line.Replace("(", " ").Replace(")", " ")
+        IF line.Trim() = "" THEN CONTINUE
+        w = Words(line)
+        IF w[0].Upper() = "$TTL" THEN
+            IF w.Count > 1 THEN ttl = Int(Val(w[1]))
+            CONTINUE
+        END IF
+        IF w[0].Upper() = "$ORIGIN" THEN
+            IF w.Count > 1 THEN origin = Qualify(w[1], origin)
+            CONTINUE
+        END IF
+        at = 0
+        IF NOT line.StartsWith(" ") THEN
+            owner = Qualify(w[0], origin)
+            at = 1
+        END IF
+        here = Str(ttl)
+        IF at < w.Count THEN
+            IF IsNumber(w[at]) THEN
+                here = w[at]
+                at = at + 1
+            END IF
+        END IF
+        IF at < w.Count THEN
+            IF w[at].Upper() = "IN" THEN at = at + 1
+        END IF
+        IF at >= w.Count THEN
+            Problem(fname + " line " + Str(n) + ": no record type")
+            CONTINUE
+        END IF
+        rt = w[at].Upper()
+        at = at + 1
+        value = ""
+        SELECT CASE rt
+            CASE "CNAME", "NS"
+                IF at < w.Count THEN value = Target(w[at], origin)
+            CASE "A"
+                IF at < w.Count THEN value = w[at]
+                IF NOT IsAddress(value) THEN
+                    Problem(fname + " line " + Str(n) + ": A needs an address like 65.16.0.2 (for a machine, use CNAME " + value + ")")
+                    CONTINUE
+                END IF
+            CASE "MX"
+                IF at + 1 < w.Count THEN
+                    IF IsNumber(w[at]) THEN value = w[at] + " " + Target(w[at + 1], origin)
+                END IF
+            CASE "TXT"
+                IF raw.Contains("""") THEN
+                    value = raw.Substring(raw.IndexOf(""""), raw.Length - raw.IndexOf(""""))
+                    value = value.Substring(0, LastQuote(value) + 1)
+                ELSE
+                    value = """" + Rest(w, at) + """"
+                END IF
+                IF value.Length > 1000 THEN value = value.Substring(0, 999) + """"
+            CASE "SOA"
+                value = Rest(w, at)
+            CASE ELSE
+                Problem(fname + " line " + Str(n) + ": SimDNS doesn't know records of type " + rt)
+                CONTINUE
+        END SELECT
+        IF value = "" OR value = """" THEN
+            Problem(fname + " line " + Str(n) + ": " + rt + " for " + owner + " needs something to point at")
+            CONTINUE
+        END IF
+        rName.Add(owner)
+        rTtl.Add(Int(Val(here)))
+        rType.Add(rt)
+        rValue.Add(value)
+    END WHILE
+    ' a single word is a name in this zone if the zone has it, or else a machine
+    FOR i = first TO rName.Count - 1
+        IF rType[i] = "CNAME" THEN
+            IF NOT rValue[i].Contains(".") AND rName.IndexOf(rValue[i] + "." + origin) >= first THEN rValue[i] = rValue[i] + "." + origin
+        END IF
+        IF rType[i] = "MX" THEN
+            value = rValue[i].Split(" ")[1]
+            IF NOT value.Contains(".") AND rName.IndexOf(value + "." + origin) >= first THEN rValue[i] = rValue[i].Split(" ")[0] + " " + value + "." + origin
+        END IF
+    NEXT
+END SUB
+
+' A name as written in a zone file, made complete.
+FUNCTION Qualify (n AS String, origin AS String) AS String
+    n = n.Lower()
+    IF n = "@" THEN RETURN origin
+    IF n.EndsWith(".") THEN RETURN n.Substring(0, n.Length - 1)
+    RETURN n + "." + origin
+END FUNCTION
+
+' What a CNAME, MX or NS points at: @ is the zone, a trailing dot goes.
+FUNCTION Target (n AS String, origin AS String) AS String
+    n = n.Lower()
+    IF n = "@" THEN RETURN origin
+    IF n.EndsWith(".") THEN n = n.Substring(0, n.Length - 1)
+    RETURN n
+END FUNCTION
+
+FUNCTION Clean (n AS String) AS String
+    n = n.Trim().Lower()
+    IF n.EndsWith(".") THEN n = n.Substring(0, n.Length - 1)
+    RETURN n
+END FUNCTION
+
+' The words of a line, however many spaces between them.
+FUNCTION Words (s AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR p AS String
+    FOR EACH p IN s.Replace(Chr(9), " ").Split(" ")
+        IF p <> "" THEN out.Add(p)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION Rest (w AS Array OF String, at AS Integer) AS String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    FOR i = at TO w.Count - 1
+        out.Add(w[i])
+    NEXT
+    RETURN out.Join(" ")
+END FUNCTION
+
+' A line without its ; comment (a ; inside quotes stays).
+FUNCTION NoComment (s AS String) AS String
+    VAR i AS Integer
+    VAR quoted AS Bool
+    IF NOT s.Contains(";") THEN RETURN s
+    IF NOT s.Contains("""") THEN RETURN s.Substring(0, s.IndexOf(";"))
+    FOR i = 0 TO s.Length - 1
+        IF s.CharAt(i) = """" THEN quoted = NOT quoted
+        IF s.CharAt(i) = ";" AND NOT quoted THEN RETURN s.Substring(0, i)
+    NEXT
+    RETURN s
+END FUNCTION
+
+FUNCTION LastQuote (s AS String) AS Integer
+    VAR i AS Integer
+    FOR i = s.Length - 1 TO 0 STEP -1
+        IF s.CharAt(i) = """" THEN RETURN i
+    NEXT
+    RETURN 0
+END FUNCTION
+
+FUNCTION IsNumber (s AS String) AS Bool
+    VAR i AS Integer
+    IF s = "" OR s.Length > 9 THEN RETURN FALSE
+    FOR i = 0 TO s.Length - 1
+        IF NOT "0123456789".Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION IsAddress (s AS String) AS Bool
+    VAR p AS String
+    IF s.Split(".").Count <> 4 THEN RETURN FALSE
+    FOR EACH p IN s.Split(".")
+        IF NOT IsNumber(p) OR p.Length > 3 THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' Has a zone file or NAMED.CNF changed since it was loaded?
+FUNCTION Changed () AS Bool
+    VAR i AS Integer
+    IF ReadOr(CONFIG, "") <> cnfText THEN RETURN TRUE
+    FOR i = 0 TO zFile.Count - 1
+        IF ReadOr(zFile[i], "") <> zText[i] THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' ---------------------------------------------------------------- answering
+
+SUB Sock_OnConnect (conn AS NET_Connection)
+    conn.Accept()
+END SUB
+
+SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+    VAR w AS Array OF String
+    VAR name AS String
+    VAR qtype AS String = "A"
+    VAR alone AS Bool
+    VAR reply AS String
+    questions = questions + 1
+    w = Words((message + NL).Split(NL)[0].Replace(Chr(13), ""))
+    IF w.Count < 2 OR w[0].Upper() <> "QUERY" THEN
+        Send(conn, "SERVFAIL ask like this: QUERY www.coolsite.sim A", "?")
+        RETURN
+    END IF
+    name = Clean(w[1])
+    IF w.Count > 2 THEN qtype = w[2].Upper()
+    IF w.Count > 3 THEN alone = w[3].Upper() = "NORECURSE"
+    IF name = "" OR name.Length > 200 OR NOT OnlyFrom(name, "abcdefghijklmnopqrstuvwxyz0123456789.-_*") THEN
+        Send(conn, "SERVFAIL that is not a name", name)
+        RETURN
+    END IF
+    IF NOT "|A|CNAME|MX|TXT|NS|SOA|ANY|".Contains("|" + qtype + "|") THEN
+        Send(conn, "SERVFAIL SimDNS doesn't know records of type " + qtype, name + " " + qtype)
+        RETURN
+    END IF
+    reply = Answer(name, qtype)
+    IF reply <> "" THEN
+        Send(conn, reply, name + " " + qtype)
+        RETURN
+    END IF
+    IF alone THEN
+        IF ZoneOf(name) < 0 THEN
+            Send(conn, "NXDOMAIN", name + " " + qtype)
+        ELSE
+            Send(conn, "SERVFAIL " + name + " is " + passTo + "'s to answer", name + " " + qtype)
+        END IF
+        RETURN
+    END IF
+    ' another server's: the timer passes it on
+    serials = serials + 1
+    pConn.Add(conn)
+    pQuestion.Add("QUERY " + name + " " + qtype + " NORECURSE")
+    pServer.Add(passTo)
+    pState.Add("wait")
+    pSince.Add(SYS.Ticks)
+    pSerial.Add(serials)
+    Note(conn.FromAddress + "  " + name + " " + qtype + " -> asking " + passTo)
+END SUB
+
+SUB Send (conn AS NET_Connection, reply AS String, what AS String)
+    VAR said AS String
+    TRY
+        conn.Send(reply)
+    CATCH err
+    END TRY
+    lingerConn.Add(conn)
+    lingerAt.Add(SYS.Ticks)
+    said = reply.Lines()[0]
+    IF said = "OK" THEN
+        IF reply.Lines().Count > 1 THEN
+            said = reply.Lines()[reply.Lines().Count - 1]
+            said = said.Substring(said.IndexOf(" ") + 1, said.Length - said.IndexOf(" ") - 1)
+            said = said.Substring(said.IndexOf(" ") + 1, said.Length - said.IndexOf(" ") - 1)
+        ELSE
+            said = "nothing of that type"
+        END IF
+    END IF
+    Note(conn.FromAddress + "  " + what + " -> " + said)
+    Status()
+END SUB
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' The zone a name is in (the longest that fits), or -1.
+FUNCTION ZoneOf (name AS String) AS Integer
+    VAR i AS Integer
+    VAR best AS Integer = -1
+    FOR i = 0 TO zOrigin.Count - 1
+        IF name = zOrigin[i] OR name.EndsWith("." + zOrigin[i]) THEN
+            IF best < 0 THEN
+                best = i
+            ELSEIF zOrigin[i].Length > zOrigin[best].Length THEN
+                best = i
+            END IF
+        END IF
+    NEXT
+    RETURN best
+END FUNCTION
+
+' The machine a part of zone z was handed to with an NS record, or "".
+FUNCTION DelegatedTo (name AS String, z AS Integer) AS String
+    VAR i AS Integer
+    VAR origin AS String
+    origin = zOrigin[z]
+    FOR i = 0 TO rName.Count - 1
+        IF rType[i] = "NS" AND rName[i] <> origin AND rName[i].EndsWith("." + origin) THEN
+            IF name = rName[i] OR name.EndsWith("." + rName[i]) THEN RETURN rValue[i]
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' The answer to a question, or "" when another server must be asked (passTo).
+FUNCTION Answer (name AS String, qtype AS String) AS String
+    VAR out AS String
+    VAR cur AS String
+    VAR hop AS Integer
+    VAR z AS Integer
+    VAR hits AS String
+    VAR d AS String
+    passTo = ""
+    cur = name
+    FOR hop = 0 TO MAXCHAIN
+        z = ZoneOf(cur)
+        IF z < 0 THEN
+            ' the chain has left our zones: what it ends at is a machine
+            IF hop > 0 THEN RETURN "OK" + out
+            IF forwarders.Count = 0 THEN RETURN "NXDOMAIN"
+            passTo = forwarders[0]
+            RETURN ""
+        END IF
+        d = DelegatedTo(cur, z)
+        IF d <> "" THEN
+            IF hop > 0 THEN RETURN "OK" + out
+            passTo = d
+            RETURN ""
+        END IF
+        hits = RecordsAt(cur, cur, qtype)
+        IF NOT gAny AND cur <> zOrigin[z] THEN hits = RecordsAt("*." + cur.Substring(cur.IndexOf(".") + 1, cur.Length - cur.IndexOf(".") - 1), cur, qtype)
+        IF NOT gAny THEN
+            IF hop > 0 THEN RETURN "OK" + out
+            IF HasBelow(cur) THEN RETURN "OK"
+            RETURN "NXDOMAIN"
+        END IF
+        IF hits <> "" THEN RETURN Fit("OK" + out + hits)
+        IF gCname < 0 THEN RETURN "OK" + out
+        out = out + NL + cur + " " + Str(rTtl[gCname]) + " CNAME " + rValue[gCname]
+        cur = rValue[gCname]
+    NEXT
+    RETURN "SERVFAIL more than " + Str(MAXCHAIN) + " CNAMEs in a row from " + name + " (a loop?)"
+END FUNCTION
+
+' The records at key that answer qtype, as lines about shown. Sets gAny (key
+' has records at all) and gCname (its CNAME, or -1).
+FUNCTION RecordsAt (key AS String, shown AS String, qtype AS String) AS String
+    VAR i AS Integer
+    VAR out AS String
+    gAny = FALSE
+    gCname = -1
+    FOR i = 0 TO rName.Count - 1
+        IF rName[i] = key THEN
+            gAny = TRUE
+            IF rType[i] = "CNAME" THEN gCname = i
+            IF qtype = "ANY" OR rType[i] = qtype THEN out = out + NL + shown + " " + Str(rTtl[i]) + " " + rType[i] + " " + rValue[i]
+            IF out.Length > MAXREPLY THEN RETURN out
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+' A name with nothing of its own but names under it (coolsite.sim with only www).
+FUNCTION HasBelow (name AS String) AS Bool
+    VAR n AS String
+    FOR EACH n IN rName
+        IF n.EndsWith("." + name) THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+FUNCTION Fit (reply AS String) AS String
+    IF reply.Length > MAXREPLY THEN RETURN "SERVFAIL the answer is too long for one message"
+    RETURN reply
+END FUNCTION
+
+' ---------------------------------------------------------------- the clock
+
+SUB Timer_OnTick ()
+    ' Nothing may come after this TRY: a tick whose Connect failed is
+    ' spoiled (see SIM95-NOTES.md), and this is how it ends quietly.
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
+    VAR i AS Integer
+    ' answers that have had time to arrive: their connections close
+    i = 0
+    WHILE i < lingerConn.Count
+        IF SYS.Ticks - lingerAt[i] > LINGER THEN
+            TRY
+                lingerConn[i].Close()
+            CATCH err
+            END TRY
+            lingerConn.RemoveAt(i)
+            lingerAt.RemoveAt(i)
+        ELSE
+            i = i + 1
+        END IF
+    END WHILE
+    ' questions another server never answered
+    FOR i = pSerial.Count - 1 TO 0 STEP -1
+        IF SYS.Ticks - pSince[i] > FWDWAIT THEN PassBack(i, "SERVFAIL no answer from " + pServer[i])
+    NEXT
+    IF SYS.Ticks - lookedAt > LOOKEVERY THEN
+        lookedAt = SYS.Ticks
+        IF Changed() THEN
+            Note("The zone files have changed")
+            LoadAll()
+            Status()
+        END IF
+    END IF
+    ' Last, because it may be spoiled: send one question on.
+    i = pState.IndexOf("wait")
+    IF i >= 0 THEN Ask(pSerial[i])
+END SUB
+
+' Asks another server one question, from a tick of its own.
+SUB Ask (serial AS Integer)
+    VAR i AS Integer
+    VAR addr AS String
+    VAR conn AS NET_Connection
+    i = pSerial.IndexOf(serial)
+    pState[i] = "sent"
+    addr = AddressOf(pServer[i])
+    i = pSerial.IndexOf(serial)
+    IF i < 0 THEN RETURN
+    IF addr = "" THEN
+        PassBack(i, "SERVFAIL cannot find the name server " + pServer[i])
+        RETURN
+    END IF
+    TRY
+        conn = fwd.Connect(addr, PORT)
+        conn.Tag = Str(serial)
+        i = pSerial.IndexOf(serial)
+        IF i >= 0 THEN conn.Send(pQuestion[i])
+    CATCH err
+    END TRY
+    ' Nothing else may wait in this tick. A refused question times out.
+END SUB
+
+' A machine's address: one lookup at a time, kept for a minute.
+FUNCTION AddressOf (machine AS String) AS String
+    VAR i AS Integer
+    VAR addr AS String
+    i = aName.IndexOf(machine.Upper())
+    IF i >= 0 THEN
+        IF SYS.Ticks - aAt[i] < 60000 THEN RETURN aAddr[i]
+        aName.RemoveAt(i)
+        aAddr.RemoveAt(i)
+        aAt.RemoveAt(i)
+    END IF
+    IF resolving AND SYS.Ticks - resolvingSince < 10000 THEN RETURN ""
+    resolving = TRUE
+    resolvingSince = SYS.Ticks
+    addr = NET.Resolve(machine)
+    resolving = FALSE
+    IF addr <> "" AND aName.IndexOf(machine.Upper()) < 0 THEN
+        aName.Add(machine.Upper())
+        aAddr.Add(addr)
+        aAt.Add(SYS.Ticks)
+    END IF
+    RETURN addr
+END FUNCTION
+
+SUB Fwd_OnMessage (conn AS NET_Connection, message AS String)
+    VAR i AS Integer
+    i = pSerial.IndexOf(Int(Val(conn.Tag)))
+    TRY
+        conn.Close()
+    CATCH err
+    END TRY
+    IF i >= 0 THEN PassBack(i, message)
+END SUB
+
+' Gives the asker what another server said, and forgets the question.
+SUB PassBack (i AS Integer, reply AS String)
+    VAR conn AS NET_Connection
+    VAR what AS String
+    conn = pConn[i]
+    what = pQuestion[i].Split(" ")[1] + " " + pQuestion[i].Split(" ")[2] + " (" + pServer[i] + ")"
+    pConn.RemoveAt(i)
+    pQuestion.RemoveAt(i)
+    pServer.RemoveAt(i)
+    pState.RemoveAt(i)
+    pSince.RemoveAt(i)
+    pSerial.RemoveAt(i)
+    Send(conn, reply, what)
+END SUB

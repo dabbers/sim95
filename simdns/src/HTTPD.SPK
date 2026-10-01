@@ -1,0 +1,358 @@
+' HTTPD.SPK - the web server. Serves C:\WEB on port 80.
+' This is the program Voyager talks to when someone opens http://YOURNAME/.
+' Edit it, save, and run it again: the web server is now yours.
+' Files ending in .ASP are ActiveSparkPages: SPARK runs on this machine
+' and the result is sent. See section 12 of C:\DOCS\SPARK.TXT.
+'
+' SimDNS edition: the stock web server, plus virtual hosts. One machine can
+' serve several sites, each from a folder of its own, listed in
+' C:\WEB\VHOSTS.TXT, one a line:
+'     www.coolsite.sim|C:\WEB\SITES\COOLSITE
+'     *.dab.sim|C:\WEB\SITES\DAB          (any name ending in .dab.sim)
+' A site is reached two ways:
+'   * By its name (Simxplorer, with a SimDNS name server): the Host header
+'     says www.coolsite.sim, and /page.htm is that folder's PAGE.HTM.
+'   * By path (Voyager, or anyone without SimDNS): http://alpha/www.coolsite.sim/page.htm
+'     is the same file. /www.coolsite.sim on its own gets a slash added.
+' Anything else - this machine's own name, an address, a name not listed -
+' is C:\WEB, exactly as before.
+'
+' Server pages in a site run as usual (SERVER.ScriptName is the file on disk,
+' and imports are next to it). REQUEST.Path is the path inside the site, so
+' relative links work both ways. REQUEST.Host is what the browser asked for:
+' www.coolsite.sim by name, alpha by path. Two headers say the rest:
+'     X-Site: www.coolsite.sim       the site being served
+'     X-Base-Path: /www.coolsite.sim/   where the site starts on this server
+'                                       ("/" when reached by name)
+' so a page's own address is "http://" + REQUEST.Host + X-Base-Path + page.
+' A RESPONSE.Redirect to "/x.asp" is put back inside the site by path. Links
+' that start with / can't be: in a site, use relative links.
+'
+' The stock web server is kept as C:\PROGRAMS\HTTPD.ORG. When SimDNS is
+' uninstalled (C:\PROGRAMS\NAMED.SPK is gone), this one puts it back.
+
+CONST VHOSTS = "C:\WEB\VHOSTS.TXT"
+CONST ME = "C:\PROGRAMS\HTTPD.SPK"
+CONST ORIGINAL = "C:\PROGRAMS\HTTPD.ORG"
+CONST SIMDNS = "C:\PROGRAMS\NAMED.SPK"
+
+VAR win AS GUI_Window
+VAR log AS GUI_ListBox
+VAR sock AS NET_Socket
+VAR timer AS GUI_Timer
+VAR hits AS Integer
+VAR NL AS String
+VAR vText AS String = "?"       ' VHOSTS.TXT as last read
+VAR vName AS Array OF String    ' www.coolsite.sim, or *.dab.sim
+VAR vDir AS Array OF String
+
+SUB Main ()
+    NL = Chr(10)
+    win = GUI_Window.New("Web Server", 420, 240)
+    win.Icon = "network"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    log = GUI_ListBox.New(win)
+    log.Mono = TRUE
+    Win_OnResize()
+
+    sock = NET_Socket.New()
+    sock.onConnect = Sock_OnConnect
+    sock.onMessage = Sock_OnMessage
+    sock.onError = Sock_OnError
+    sock.Listen(80)
+
+    ' The address arrives from the network server a moment after we start, so keep the
+    ' status line honest with a slow timer instead of showing 0.0.0.0 forever.
+    timer = GUI_Timer.New(win)
+    timer.Interval = 1000
+    timer.onTick = Timer_OnTick
+    timer.Start()
+    Timer_OnTick()
+    win.Show()
+END SUB
+
+SUB Timer_OnTick ()
+    VAR sites AS String
+    ' SimDNS uninstalled: the stock web server comes back
+    IF FS.Exists(ORIGINAL) AND NOT FS.Exists(SIMDNS) THEN
+        PutBack()
+        RETURN
+    END IF
+    ReadHosts()
+    IF vName.Count > 0 THEN sites = " - " + Str(vName.Count) + " sites"
+    IF NET.Online THEN
+        win.Status = "Listening on " + NET.LocalAddress + " port 80 - try http://" + NET.HostName.Lower() + "/" + sites
+    ELSE
+        win.Status = "Listening on port 80 - waiting for the network"
+    END IF
+END SUB
+
+SUB PutBack ()
+    log.Add("SimDNS is gone: the stock web server takes over again")
+    timer.Stop()
+    sock.Close()
+    TRY
+        FS.Delete(ME)
+        FS.Rename(ORIGINAL, ME)
+        SYS.Run(ME)
+    CATCH err
+        log.Add("ERROR " + err)
+    END TRY
+    SYS.Exit(0)
+END SUB
+
+SUB Win_OnResize ()
+    log.SetBounds(0, 0, win.Width, win.Height)
+END SUB
+
+SUB Sock_OnConnect (conn AS NET_Connection)
+    conn.Accept()
+END SUB
+
+SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+    VAR lines AS Array OF String
+    VAR parts AS Array OF String
+    VAR path AS String
+    VAR query AS String
+    VAR file AS String
+    VAR host AS String
+    VAR site AS String
+    VAR root AS String = "C:\WEB"
+    VAR base AS String = "/"
+    VAR seg AS String
+    VAR v AS Integer
+    VAR shown AS String
+
+    lines = message.Lines()
+    parts = lines[0].Split(" ")
+    IF parts.Count < 2 OR (parts[0] <> "GET" AND parts[0] <> "POST") THEN
+        SendError(conn, "400 Bad Request", "Voyager sends GET or POST. This was neither.")
+        RETURN
+    END IF
+
+    path = parts[1]
+    IF path.IndexOf("?") >= 0 THEN
+        query = path.Substring(path.IndexOf("?"), path.Length - path.IndexOf("?"))
+        path = path.Substring(0, path.IndexOf("?"))
+    END IF
+
+    ' Which site? First by the name the browser asked for, then by the first
+    ' part of the path.
+    ReadHosts()
+    host = HostHeader(lines)
+    v = SiteIndex(host)
+    IF v >= 0 THEN
+        site = host
+    ELSEIF path.Length > 1 THEN
+        seg = path.Substring(1, path.Length - 1)
+        IF seg.Contains("/") THEN seg = seg.Substring(0, seg.IndexOf("/"))
+        IF seg.Contains(".") THEN v = SiteIndex(seg.Lower())
+        IF v >= 0 THEN
+            site = seg.Lower()
+            ' /www.coolsite.sim is a folder: say so, so relative links work
+            IF path.Length = seg.Length + 1 THEN
+                Redirect(conn, path + "/" + query)
+                RETURN
+            END IF
+            base = "/" + seg + "/"
+            path = path.Substring(seg.Length + 1, path.Length - seg.Length - 1)
+        END IF
+    END IF
+    IF v >= 0 THEN root = vDir[v]
+    file = PathToFile(path, root)
+
+    hits = hits + 1
+    win.Title = "Web Server (" + Str(hits) + " hits)"
+    shown = path
+    IF site <> "" THEN shown = site + path
+    log.Add(TIME.Clock + "  " + conn.FromAddress + "  " + parts[0] + " " + shown)
+    IF log.Count > 500 THEN log.RemoveAt(0)
+    log.ScrollToEnd()
+
+    ' A directory with no INDEX.HTM may have an INDEX.ASP instead
+    IF file.EndsWith("\INDEX.HTM") AND NOT FS.Exists(file) THEN file = file.Replace("\INDEX.HTM", "\INDEX.ASP")
+
+    IF file = "" OR NOT FS.Exists(file) OR FS.IsDir(file) THEN
+        SendError(conn, "404 Not Found", "There is no " + shown + " on this server.")
+        RETURN
+    END IF
+
+    ' ActiveSparkPages: a .ASP file is run, not sent. ASP.Render returns the whole response,
+    ' and the page sees a POSTed form through REQUEST.Form. A page in a site
+    ' sees the path inside the site, and X-Site and X-Base-Path.
+    IF file.EndsWith(".ASP") THEN
+        IF site = "" THEN
+            conn.Send(ASP.Render(file, message, conn.FromAddress))
+        ELSE
+            conn.Send(InSite(ASP.Render(file, ForSite(message, path + query, site, base), conn.FromAddress), base))
+        END IF
+        conn.Close()
+        RETURN
+    END IF
+
+    ' Only a page can take a POST; a plain file has nothing to do with one
+    IF parts[0] = "POST" THEN
+        SendError(conn, "405 Method Not Allowed", path + " is a file, not a page. Only .ASP pages accept a POST.")
+        RETURN
+    END IF
+
+    conn.Send("HTTP/1.0 200 OK")
+    conn.Send("Server: HTTPD.SPK/1.1 (SIM95; SimDNS)")
+    conn.Send("Content-Type: " + ContentType(file))
+    conn.Send("")
+    conn.Send(FS.Read(file))
+    conn.Close()
+END SUB
+
+' ---------------------------------------------------------------- sites
+
+' Reads VHOSTS.TXT when it has changed. Folders must be in C:\WEB, so a site
+' can't hand out C:\SYSTEM.
+SUB ReadHosts ()
+    VAR text AS String
+    VAR line AS String
+    VAR name AS String
+    VAR dir AS String
+    text = ""
+    TRY
+        IF FS.Exists(VHOSTS) THEN text = FS.Read(VHOSTS)
+    CATCH err
+    END TRY
+    IF text = vText THEN RETURN
+    vText = text
+    vName.Clear()
+    vDir.Clear()
+    FOR EACH line IN text.Lines()
+        line = line.Trim()
+        IF line = "" OR line.StartsWith(";") OR line.StartsWith("'") OR line.StartsWith("#") OR NOT line.Contains("|") THEN CONTINUE
+        name = line.Substring(0, line.IndexOf("|")).Trim().Lower()
+        dir = line.Substring(line.IndexOf("|") + 1, line.Length - line.IndexOf("|") - 1).Trim().Upper()
+        IF dir.EndsWith("\") THEN dir = dir.Substring(0, dir.Length - 1)
+        IF name.EndsWith(".") THEN name = name.Substring(0, name.Length - 1)
+        IF name = "" OR NOT name.Contains(".") OR dir.Contains("..") THEN CONTINUE
+        IF dir <> "C:\WEB" AND NOT dir.StartsWith("C:\WEB\") THEN
+            log.Add("VHOSTS.TXT: " + name + " is not in C:\WEB, so it is left out")
+            CONTINUE
+        END IF
+        vName.Add(name)
+        vDir.Add(dir)
+    NEXT
+END SUB
+
+' The site called name (exactly, else by a *. pattern), or -1.
+FUNCTION SiteIndex (name AS String) AS Integer
+    VAR i AS Integer
+    IF name = "" THEN RETURN -1
+    i = vName.IndexOf(name)
+    IF i >= 0 THEN RETURN i
+    FOR i = 0 TO vName.Count - 1
+        IF vName[i].StartsWith("*.") THEN
+            IF name.EndsWith(vName[i].Substring(1, vName[i].Length - 1)) THEN RETURN i
+        END IF
+    NEXT
+    RETURN -1
+END FUNCTION
+
+' The Host header, lower case, without a port.
+FUNCTION HostHeader (lines AS Array OF String) AS String
+    VAR i AS Integer
+    VAR h AS String
+    FOR i = 1 TO lines.Count - 1
+        IF lines[i].Trim() = "" THEN RETURN ""
+        IF lines[i].Lower().StartsWith("host:") THEN
+            h = lines[i].Substring(5, lines[i].Length - 5).Trim().Lower()
+            IF h.Contains(":") THEN h = h.Substring(0, h.IndexOf(":"))
+            RETURN h
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' The request as a page in a site sees it: the path inside the site, and
+' X-Site and X-Base-Path (any the browser sent are dropped). The body is
+' left exactly as it came.
+FUNCTION ForSite (message AS String, inside AS String, site AS String, base AS String) AS String
+    VAR head AS String
+    VAR tail AS String
+    VAR cut AS Integer
+    VAR out AS String
+    VAR first AS Array OF String
+    VAR i AS Integer
+    VAR line AS String
+    cut = message.IndexOf(NL + NL)
+    IF cut < 0 THEN
+        head = message
+    ELSE
+        head = message.Substring(0, cut)
+        tail = message.Substring(cut, message.Length - cut)
+    END IF
+    first = head.Lines()[0].Split(" ")
+    out = first[0] + " " + inside
+    FOR i = 2 TO first.Count - 1
+        out = out + " " + first[i]
+    NEXT
+    i = 0
+    FOR EACH line IN head.Lines()
+        i = i + 1
+        IF i = 1 OR line.Trim() = "" THEN CONTINUE
+        IF line.Lower().StartsWith("x-site:") OR line.Lower().StartsWith("x-base-path:") THEN CONTINUE
+        out = out + NL + line
+    NEXT
+    RETURN out + NL + "X-Site: " + site + NL + "X-Base-Path: " + base + tail
+END FUNCTION
+
+' A page's answer, with a Location of "/..." put back inside the site.
+FUNCTION InSite (response AS String, base AS String) AS String
+    VAR cut AS Integer
+    VAR head AS String
+    IF base = "/" THEN RETURN response
+    cut = response.IndexOf(NL + NL)
+    IF cut < 0 THEN cut = response.Length
+    head = response.Substring(0, cut)
+    IF NOT head.Contains(NL + "Location: /") THEN RETURN response
+    IF head.Contains(NL + "Location: //") THEN RETURN response
+    RETURN head.Replace(NL + "Location: /", NL + "Location: " + base) + response.Substring(cut, response.Length - cut)
+END FUNCTION
+
+SUB Redirect (conn AS NET_Connection, there AS String)
+    conn.Send("HTTP/1.0 302 Found")
+    conn.Send("Location: " + there)
+    conn.Send("Content-Type: text/html")
+    conn.Send("")
+    conn.Send("<html><body><p>This site is at <a href=""" + there + """>" + there + "</a>.</p></body></html>")
+    conn.Close()
+END SUB
+
+FUNCTION PathToFile (path AS String, root AS String) AS String
+    VAR p AS String
+    p = path.Replace("/", "\").Upper()
+    IF p.Contains("..") THEN RETURN ""
+    IF p.EndsWith("\") THEN p = p + "INDEX.HTM"
+    IF p = "" THEN p = "\INDEX.HTM"
+    RETURN root + p
+END FUNCTION
+
+FUNCTION ContentType (file AS String) AS String
+    IF file.EndsWith(".HTM") THEN RETURN "text/html"
+    IF file.EndsWith(".PIC") THEN RETURN "image/x-sim95pic"
+    RETURN "text/plain"
+END FUNCTION
+
+SUB SendError (conn AS NET_Connection, status AS String, text AS String)
+    conn.Send("HTTP/1.0 " + status)
+    conn.Send("Content-Type: text/html")
+    conn.Send("")
+    conn.Send("<html><head><title>" + status + "</title></head><body><h1>" + status + "</h1><p>" + text + "</p><hr><i>HTTPD.SPK on " + NET.HostName + "</i></body></html>")
+    conn.Close()
+END SUB
+
+SUB Sock_OnError (message AS String)
+    win.Status = "Error: " + message
+    log.Add("ERROR " + message)
+END SUB
+
+SUB Win_OnClose ()
+    sock.Close()
+    SYS.Exit(0)
+END SUB

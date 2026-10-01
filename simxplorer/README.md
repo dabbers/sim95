@@ -43,6 +43,15 @@ other web apps to use (see *Best viewed in Simxplorer* below).
   (`cache.asp?url=...`).
 * **Built-in pages:** `about:history`, `about:favorites`, `about:options`,
   `about:search` and `about:keys` (Help > Keyboard Shortcuts, F1).
+* **Domain names:** with a [SimDNS](../simdns/) name server set in Options
+  (it's `C:\SYSTEM\RESOLV.INI`, shared with every program), names like
+  `www.coolsite.sim` work. The status bar says *Looking up
+  www.coolsite.sim...*, then *Connecting to alpha...*: the name server said
+  that name is on ALPHA. The Address bar, the `Host:` header and the cookies
+  keep the name you typed, for pages, pictures and scripts' requests alike.
+  Plain machine names, and names the name server doesn't know, go to SIM95
+  as before. A name server that is down is skipped at once and left alone
+  for 30 seconds.
 
 ### Keyboard shortcuts
 
@@ -223,6 +232,11 @@ Fetches start from a timer tick, because of the kernel bug described in
 requests, then pictures. Host names are looked up one at a time and kept
 for 30 seconds, because two lookups of one name at once lose the first
 (also in `SIM95-NOTES.md`).
+A name the SimDNS name server may know is asked about first, in a tick of
+its own (the question is a Connect, so it ends the tick), and nothing else
+starts until the answer is in or 2 seconds pass. The resolver is
+`simdns/src/RESOLVE.SPK`, which the builder adds to `SIMXPLOR.SPK` (its
+names all start with `Rs`).
 
 Tests:
 
