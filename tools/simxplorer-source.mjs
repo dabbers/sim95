@@ -15,9 +15,13 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f) => fs.readFileSync(path.join(root, f), "utf8");
 
+// The SimDNS resolver's names (Rs...) are never renamed: the player in the
+// browser uses the browser's own copy of the resolver (one cache, one
+// question at a time), so the resolver is joined on once, and only the
+// player on its own (withResolver, below) gets a copy of it.
 export function embedPlayer(src = read("simplayer/src/PLAYER.SPK")) {
   const names = new Set();
-  for (const m of src.matchAll(/^(?:VAR|CONST|SUB|FUNCTION)\s+([A-Za-z_]\w*)/gim)) names.add(m[1].toLowerCase());
+  for (const m of src.matchAll(/^(?:VAR|CONST|SUB|FUNCTION)\s+([A-Za-z_]\w*)/gim)) if (!/^rs/i.test(m[1])) names.add(m[1].toLowerCase());
   let out = "";
   let i = 0;
   while (i < src.length) {
@@ -47,5 +51,10 @@ export function embedPlayer(src = read("simplayer/src/PLAYER.SPK")) {
   }
   return "' ================================================================ SimPlayer, built in\n" + out;
 }
+
+// A program with the SimDNS resolver joined on the end, as every program that
+// looks names up gets it (SimPlayer, Vapor, Frostbird, MAILD, the Sim Shell,
+// AskSim's crawler, DIG).
+export const withResolver = (text) => text + "\n" + read("simdns/src/RESOLVE.SPK");
 
 export const simxplorerSource = () => read("simxplorer/src/JSCRIPT.SPK") + "\n" + read("simxplorer/src/BROWSER.SPK") + "\n" + read("simdns/src/RESOLVE.SPK") + "\n" + embedPlayer();

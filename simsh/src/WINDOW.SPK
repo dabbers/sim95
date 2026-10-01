@@ -318,6 +318,8 @@ SUB Pump ()
             AskPassword()
             RETURN
         END IF
+        ' its machine's name asked about first (SimDNS), in ticks of their own
+        IF JobLookup() THEN RETURN
         goJob = FALSE
         busy = TRUE
         jobRunning = TRUE

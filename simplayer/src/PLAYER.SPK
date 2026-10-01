@@ -16,6 +16,12 @@
 ' socket's events. Playback runs off a second timer and SYS.Ticks, so a movie
 ' plays at its own speed whatever the timer manages.
 '
+' A movie can be at a SimDNS name (http://movies.coolsite.sim/...): the name
+' is asked about first, in a tick of its own, with the resolver's Rs...
+' names. On its own, SimPlayer has simdns/src/RESOLVE.SPK joined on the end;
+' built into Simxplorer it shares the browser's (tools/simxplorer-source.mjs).
+' The request still says Host: movies.coolsite.sim.
+'
 ' For the curious (and for tests): the window's Tag says what is going on,
 '   state|frame|frames|loaded|parts in|parts|loop|mute
 
@@ -1010,6 +1016,8 @@ SUB FetchStep ()
     END IF
     IF NOT remote OR state = "error" THEN RETURN
     IF wantFirst THEN
+        ' a SimDNS name: ask first, in a tick of its own
+        IF RsNext(HostOf(source)) THEN RETURN
         wantFirst = FALSE
         fFirst = TRUE
         ' (last thing in the tick: it may be spoiled)
@@ -1017,6 +1025,7 @@ SUB FetchStep ()
         RETURN
     END IF
     IF partsIn < partRefs.Count THEN
+        IF RsNext(HostOf(partRefs[partsIn])) THEN RETURN
         fFirst = FALSE
         StartFetch(partRefs[partsIn])
     END IF
@@ -1038,7 +1047,7 @@ SUB StartFetch (url AS String)
     path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
     host = host.Substring(0, host.IndexOf("/"))
     TRY
-        conn = web.Connect(host, 80)
+        conn = web.Connect(RsTarget(host), 80)
         conn.Tag = Str(fNumber)
         conn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: SimPlayer/1.0 (SIM95)" + EOL + "Accept: video/x-simmovie")
     CATCH err

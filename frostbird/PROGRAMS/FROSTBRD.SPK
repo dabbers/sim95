@@ -15,6 +15,13 @@
 ' A conversation with the server is a list of commands sent one at a time;
 ' each answer (Pop_OnMessage) sends the next. Connecting happens in a timer
 ' tick of its own, inside a TRY with an empty CATCH: see SIM95-NOTES.md.
+'
+' The server is the part of the address after the @. A domain such as
+' coolsite.sim is asked about first (the builder joins the SimDNS resolver,
+' simdns/src/RESOLVE.SPK, on the end): its MX record, the one with the lowest
+' preference, then the CNAMEs of the machine that names; each question takes
+' a tick of its own. With no name server, or no answer, it is a SIM95
+' machine name, as always.
 
 CONST HOME = "C:\FROST"
 CONST POPPORT = 110
@@ -631,6 +638,11 @@ SUB Tick ()
     END IF
     IF checkEvery > 0 AND SYS.Ticks - lastCheck > checkEvery * 60000 THEN GetMail(TRUE)
     IF jobs.Count = 0 OR myAddress = "" THEN RETURN
+    ' a domain: where its mail goes, asked in ticks of their own first
+    IF RsNextMail(ServerName()) THEN
+        win.Status = "Looking up " + ServerName() + "..."
+        RETURN
+    END IF
     ' everything waiting goes in one conversation
     cmds.Clear()
     cmds.Add("USER " + myAddress.Split("@")[0])
@@ -658,7 +670,8 @@ SUB Tick ()
     talking = TRUE
     DrawTools()
     TRY
-        conn = sock.Connect(ServerName(), POPPORT)
+        ' (the machine SimDNS named for the domain's mail, or the name itself)
+        conn = sock.Connect(RsMailTarget(ServerName()), POPPORT)
         conn.Tag = Str(convNumber)
     CATCH err
         convError = err

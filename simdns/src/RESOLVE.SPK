@@ -23,6 +23,13 @@
 '                       name server gave, or the name itself when SimDNS
 '                       doesn't know it, for SIM95 to look up.
 ' Answers are kept for their TTL; names SimDNS doesn't know for RSNEG.
+'
+' Or, from a timer tick, all of that in one line (see RsNext):
+'     IF RsNext(host) THEN RETURN          ' asked, or waiting: end the tick
+'     conn = sock.Connect(RsTarget(host), 80)
+' and for mail, the domain's MX first (see RsNextMail):
+'     IF RsNextMail(domain) THEN RETURN
+'     conn = sock.Connect(RsMailTarget(domain), 25)
 
 CONST RSINI = "C:\SYSTEM\RESOLV.INI"
 CONST RSPORT = 53
@@ -47,6 +54,11 @@ VAR rsDown AS Bool
 VAR rsDownAt AS Integer
 VAR rsWhy AS String                 ' the last thing that went wrong
 VAR rsLastReply AS String           ' the last answer, as it came
+VAR rsServerAddr AS String          ' the name server's address, for RsNext
+VAR rsServerFor AS String
+VAR rsServerAt AS Integer
+VAR rsLooking AS Bool               ' RsNext is finding the name server's address
+VAR rsLookingAt AS Integer
 
 ' Reads RESOLV.INI (again after a few seconds, so a new setting takes).
 SUB RsConfig ()
@@ -145,6 +157,18 @@ FUNCTION RsFind (host AS String) AS Integer
 END FUNCTION
 
 FUNCTION RsWants (host AS String) AS Bool
+    IF NOT RsAsks(host) THEN RETURN FALSE
+    RETURN RsFind(host) < 0
+END FUNCTION
+
+' The same for a mail domain's MX record.
+FUNCTION RsWantsMx (domain AS String) AS Bool
+    IF NOT RsAsks(domain) THEN RETURN FALSE
+    RETURN RsFind("mx:" + domain.Trim().Lower()) < 0
+END FUNCTION
+
+' Is host a name for the name server at all (whether known yet or not)?
+FUNCTION RsAsks (host AS String) AS Bool
     VAR h AS String
     RsConfig()
     h = host.Trim().Lower()
@@ -153,24 +177,37 @@ FUNCTION RsWants (host AS String) AS Bool
     IF RsIsAddress(h) THEN RETURN FALSE
     IF NOT h.Contains(".") AND rsSearch = "" THEN RETURN FALSE
     IF h = rsServer OR h = NET.HostName.Lower() THEN RETURN FALSE
-    RETURN RsFind(h) < 0
+    RETURN TRUE
 END FUNCTION
 
 ' Sends the question. A Connect, so it must be the last thing its handler
 ' does: if the name server refuses, the handler is spoiled (SIM95-NOTES.md).
 SUB RsAsk (host AS String, address AS String)
+    RsSend(host.Trim().Lower(), "A", address)
+END SUB
+
+' Asks for a mail domain's MX records (also a Connect: the last thing).
+SUB RsAskMx (domain AS String, address AS String)
+    RsSend("mx:" + domain.Trim().Lower(), "MX", address)
+END SUB
+
+' key is the name, or mx: and the name; the answer is kept under it.
+SUB RsSend (key AS String, qtype AS String, address AS String)
     VAR conn AS NET_Connection
+    VAR name AS String
     IF IsNothing(rsSock) THEN
         rsSock = NET_Socket.New()
         rsSock.onMessage = Rs_OnMessage
     END IF
-    rsAsking = host.Trim().Lower()
+    name = key
+    IF name.StartsWith("mx:") THEN name = name.Substring(3, name.Length - 3)
+    rsAsking = key
     rsAskAt = SYS.Ticks
     rsRefused = FALSE
     TRY
         conn = rsSock.Connect(address, RSPORT)
-        conn.Tag = "rs:" + rsAsking
-        conn.Send("QUERY " + RsFull(rsAsking) + " A")
+        conn.Tag = "rs:" + key
+        conn.Send("QUERY " + RsFull(name) + " " + qtype)
     CATCH err
         rsRefused = TRUE
     END TRY
@@ -182,7 +219,73 @@ SUB RsGiveUp (why AS String)
     rsDown = TRUE
     rsDownAt = SYS.Ticks
     rsAsking = ""
+    rsServerAddr = ""
 END SUB
+
+' For a program that fetches from a timer tick: TRUE when the tick must end
+' now, because a question about host has just been sent (a Connect, so it
+' has to be the last thing the handler does) or an answer is on its way.
+' FALSE when there is nothing to ask: RsTarget(host) is where to connect.
+' A name server that is missing, refuses or says nothing for RSWAIT is left
+' alone for RSQUIET, and every name goes to SIM95: nothing ever hangs.
+FUNCTION RsNext (host AS String) AS Bool
+    RETURN RsStep(host, FALSE)
+END FUNCTION
+
+' The same for mail to domain: its MX record (the lowest preference), then
+' the CNAMEs or address of the machine that names. RsMailTarget(domain) is
+' then where to connect; with no MX, the domain's own machine; with no
+' answer at all, the domain itself, for SIM95 to look up.
+FUNCTION RsNextMail (domain AS String) AS Bool
+    IF RsStep(domain, TRUE) THEN RETURN TRUE
+    RETURN RsStep(RsMailHost(domain), FALSE)
+END FUNCTION
+
+FUNCTION RsStep (host AS String, mx AS Bool) AS Bool
+    VAR addr AS String
+    ' another handler is finding the name server (it waits): wait for it
+    IF rsLooking THEN
+        IF SYS.Ticks - rsLookingAt < RSWAIT THEN RETURN TRUE
+        rsLooking = FALSE
+        RsGiveUp("no answer about the machine " + rsServer)
+        RETURN FALSE
+    END IF
+    IF RsBusy() THEN RETURN TRUE
+    IF mx THEN
+        IF NOT RsWantsMx(host) THEN RETURN FALSE
+    ELSE
+        IF NOT RsWants(host) THEN RETURN FALSE
+    END IF
+    addr = RsServerAddress()
+    IF addr = "" THEN RETURN FALSE
+    IF mx THEN
+        RsAskMx(host, addr)
+    ELSE
+        RsAsk(host, addr)
+    END IF
+    RETURN TRUE
+END FUNCTION
+
+' The name server's address, looked up once a minute (one lookup at a time:
+' see SIM95-NOTES.md). "" when there is no such machine, and then it gives up.
+FUNCTION RsServerAddress () AS String
+    VAR addr AS String
+    IF RsIsAddress(rsServer) THEN RETURN rsServer
+    IF rsServerAddr <> "" AND rsServerFor = rsServer AND SYS.Ticks - rsServerAt < 60000 AND SYS.Ticks >= rsServerAt THEN RETURN rsServerAddr
+    rsLooking = TRUE
+    rsLookingAt = SYS.Ticks
+    addr = NET.Resolve(rsServer)
+    IF NOT rsLooking THEN RETURN ""
+    rsLooking = FALSE
+    IF addr = "" THEN
+        RsGiveUp("there is no machine called " + rsServer)
+        RETURN ""
+    END IF
+    rsServerAddr = addr
+    rsServerFor = rsServer
+    rsServerAt = SYS.Ticks
+    RETURN addr
+END FUNCTION
 
 FUNCTION RsBusy () AS Bool
     IF rsAsking = "" THEN RETURN FALSE
@@ -223,6 +326,10 @@ SUB RsTake (host AS String, reply AS String)
     VAR hops AS Integer
     VAR i AS Integer
     rsLastReply = reply
+    IF host.StartsWith("mx:") THEN
+        RsTakeMx(host, reply)
+        RETURN
+    END IF
     lines = reply.Lines()
     IF lines.Count = 0 THEN RETURN
     IF lines[0].StartsWith("NXDOMAIN") THEN
@@ -266,6 +373,77 @@ SUB RsTake (host AS String, reply AS String)
     IF ttl < 5 THEN ttl = 5
     RsKeep(host, target, canon, ttl * 1000)
 END SUB
+
+' Learns an MX answer: the mail machine with the lowest preference. With no
+' MX, the server answers with the domain's CNAMEs instead, and the domain's
+' own machine takes the mail.
+SUB RsTakeMx (key AS String, reply AS String)
+    VAR domain AS String
+    VAR lines AS Array OF String
+    VAR w AS Array OF String
+    VAR best AS String
+    VAR pref AS Integer = 1000000
+    VAR ttl AS Integer = 3600
+    VAR i AS Integer
+    domain = key.Substring(3, key.Length - 3)
+    lines = reply.Lines()
+    IF lines.Count = 0 THEN RETURN
+    IF lines[0].StartsWith("NXDOMAIN") THEN
+        RsKeep(key, "", "", RSNEG)
+        RsKeep(domain, "", "", RSNEG)
+        RETURN
+    END IF
+    IF NOT lines[0].StartsWith("OK") THEN
+        rsWhy = lines[0]
+        RsKeep(key, "", "", 10000)
+        RETURN
+    END IF
+    FOR i = 1 TO lines.Count - 1
+        w = lines[i].Split(" ")
+        IF w.Count >= 5 THEN
+            IF w[2] = "MX" AND Int(Val(w[3])) < pref THEN
+                pref = Int(Val(w[3]))
+                best = w[4]
+                ttl = Int(Val(w[1]))
+            END IF
+        END IF
+    NEXT
+    IF best <> "" THEN
+        IF best.EndsWith(".") THEN best = best.Substring(0, best.Length - 1)
+        IF ttl < 5 THEN ttl = 5
+        RsKeep(key, best, RsFull(domain), ttl * 1000)
+        RETURN
+    END IF
+    RsTake(domain, reply)
+    IF RsKnown(domain) THEN
+        RsKeep(key, domain, RsFull(domain), RSNEG)
+    ELSE
+        RsKeep(key, "", "", RSNEG)
+    END IF
+END SUB
+
+' The machine (or name) that takes domain's mail: its MX, or domain itself.
+FUNCTION RsMailHost (domain AS String) AS String
+    VAR i AS Integer
+    i = RsFind("mx:" + domain.Trim().Lower())
+    IF i < 0 THEN RETURN domain
+    IF rsTo[i] = "" THEN RETURN domain
+    RETURN rsTo[i]
+END FUNCTION
+
+' Where to connect for domain's mail.
+FUNCTION RsMailTarget (domain AS String) AS String
+    RETURN RsTarget(RsMailHost(domain))
+END FUNCTION
+
+' Did SimDNS say where domain's mail goes (an MX, or the domain's machine)?
+FUNCTION RsMailKnown (domain AS String) AS Bool
+    VAR i AS Integer
+    i = RsFind("mx:" + domain.Trim().Lower())
+    IF i < 0 THEN RETURN FALSE
+    IF rsTo[i] = "" THEN RETURN FALSE
+    RETURN RsKnown(RsMailHost(domain)) OR NOT RsAsks(RsMailHost(domain))
+END FUNCTION
 
 SUB RsKeep (host AS String, target AS String, canon AS String, ms AS Integer)
     VAR i AS Integer
