@@ -1,0 +1,111 @@
+' HOSTSTUB.SPK - stand-in Host functions, so JSCRIPT.SPK can be tested on its
+' own. Every call is noted in hostLog; HostGet answers from hostElems.
+VAR hostLog AS Array OF String
+VAR hostElems AS Array OF String     ' "id|prop|value"
+VAR hostTitle AS String
+VAR hostCookie AS String
+VAR hostConfirmAnswer AS Bool = TRUE
+
+SUB HostAlert (text AS String)
+    hostLog.Add("alert:" + text)
+END SUB
+
+FUNCTION HostConfirm (text AS String) AS Bool
+    hostLog.Add("confirm:" + text)
+    RETURN hostConfirmAnswer
+END FUNCTION
+
+FUNCTION HostPrompt (text AS String, initial AS String) AS String
+    hostLog.Add("prompt:" + text)
+    RETURN "Ann"
+END FUNCTION
+
+SUB HostStatus (text AS String)
+    hostLog.Add("status:" + text)
+END SUB
+
+SUB HostNavigate (url AS String)
+    hostLog.Add("navigate:" + url)
+END SUB
+
+FUNCTION HostHas (id AS String) AS Bool
+    VAR e AS String
+    FOR EACH e IN hostElems
+        IF e.StartsWith(id + "|") THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+FUNCTION HostGet (id AS String, prop AS String) AS String
+    VAR e AS String
+    FOR EACH e IN hostElems
+        IF e.StartsWith(id + "|" + prop + "|") THEN RETURN e.Substring(id.Length + prop.Length + 2, e.Length - id.Length - prop.Length - 2)
+    NEXT
+    IF prop = "Visible" OR prop = "Enabled" THEN RETURN "True"
+    RETURN ""
+END FUNCTION
+
+SUB HostSet (id AS String, prop AS String, value AS String)
+    VAR i AS Integer
+    hostLog.Add("set:" + id + "." + prop + "=" + value)
+    FOR i = 0 TO hostElems.Count - 1
+        IF hostElems[i].StartsWith(id + "|" + prop + "|") THEN
+            hostElems[i] = id + "|" + prop + "|" + value
+            RETURN
+        END IF
+    NEXT
+    hostElems.Add(id + "|" + prop + "|" + value)
+END SUB
+
+FUNCTION HostInfo (key AS String) AS String
+    SELECT CASE key
+        CASE "location"
+            RETURN "http://bravo/games/index.htm?level=2#top"
+        CASE "title"
+            RETURN hostTitle
+        CASE "cookie"
+            RETURN hostCookie
+        CASE "status"
+            RETURN ""
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+SUB HostSetInfo (key AS String, value AS String)
+    hostLog.Add("info:" + key + "=" + value)
+    IF key = "title" THEN hostTitle = value
+    IF key = "cookie" THEN
+        IF hostCookie <> "" THEN hostCookie = hostCookie + "; "
+        hostCookie = hostCookie + value.Split(";")[0]
+    END IF
+END SUB
+
+FUNCTION HostTimeout (code AS String, fn AS String, ms AS Integer, again AS Bool) AS Integer
+    hostLog.Add("timeout:" + code + ":" + Str(ms) + ":" + Str(again))
+    RETURN 7
+END FUNCTION
+
+SUB HostClearTimeout (id AS Integer)
+    hostLog.Add("cleartimeout:" + Str(id))
+END SUB
+
+FUNCTION HostHistory (n AS Integer) AS Integer
+    IF n <> 0 THEN hostLog.Add("history:" + Str(n))
+    RETURN 3
+END FUNCTION
+
+SUB HostOpen (url AS String)
+    hostLog.Add("open:" + url)
+END SUB
+
+SUB HostSubmit (form AS Integer)
+    hostLog.Add("submit:" + Str(form))
+END SUB
+
+SUB HostYield ()
+END SUB
+
+FUNCTION HostSlow () AS Bool
+    hostLog.Add("slow")
+    RETURN TRUE
+END FUNCTION

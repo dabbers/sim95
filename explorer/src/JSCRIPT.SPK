@@ -95,6 +95,7 @@ SUB JsAddToken (kind AS String, text AS String, line AS Integer, newline AS Bool
 END SUB
 
 SUB JsLex (src AS String)
+    VAR hexLen AS Integer
     VAR i AS Integer
     VAR n AS Integer
     VAR c AS String
@@ -175,7 +176,7 @@ SUB JsLex (src AS String)
                 i = i + 1
             END WHILE
             word = src.Substring(start, i - start)
-            IF "|var|function|return|if|else|while|for|in|do|break|continue|new|this|true|false|null|typeof|void|delete|switch|case|default|try|catch|finally|throw|".Contains("|" + word + "|") THEN
+            IF "|var|function|return|if|else|while|for|in|do|break|continue|new|this|true|false|null|typeof|void|delete|switch|case|default|try|catch|finally|throw|instanceof|".Contains("|" + word + "|") THEN
                 JsAddToken("kw", word, line, fresh)
             ELSE
                 JsAddToken("id", word, line, fresh)
@@ -205,6 +206,15 @@ SUB JsLex (src AS String)
                             text = text + Chr(8)
                         CASE Chr(10)
                             line = line + 1
+                        CASE "u", "x"
+                            hexLen = 4
+                            IF e = "x" THEN hexLen = 2
+                            IF i + hexLen < n AND OnlyChars(src.Substring(i + 1, hexLen).Lower(), "0123456789abcdef") THEN
+                                text = text + Chr(Int(Val(JsNumberText("0x" + src.Substring(i + 1, hexLen)))))
+                                i = i + hexLen
+                            ELSE
+                                text = text + e
+                            END IF
                         CASE ELSE
                             text = text + e
                     END SELECT
@@ -550,7 +560,7 @@ FUNCTION JsPrec (op AS String) AS Integer
             RETURN 2
         CASE "==", "!=", "===", "!=="
             RETURN 3
-        CASE "<", ">", "<=", ">="
+        CASE "<", ">", "<=", ">=", "in", "instanceof"
             RETURN 4
         CASE "+", "-"
             RETURN 5
@@ -567,7 +577,7 @@ FUNCTION JsBinary (least AS Integer) AS Integer
     VAR prec AS Integer
     VAR line AS Integer
     left = JsUnary()
-    WHILE jtType[jp] = "op"
+    WHILE jtType[jp] = "op" OR (jtType[jp] = "kw" AND (jtText[jp] = "in" OR jtText[jp] = "instanceof"))
         op = jtText[jp]
         prec = JsPrec(op)
         IF prec = 0 OR prec < least THEN BREAK
@@ -732,8 +742,26 @@ FUNCTION JsPrimary () AS Integer
 END FUNCTION
 
 FUNCTION JsDescribe (n AS Integer) AS String
-    IF nk[n] = "id" OR nk[n] = "member" THEN RETURN ns[n]
-    RETURN nk[n]
+    SELECT CASE nk[n]
+        CASE "id"
+            RETURN ns[n]
+        CASE "member"
+            RETURN JsDescribe(na[n]) + "." + ns[n]
+        CASE "index"
+            RETURN JsDescribe(na[n]) + "[...]"
+        CASE "call"
+            RETURN JsDescribe(na[n]) + "(...)"
+        CASE "this"
+            RETURN "this"
+    END SELECT
+    RETURN "Object"
+END FUNCTION
+
+' v, which the program is about to use as an object (node n): stops with
+' Internet Explorer's message when it is null or undefined.
+FUNCTION JsNeed (v AS String, n AS Integer) AS String
+    IF v = "u" OR v = "l" THEN THROW Str(nline[n]) + "|'" + JsDescribe(n) + "' is null or not an object"
+    RETURN v
 END FUNCTION
 
 ' The value a number literal stands for, in canonical form.
@@ -760,16 +788,24 @@ FUNCTION JsFmt (r AS Real) AS String
     IF r > 1.7976931348623157E308 THEN RETURN "Infinity"
     IF r < -1.7976931348623157E308 THEN RETURN "-Infinity"
     IF r = Int(r) AND Abs(r) < 1E21 THEN RETURN Str(Int(r))
-    FOR p = 15 TO 17
-        s = JsDigits(r, p)
+    FOR p = 1 TO 17
+        s = JsDigits(r, p, 0)
         IF Val(s) = r THEN RETURN s
+        IF p >= 15 THEN
+            IF Val(JsDigits(r, p, -1)) = r THEN RETURN JsDigits(r, p, -1)
+            IF Val(JsDigits(r, p, 1)) = r THEN RETURN JsDigits(r, p, 1)
+        END IF
     NEXT
     RETURN s
 END FUNCTION
 
-FUNCTION JsDigits (r AS Real, p AS Integer) AS String
+' r to p significant digits. Where 10^k is exact the digits are worked out
+' exactly (Dekker's product); elsewhere they may be one out in the last
+' place, which nudge makes up for.
+FUNCTION JsDigits (r AS Real, p AS Integer, nudge AS Integer) AS String
     VAR a AS Real
     VAR e AS Integer
+    VAR k AS Integer
     VAR digits AS Real
     VAR ds AS String
     VAR sign AS String
@@ -780,16 +816,27 @@ FUNCTION JsDigits (r AS Real, p AS Integer) AS String
     e = MATH.Floor(MATH.Log(a) / MATH.Log(10))
     IF 10 ^ e > a THEN e = e - 1
     IF 10 ^ (e + 1) <= a THEN e = e + 1
-    digits = MATH.Round(a / 10 ^ (e - p + 1))
-    IF digits >= 10 ^ p THEN
-        digits = MATH.Round(digits / 10)
+    k = p - 1 - e
+    IF k >= 0 AND k <= 22 THEN
+        ds = JsScaled(a, 10 ^ k, nudge)
+    ELSE
+        IF k > 300 THEN
+            digits = MATH.Round(a * 10 ^ 300 * 10 ^ (k - 300)) + nudge
+        ELSEIF k > 0 THEN
+            digits = MATH.Round(a * 10 ^ k) + nudge
+        ELSE
+            digits = MATH.Round(a / 10 ^ (-k)) + nudge
+        END IF
+        ds = Str(Int(digits))
+    END IF
+    IF ds.Length > p THEN
+        ds = ds.Substring(0, p)
         e = e + 1
     END IF
-    ds = Str(Int(digits))
     WHILE ds.Length < p
         ds = ds + "0"
     END WHILE
-    IF e >= 21 OR e < -7 THEN
+    IF e >= 21 OR e < -6 THEN
         frac = ds.Substring(1, ds.Length - 1)
         WHILE frac.EndsWith("0")
             frac = frac.Substring(0, frac.Length - 1)
@@ -815,6 +862,47 @@ FUNCTION JsDigits (r AS Real, p AS Integer) AS String
     END WHILE
     IF frac = "" THEN RETURN sign + out
     RETURN sign + out + "." + frac
+END FUNCTION
+
+'' round(a * scale) as digits, exactly: Dekker's two-product gives the
+' rounding error of a * scale, and the digits are put together in two halves
+' so no part of them goes past what a Real holds exactly.
+FUNCTION JsScaled (a AS Real, scale AS Real, nudge AS Integer) AS String
+    VAR prod AS Real
+    VAR err AS Real
+    VAR ah AS Real
+    VAR al AS Real
+    VAR bh AS Real
+    VAR bl AS Real
+    VAR c AS Real
+    VAR high AS Real
+    VAR low AS Real
+    VAR ls AS String
+    prod = a * scale
+    c = 134217729.0 * a
+    ah = c - (c - a)
+    al = a - ah
+    c = 134217729.0 * scale
+    bh = c - (c - scale)
+    bl = scale - bh
+    err = ((ah * bh - prod) + ah * bl + al * bh) + al * bl
+    high = MATH.Floor(prod / 100000000.0)
+    low = prod - high * 100000000.0
+    low = MATH.Floor(low + err + 0.5) + nudge
+    WHILE low >= 100000000.0
+        low = low - 100000000.0
+        high = high + 1
+    END WHILE
+    WHILE low < 0
+        low = low + 100000000.0
+        high = high - 1
+    END WHILE
+    IF high <= 0 THEN RETURN Str(Int(low))
+    ls = Str(Int(low))
+    WHILE ls.Length < 8
+        ls = "0" + ls
+    END WHILE
+    RETURN Str(Int(high)) + ls
 END FUNCTION
 
 ' Text to number the JavaScript way: "" is 0, "12px" is NaN.
@@ -905,6 +993,7 @@ FUNCTION JsNum (v AS String) AS String
         CASE "f", "l"
             RETURN "0"
         CASE "o"
+            IF joClass[JsId(v)] = "Date" THEN RETURN joS[JsId(v)]
             RETURN JsParseNumber(JsStr(v))
     END SELECT
     RETURN "NaN"
@@ -950,7 +1039,7 @@ FUNCTION JsStr (v AS String) AS String
         CASE "Location"
             RETURN HostInfo("location")
     END SELECT
-    RETURN "[object]"
+    RETURN "[object Object]"
 END FUNCTION
 
 FUNCTION JsBool (v AS String) AS Bool
@@ -1096,8 +1185,25 @@ FUNCTION JsBinOp (op AS String, a AS String, b AS String) AS String
             RETURN JsB(NOT JsStrictEq(a, b))
         CASE "<", ">", "<=", ">="
             RETURN JsCompare(op, a, b)
+        CASE "in"
+            IF NOT b.StartsWith("o") THEN THROW Str(jsLine) + "|Object expected"
+            RETURN JsB(JsGet(b, JsKey(a)) <> "u" OR JsOwn(JsId(b), JsKey(a)) >= 0)
+        CASE "instanceof"
+            IF NOT JsCallable(b) THEN THROW Str(jsLine) + "|Function expected"
+            RETURN JsB(JsInstanceOf(a, JsGet(b, "prototype")))
     END SELECT
     THROW Str(jsLine) + "|Syntax error"
+END FUNCTION
+
+FUNCTION JsInstanceOf (v AS String, proto AS String) AS Bool
+    VAR o AS Integer
+    IF NOT v.StartsWith("o") OR NOT proto.StartsWith("o") THEN RETURN FALSE
+    o = joProto[JsId(v)]
+    WHILE o <> 0
+        IF o = JsId(proto) THEN RETURN TRUE
+        o = joProto[o]
+    END WHILE
+    RETURN FALSE
 END FUNCTION
 
 ' ---------------------------------------------------------------- objects
@@ -1455,7 +1561,15 @@ SUB JsAddField (form AS Integer, name AS String, elementId AS String)
     VAR el AS String
     VAR list AS Integer
     el = JsElement(elementId)
-    IF name <> "" AND JsOwn(form, name) < 0 THEN JsPutOwn(form, name, el)
+    ' fields hide the form's own properties (a field called "name" wins), but
+    ' the first of several fields with one name keeps it
+    IF name <> "" THEN
+        IF JsOwn(form, name) < 0 THEN
+            JsPutOwn(form, name, el)
+        ELSEIF NOT jpVal[JsOwn(form, name)].StartsWith("o") OR joClass[JsId(jpVal[JsOwn(form, name)])] <> "Host" THEN
+            JsPutOwn(form, name, el)
+        END IF
+    END IF
     list = JsId(JsGetProp(form, "elements"))
     JsPut(JsO(list), Str(JsInt(JsGetProp(list, "length"))), el)
     JsPutOwn(form, "length", JsGetProp(list, "length"))
@@ -1608,6 +1722,9 @@ SUB JsExec (n AS Integer, scope AS Integer)
     VAR key AS String
     VAR depth AS Integer
     VAR caught AS String
+    VAR pending AS String
+    VAR sig AS String
+    VAR ret AS String
     VAR cases AS Array OF String
     VAR i AS Integer
     VAR start AS Integer
@@ -1706,25 +1823,48 @@ SUB JsExec (n AS Integer, scope AS Integer)
             THROW Str(nline[n]) + "|@thrown"
         CASE "try"
             depth = jsDepth
+            pending = ""
             TRY
                 JsExec(na[n], scope)
             CATCH err
                 jsDepth = depth
                 IF err.Contains("@aborted") THEN THROW err
                 IF nb[n] = 0 THEN
-                    JsExec(nc[n], scope)
-                    THROW err
-                END IF
-                IF jsThrown <> "" THEN
-                    caught = jsThrown
+                    pending = err
                 ELSE
-                    caught = JsMakeError(err)
+                    IF jsThrown <> "" THEN
+                        caught = jsThrown
+                    ELSE
+                        caught = JsMakeError(err)
+                    END IF
+                    jsThrown = ""
+                    JsSetVar(ns[n], caught, scope)
+                    TRY
+                        JsExec(nb[n], scope)
+                    CATCH again
+                        jsDepth = depth
+                        IF again.Contains("@aborted") THEN THROW again
+                        pending = again
+                    END TRY
                 END IF
-                jsThrown = ""
-                JsSetVar(ns[n], caught, scope)
-                JsExec(nb[n], scope)
             END TRY
-            JsExec(nc[n], scope)
+            IF nc[n] <> 0 THEN
+                ' finally runs whatever happened, and keeps the return or
+                ' error that was on its way out unless it makes its own
+                sig = jsSig
+                ret = jsRet
+                caught = jsThrown
+                jsSig = ""
+                JsExec(nc[n], scope)
+                IF jsSig = "" THEN
+                    jsSig = sig
+                    jsRet = ret
+                    jsThrown = caught
+                ELSE
+                    pending = ""
+                END IF
+            END IF
+            IF pending <> "" THEN THROW pending
         CASE "switch"
             v = JsEval(na[n], scope)
             cases = nl[n].Split(",")
@@ -1810,9 +1950,9 @@ FUNCTION JsEval (n AS Integer, scope AS Integer) AS String
             RETURN JsMakeFunction(n, scope)
         CASE "member"
             jsLine = nline[n]
-            RETURN JsGet(JsEval(na[n], scope), ns[n])
+            RETURN JsGet(JsNeed(JsEval(na[n], scope), na[n]), ns[n])
         CASE "index"
-            a = JsEval(na[n], scope)
+            a = JsNeed(JsEval(na[n], scope), na[n])
             jsLine = nline[n]
             RETURN JsGet(a, JsKey(JsEval(nb[n], scope)))
         CASE "assign"
@@ -1869,7 +2009,7 @@ FUNCTION JsUnaryOp (n AS Integer, scope AS Integer) AS String
             RETURN "u"
         CASE "delete"
             IF nk[t] = "member" OR nk[t] = "index" THEN
-                obj = JsEval(na[t], scope)
+                obj = JsNeed(JsEval(na[t], scope), na[t])
                 IF nk[t] = "member" THEN
                     JsDeleteProp(JsId(obj), ns[t])
                 ELSE
@@ -1917,7 +2057,7 @@ FUNCTION JsAssignment (n AS Integer, scope AS Integer) AS String
         JsSetVar(ns[t], v, scope)
         RETURN v
     END IF
-    obj = JsEval(na[t], scope)
+    obj = JsNeed(JsEval(na[t], scope), na[t])
     IF nk[t] = "member" THEN
         key = ns[t]
     ELSE
@@ -1944,7 +2084,7 @@ FUNCTION JsIncDec (n AS Integer, scope AS Integer) AS String
     IF nk[t] = "id" THEN
         old = JsNum(JsLookup(ns[t], scope))
     ELSE
-        obj = JsEval(na[t], scope)
+        obj = JsNeed(JsEval(na[t], scope), na[t])
         IF nk[t] = "member" THEN
             key = ns[t]
         ELSE
@@ -1980,12 +2120,12 @@ FUNCTION JsCallNode (n AS Integer, scope AS Integer) AS String
     VAR name AS String
     c = na[n]
     IF nk[c] = "member" THEN
-        thisVal = JsEval(na[c], scope)
+        thisVal = JsNeed(JsEval(na[c], scope), na[c])
         jsLine = nline[n]
         fn = JsGet(thisVal, ns[c])
         name = ns[c]
     ELSEIF nk[c] = "index" THEN
-        thisVal = JsEval(na[c], scope)
+        thisVal = JsNeed(JsEval(na[c], scope), na[c])
         name = JsKey(JsEval(nb[c], scope))
         jsLine = nline[n]
         fn = JsGet(thisVal, name)
@@ -2071,4 +2211,975 @@ FUNCTION JsNewNode (n AS Integer, scope AS Integer) AS String
     result = JsCall(fn, JsO(id), args)
     IF result.StartsWith("o") THEN RETURN result
     RETURN JsO(id)
+END FUNCTION
+
+' ---------------------------------------------------------------- dates
+
+' Seconds to add to UTC for local time, worked out from the machine's clock.
+FUNCTION JsZone () AS Integer
+    VAR z AS Integer
+    z = Int(TIME.Ticks / 1000) - (TIME.Now MOD 86400)
+    IF z > 43200 THEN z = z - 86400
+    IF z < -43200 THEN z = z + 86400
+    RETURN Int(MATH.Round(z / 900)) * 900
+END FUNCTION
+
+' Days since 1970-01-01 for a date, and back (Howard Hinnant's algorithms).
+FUNCTION JsDaysFrom (y AS Integer, m AS Integer, d AS Integer) AS Integer
+    VAR era AS Integer
+    VAR yoe AS Integer
+    VAR doy AS Integer
+    VAR doe AS Integer
+    IF m <= 2 THEN y = y - 1
+    era = MATH.Floor(y / 400)
+    yoe = y - era * 400
+    IF m > 2 THEN
+        doy = Int((153 * (m - 3) + 2) / 5) + d - 1
+    ELSE
+        doy = Int((153 * (m + 9) + 2) / 5) + d - 1
+    END IF
+    doe = yoe * 365 + Int(yoe / 4) - Int(yoe / 100) + doy
+    RETURN era * 146097 + doe - 719468
+END FUNCTION
+
+' y|m|d for a day number
+FUNCTION JsCivil (days AS Integer) AS String
+    VAR z AS Integer
+    VAR era AS Integer
+    VAR doe AS Integer
+    VAR yoe AS Integer
+    VAR y AS Integer
+    VAR doy AS Integer
+    VAR mp AS Integer
+    VAR d AS Integer
+    VAR m AS Integer
+    z = days + 719468
+    era = MATH.Floor(z / 146097)
+    doe = z - era * 146097
+    yoe = Int((doe - Int(doe / 1460) + Int(doe / 36524) - Int(doe / 146096)) / 365)
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + Int(yoe / 4) - Int(yoe / 100))
+    mp = Int((5 * doy + 2) / 153)
+    d = doy - Int((153 * mp + 2) / 5) + 1
+    IF mp < 10 THEN
+        m = mp + 3
+    ELSE
+        m = mp - 9
+    END IF
+    IF m <= 2 THEN y = y + 1
+    RETURN Str(y) + "|" + Str(m) + "|" + Str(d)
+END FUNCTION
+
+' One part of a time (milliseconds since 1970), in local time.
+FUNCTION JsDatePart (ms AS Real, part AS String) AS Integer
+    VAR local AS Real
+    VAR days AS Integer
+    VAR secs AS Integer
+    VAR ymd AS Array OF String
+    local = MATH.Floor(ms / 1000) + JsZone()
+    days = MATH.Floor(local / 86400)
+    secs = Int(local - days * 86400)
+    SELECT CASE part
+        CASE "hours"
+            RETURN Int(secs / 3600)
+        CASE "minutes"
+            RETURN Int((secs MOD 3600) / 60)
+        CASE "seconds"
+            RETURN secs MOD 60
+        CASE "ms"
+            RETURN Int(ms - MATH.Floor(ms / 1000) * 1000)
+        CASE "day"
+            RETURN ((days MOD 7) + 11) MOD 7
+    END SELECT
+    ymd = JsCivil(days).Split("|")
+    SELECT CASE part
+        CASE "year"
+            RETURN Int(Val(ymd[0]))
+        CASE "month"
+            RETURN Int(Val(ymd[1])) - 1
+    END SELECT
+    RETURN Int(Val(ymd[2]))
+END FUNCTION
+
+FUNCTION Pad2 (n AS Integer) AS String
+    IF n < 10 THEN RETURN "0" + Str(n)
+    RETURN Str(n)
+END FUNCTION
+
+' "Thu Jul 4 12:00:00 1996", the way Internet Explorer wrote dates
+FUNCTION JsDateText (ms AS Real) AS String
+    IF ms <> ms THEN RETURN "NaN"
+    RETURN "Sun,Mon,Tue,Wed,Thu,Fri,Sat".Split(",")[JsDatePart(ms, "day")] + " " + "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec".Split(",")[JsDatePart(ms, "month")] + " " + Str(JsDatePart(ms, "date")) + " " _
+        + Pad2(JsDatePart(ms, "hours")) + ":" + Pad2(JsDatePart(ms, "minutes")) + ":" + Pad2(JsDatePart(ms, "seconds")) + " " + Str(JsDatePart(ms, "year"))
+END FUNCTION
+
+FUNCTION JsNow () AS Real
+    RETURN TIME.Now * 1000.0 + (TIME.Ticks MOD 1000)
+END FUNCTION
+
+' A moment from local date parts; months and days may run over, as in JS.
+FUNCTION JsLocalMs (y AS Real, mon AS Real, d AS Real, h AS Real, mi AS Real, sec AS Real, ms AS Real) AS Real
+    VAR years AS Integer
+    years = MATH.Floor(mon / 12)
+    mon = mon - years * 12
+    RETURN ((JsDaysFrom(Int(y) + years, Int(mon) + 1, 1) + d - 1) * 86400.0 + h * 3600 + mi * 60 + sec - JsZone()) * 1000 + ms
+END FUNCTION
+
+FUNCTION JsNewDate (ms AS Real) AS String
+    VAR id AS Integer
+    id = JsNewObject("Date", jsDateProto)
+    joS[id] = JsFmt(ms)
+    RETURN JsO(id)
+END FUNCTION
+
+' ---------------------------------------------------------------- built-in functions
+
+FUNCTION JsArg (args AS Array OF String, i AS Integer) AS String
+    IF i < args.Count THEN RETURN args[i]
+    RETURN "u"
+END FUNCTION
+
+' new Array(...), new Date(...), new Object(), new String(...)...
+FUNCTION JsConstruct (name AS String, args AS Array OF String) AS String
+    VAR none AS Array OF String
+    VAR id AS Integer
+    VAR ms AS Real
+    SELECT CASE name
+        CASE "Array"
+            IF args.Count = 1 AND args[0].StartsWith("n") THEN
+                id = JsNewArray(none)
+                JsPutOwn(id, "length", args[0])
+                RETURN JsO(id)
+            END IF
+            RETURN JsO(JsNewArray(args))
+        CASE "Object"
+            RETURN JsO(JsNewObject("Object", jsObjectProto))
+        CASE "Date"
+            IF args.Count = 0 THEN RETURN JsNewDate(JsNow())
+            IF args.Count = 1 THEN
+                IF args[0].StartsWith("n") THEN RETURN JsNewDate(JsReal(args[0]))
+                id = JsNewObject("Date", jsDateProto)
+                joS[id] = "NaN"
+                RETURN JsO(id)
+            END IF
+            id = JsInt(args[0])
+            IF id >= 0 AND id < 100 THEN id = id + 1900
+            ms = 1
+            IF args.Count >= 3 THEN ms = JsReal(args[2])
+            RETURN JsNewDate(JsLocalMs(id, JsReal(args[1]), ms, JsReal(JsArg(args, 3)), JsReal(JsArg(args, 4)), JsReal(JsArg(args, 5)), JsReal(JsArg(args, 6))))
+        CASE "Error"
+            RETURN JsMakeError("0|" + JsStr(JsArg(args, 0)))
+    END SELECT
+    RETURN JsCallNative(name, JsO(jsGlobal), args)
+END FUNCTION
+
+FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF String) AS String
+    VAR a AS String
+    VAR text AS String
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR r AS Real
+    VAR out AS String
+    VAR list AS Array OF String
+    VAR id AS Integer
+    a = JsArg(args, 0)
+    IF name.StartsWith("String.") AND name <> "String.fromCharCode" THEN RETURN JsStringMethod(name.Substring(7, name.Length - 7), JsStr(thisVal), args)
+    IF name.StartsWith("Array.") THEN RETURN JsArrayMethod(name.Substring(6, name.Length - 6), JsId(thisVal), args)
+    IF name.StartsWith("Math.") THEN RETURN JsMath(name.Substring(5, name.Length - 5), args)
+    IF name.StartsWith("Date.") THEN RETURN JsDateMethod(name.Substring(5, name.Length - 5), thisVal, args)
+    SELECT CASE name
+        CASE "alert"
+            HostAlert(JsStr(a))
+            RETURN "u"
+        CASE "confirm"
+            RETURN JsB(HostConfirm(JsStr(a)))
+        CASE "prompt"
+            text = JsArg(args, 1)
+            IF text = "u" THEN text = "s"
+            text = HostPrompt(JsStr(a), JsStr(text))
+            IF text = Chr(0) THEN RETURN "l"
+            RETURN JsS(text)
+        CASE "parseInt"
+            RETURN "n" + JsParseInt(JsStr(a), JsInt(JsArg(args, 1)))
+        CASE "parseFloat"
+            RETURN "n" + JsParseFloat(JsStr(a))
+        CASE "isNaN"
+            RETURN JsB(JsNum(a) = "NaN")
+        CASE "isFinite"
+            RETURN JsB(JsFinite(JsNum(a)))
+        CASE "escape"
+            RETURN JsS(JsEscape(JsStr(a)))
+        CASE "unescape"
+            RETURN JsS(JsUnescape(JsStr(a)))
+        CASE "String"
+            IF args.Count = 0 THEN RETURN "s"
+            RETURN JsS(JsStr(a))
+        CASE "Number"
+            IF args.Count = 0 THEN RETURN "n0"
+            RETURN "n" + JsNum(a)
+        CASE "Boolean"
+            RETURN JsB(JsBool(a))
+        CASE "Array", "Object", "Error"
+            RETURN JsConstruct(name, args)
+        CASE "Date"
+            RETURN JsS(JsDateText(JsNow()))
+        CASE "String.fromCharCode"
+            FOR i = 0 TO args.Count - 1
+                out = out + Chr(JsInt(args[i]))
+            NEXT
+            RETURN JsS(out)
+        CASE "setTimeout", "setInterval"
+            IF JsCallable(a) THEN
+                RETURN JsN(HostTimeout("", a, JsInt(JsArg(args, 1)), name = "setInterval"))
+            END IF
+            RETURN JsN(HostTimeout(JsStr(a), "u", JsInt(JsArg(args, 1)), name = "setInterval"))
+        CASE "clearTimeout", "clearInterval"
+            HostClearTimeout(JsInt(a))
+            RETURN "u"
+        CASE "open"
+            HostOpen(JsStr(a))
+            RETURN "l"
+        CASE "document.write", "document.writeln"
+            FOR i = 0 TO args.Count - 1
+                jsOut = jsOut + JsStr(args[i])
+            NEXT
+            IF name = "document.writeln" THEN jsOut = jsOut + Chr(10)
+            RETURN "u"
+        CASE "document.getElementById"
+            IF HostHas(JsStr(a)) THEN RETURN JsElement(JsStr(a))
+            RETURN "l"
+        CASE "history.back"
+            HostHistory(-1)
+            RETURN "u"
+        CASE "history.forward"
+            HostHistory(1)
+            RETURN "u"
+        CASE "history.go"
+            HostHistory(JsInt(a))
+            RETURN "u"
+        CASE "location.reload"
+            HostNavigate(HostInfo("location"))
+            RETURN "u"
+        CASE "location.replace", "location.assign"
+            HostNavigate(JsStr(a))
+            RETURN "u"
+        CASE "location.toString"
+            RETURN JsS(HostInfo("location"))
+        CASE "Form.submit"
+            HostSubmit(joA[JsId(thisVal)])
+            RETURN "u"
+        CASE "navigator.javaEnabled", "Element.focus", "Element.blur", "Element.select", "Element.click", "noop"
+            RETURN "f"
+        CASE "Object.toString"
+            IF thisVal.StartsWith("o") THEN RETURN JsS(JsStr(thisVal))
+            RETURN JsS(JsStr(thisVal))
+        CASE "Object.hasOwnProperty"
+            RETURN JsB(JsOwn(JsId(thisVal), JsStr(a)) >= 0)
+        CASE "Number.toString"
+            n = JsInt(a)
+            IF n < 2 OR n > 36 OR n = 10 THEN RETURN JsS(JsStr(thisVal))
+            RETURN JsS(JsRadix(JsReal(thisVal), n))
+        CASE "Number.toFixed"
+            RETURN JsS(JsFixed(JsReal(thisVal), JsInt(a)))
+        CASE "Function.call"
+            FOR i = 1 TO args.Count - 1
+                list.Add(args[i])
+            NEXT
+            RETURN JsCall(thisVal, JsThisArg(a), list)
+        CASE "Function.apply"
+            IF JsArg(args, 1).StartsWith("o") THEN list = JsItems(JsId(args[1]))
+            RETURN JsCall(thisVal, JsThisArg(a), list)
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+FUNCTION JsThisArg (v AS String) AS String
+    IF v = "u" OR v = "l" THEN RETURN JsO(jsGlobal)
+    RETURN v
+END FUNCTION
+
+FUNCTION JsRadix (r AS Real, radix AS Integer) AS String
+    VAR n AS Real
+    VAR out AS String
+    VAR sign AS String
+    n = Int(Abs(r))
+    IF r < 0 THEN sign = "-"
+    IF n = 0 THEN RETURN "0"
+    WHILE n > 0
+        out = "0123456789abcdefghijklmnopqrstuvwxyz".CharAt(Int(n - Int(n / radix) * radix)) + out
+        n = Int(n / radix)
+    END WHILE
+    RETURN sign + out
+END FUNCTION
+
+FUNCTION JsFixed (r AS Real, digits AS Integer) AS String
+    VAR scaled AS Real
+    VAR s AS String
+    VAR sign AS String
+    IF digits < 0 THEN digits = 0
+    IF digits > 20 THEN digits = 20
+    IF r < 0 THEN
+        sign = "-"
+        r = -r
+    END IF
+    scaled = MATH.Round(r * 10 ^ digits)
+    s = Str(Int(scaled))
+    IF digits = 0 THEN RETURN sign + s
+    WHILE s.Length <= digits
+        s = "0" + s
+    END WHILE
+    RETURN sign + s.Substring(0, s.Length - digits) + "." + s.Substring(s.Length - digits, digits)
+END FUNCTION
+
+FUNCTION JsParseInt (text AS String, radix AS Integer) AS String
+    VAR t AS String
+    VAR sign AS Integer = 1
+    VAR i AS Integer
+    VAR d AS Integer
+    VAR v AS Real
+    VAR digits AS String
+    VAR any AS Bool
+    t = text.Trim().Lower()
+    IF t.StartsWith("-") THEN
+        sign = -1
+        t = t.Substring(1, t.Length - 1)
+    ELSEIF t.StartsWith("+") THEN
+        t = t.Substring(1, t.Length - 1)
+    END IF
+    IF radix = 0 THEN
+        radix = 10
+        IF t.StartsWith("0x") THEN
+            radix = 16
+            t = t.Substring(2, t.Length - 2)
+        END IF
+    ELSEIF radix = 16 AND t.StartsWith("0x") THEN
+        t = t.Substring(2, t.Length - 2)
+    END IF
+    IF radix < 2 OR radix > 36 THEN RETURN "NaN"
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz".Substring(0, radix)
+    FOR i = 0 TO t.Length - 1
+        d = digits.IndexOf(t.CharAt(i))
+        IF d < 0 THEN BREAK
+        v = v * radix + d
+        any = TRUE
+    NEXT
+    IF NOT any THEN RETURN "NaN"
+    RETURN JsFmt(sign * v)
+END FUNCTION
+
+FUNCTION JsParseFloat (text AS String) AS String
+    VAR t AS String
+    VAR i AS Integer
+    VAR best AS String
+    t = text.Trim()
+    best = "NaN"
+    FOR i = 1 TO MATH.Min(t.Length, 40)
+        IF JsParseNumber(t.Substring(0, i)) <> "NaN" AND NOT t.Substring(0, i).Lower().EndsWith("e") AND NOT t.Substring(0, i).EndsWith("x") THEN best = JsParseNumber(t.Substring(0, i))
+    NEXT
+    IF t.StartsWith("Infinity") THEN RETURN "Infinity"
+    RETURN best
+END FUNCTION
+
+FUNCTION JsEscape (s AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR c AS String
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i)
+        IF "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./".Contains(c) THEN
+            out = out + c
+        ELSE
+            out = out + "%" + Hex(Asc(c)).PadLeft(2).Replace(" ", "0")
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION JsUnescape (s AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR h AS String
+    WHILE i < s.Length
+        IF s.CharAt(i) = "%" AND i + 2 < s.Length + 0 AND OnlyChars(JsPeek(s, i + 1, 2).Lower(), "0123456789abcdef") AND JsPeek(s, i + 1, 2).Length = 2 THEN
+            h = JsPeek(s, i + 1, 2).Lower()
+            out = out + Chr("0123456789abcdef".IndexOf(h.CharAt(0)) * 16 + "0123456789abcdef".IndexOf(h.CharAt(1)))
+            i = i + 3
+        ELSE
+            out = out + s.CharAt(i)
+            i = i + 1
+        END IF
+    END WHILE
+    RETURN out
+END FUNCTION
+
+FUNCTION JsMath (name AS String, args AS Array OF String) AS String
+    VAR x AS String
+    VAR i AS Integer
+    VAR best AS String
+    x = JsNum(JsArg(args, 0))
+    SELECT CASE name
+        CASE "random"
+            RETURN JsN(Rnd())
+        CASE "max", "min"
+            IF args.Count = 0 THEN
+                IF name = "max" THEN RETURN "n-Infinity"
+                RETURN "nInfinity"
+            END IF
+            best = "n" + JsNum(args[0])
+            FOR i = 1 TO args.Count - 1
+                IF JsNum(args[i]) = "NaN" THEN RETURN "nNaN"
+                IF name = "max" AND JsCompare(">", "n" + JsNum(args[i]), best) = "t" THEN best = "n" + JsNum(args[i])
+                IF name = "min" AND JsCompare("<", "n" + JsNum(args[i]), best) = "t" THEN best = "n" + JsNum(args[i])
+            NEXT
+            RETURN best
+    END SELECT
+    IF NOT JsFinite(x) THEN RETURN "nNaN"
+    SELECT CASE name
+        CASE "abs"
+            RETURN JsN(Abs(Val(x)))
+        CASE "floor"
+            RETURN JsN(MATH.Floor(Val(x)))
+        CASE "ceil"
+            RETURN JsN(MATH.Ceil(Val(x)))
+        CASE "round"
+            RETURN JsN(MATH.Floor(Val(x) + 0.5))
+        CASE "sqrt"
+            IF Val(x) < 0 THEN RETURN "nNaN"
+            RETURN JsN(MATH.Sqrt(Val(x)))
+        CASE "pow"
+            RETURN JsN(Val(x) ^ JsReal(JsArg(args, 1)))
+        CASE "sin"
+            RETURN JsN(MATH.Sin(Val(x)))
+        CASE "cos"
+            RETURN JsN(MATH.Cos(Val(x)))
+        CASE "tan"
+            RETURN JsN(MATH.Tan(Val(x)))
+        CASE "atan"
+            RETURN JsN(MATH.Atan(Val(x)))
+        CASE "exp"
+            RETURN JsN(MATH.Exp(Val(x)))
+        CASE "log"
+            IF Val(x) <= 0 THEN RETURN "nNaN"
+            RETURN JsN(MATH.Log(Val(x)))
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+FUNCTION JsStringMethod (name AS String, s AS String, args AS Array OF String) AS String
+    VAR a AS String
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR n AS Integer
+    VAR found AS Integer
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR t AS String
+    a = JsArg(args, 0)
+    n = s.Length
+    SELECT CASE name
+        CASE "charAt"
+            i = JsInt(a)
+            IF i < 0 OR i >= n THEN RETURN "s"
+            RETURN JsS(s.CharAt(i))
+        CASE "charCodeAt"
+            i = JsInt(a)
+            IF i < 0 OR i >= n THEN RETURN "nNaN"
+            RETURN JsN(Asc(s.CharAt(i)))
+        CASE "indexOf"
+            i = MATH.Max(0, JsInt(JsArg(args, 1)))
+            IF i > n THEN RETURN "n-1"
+            found = s.Substring(i, n - i).IndexOf(JsStr(a))
+            IF found < 0 THEN RETURN "n-1"
+            RETURN JsN(found + i)
+        CASE "lastIndexOf"
+            t = JsStr(a)
+            found = -1
+            FOR i = n - t.Length TO 0 STEP -1
+                IF s.Substring(i, t.Length) = t THEN
+                    found = i
+                    BREAK
+                END IF
+            NEXT
+            RETURN JsN(found)
+        CASE "substring"
+            i = MATH.Min(MATH.Max(JsInt(a), 0), n)
+            j = n
+            IF JsArg(args, 1) <> "u" THEN j = MATH.Min(MATH.Max(JsInt(args[1]), 0), n)
+            IF i > j THEN
+                found = i
+                i = j
+                j = found
+            END IF
+            RETURN JsS(s.Substring(i, j - i))
+        CASE "substr"
+            i = JsInt(a)
+            IF i < 0 THEN i = MATH.Max(0, n + i)
+            IF i > n THEN i = n
+            j = n - i
+            IF JsArg(args, 1) <> "u" THEN j = MATH.Min(MATH.Max(JsInt(args[1]), 0), n - i)
+            RETURN JsS(s.Substring(i, j))
+        CASE "slice"
+            i = JsInt(a)
+            IF i < 0 THEN i = MATH.Max(0, n + i)
+            j = n
+            IF JsArg(args, 1) <> "u" THEN j = JsInt(args[1])
+            IF j < 0 THEN j = MATH.Max(0, n + j)
+            i = MATH.Min(i, n)
+            j = MATH.Min(j, n)
+            IF j <= i THEN RETURN "s"
+            RETURN JsS(s.Substring(i, j - i))
+        CASE "toUpperCase", "toLocaleUpperCase"
+            RETURN JsS(s.Upper())
+        CASE "toLowerCase", "toLocaleLowerCase"
+            RETURN JsS(s.Lower())
+        CASE "trim"
+            RETURN JsS(s.Trim())
+        CASE "split"
+            IF a = "u" THEN
+                out.Add(JsS(s))
+            ELSEIF JsStr(a) = "" THEN
+                FOR i = 0 TO n - 1
+                    out.Add(JsS(s.CharAt(i)))
+                NEXT
+            ELSE
+                FOR EACH t IN s.Split(JsStr(a))
+                    out.Add(JsS(t))
+                NEXT
+            END IF
+            RETURN JsO(JsNewArray(out))
+        CASE "concat"
+            t = s
+            FOR i = 0 TO args.Count - 1
+                t = t + JsStr(args[i])
+            NEXT
+            RETURN JsS(t)
+        CASE "toString", "valueOf"
+            RETURN JsS(s)
+        CASE "bold"
+            RETURN JsS("<B>" + s + "</B>")
+        CASE "italics"
+            RETURN JsS("<I>" + s + "</I>")
+        CASE "fixed"
+            RETURN JsS("<TT>" + s + "</TT>")
+        CASE "big"
+            RETURN JsS("<BIG>" + s + "</BIG>")
+        CASE "small"
+            RETURN JsS("<SMALL>" + s + "</SMALL>")
+        CASE "blink"
+            RETURN JsS("<BLINK>" + s + "</BLINK>")
+        CASE "strike"
+            RETURN JsS("<STRIKE>" + s + "</STRIKE>")
+        CASE "sub"
+            RETURN JsS("<SUB>" + s + "</SUB>")
+        CASE "sup"
+            RETURN JsS("<SUP>" + s + "</SUP>")
+        CASE "fontcolor"
+            RETURN JsS("<FONT COLOR=""" + JsStr(a) + """>" + s + "</FONT>")
+        CASE "fontsize"
+            RETURN JsS("<FONT SIZE=""" + JsStr(a) + """>" + s + "</FONT>")
+        CASE "anchor"
+            RETURN JsS("<A NAME=""" + JsStr(a) + """>" + s + "</A>")
+        CASE "link"
+            RETURN JsS("<A HREF=""" + JsStr(a) + """>" + s + "</A>")
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+FUNCTION JsArrayMethod (name AS String, id AS Integer, args AS Array OF String) AS String
+    VAR items AS Array OF String
+    VAR out AS Array OF String
+    VAR v AS String
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR n AS Integer
+    VAR k AS Integer
+    VAR keys AS Array OF String
+    VAR tmp AS String
+    VAR pair AS Array OF String
+    IF id = 0 OR joClass[id] <> "Array" THEN THROW Str(jsLine) + "|Array object expected"
+    items = JsItems(id)
+    n = items.Count
+    SELECT CASE name
+        CASE "join"
+            IF JsArg(args, 0) = "u" THEN RETURN JsS(JsJoin(id, ","))
+            RETURN JsS(JsJoin(id, JsStr(args[0])))
+        CASE "toString"
+            RETURN JsS(JsJoin(id, ","))
+        CASE "push"
+            FOR i = 0 TO args.Count - 1
+                JsPutOwn(id, Str(n + i), args[i])
+            NEXT
+            JsPutOwn(id, "length", JsN(n + args.Count))
+            RETURN JsN(n + args.Count)
+        CASE "pop"
+            IF n = 0 THEN RETURN "u"
+            v = items[n - 1]
+            JsSetLength(id, n - 1)
+            RETURN v
+        CASE "shift"
+            IF n = 0 THEN RETURN "u"
+            v = items[0]
+            FOR i = 1 TO n - 1
+                JsPutOwn(id, Str(i - 1), items[i])
+            NEXT
+            JsSetLength(id, n - 1)
+            RETURN v
+        CASE "unshift"
+            FOR i = 0 TO args.Count - 1
+                out.Add(args[i])
+            NEXT
+            FOR EACH v IN items
+                out.Add(v)
+            NEXT
+            FOR i = 0 TO out.Count - 1
+                JsPutOwn(id, Str(i), out[i])
+            NEXT
+            JsPutOwn(id, "length", JsN(out.Count))
+            RETURN JsN(out.Count)
+        CASE "reverse"
+            FOR i = 0 TO n - 1
+                JsPutOwn(id, Str(i), items[n - 1 - i])
+            NEXT
+            RETURN JsO(id)
+        CASE "concat"
+            FOR EACH v IN items
+                out.Add(v)
+            NEXT
+            FOR i = 0 TO args.Count - 1
+                IF args[i].StartsWith("o") AND joClass[JsId(args[i])] = "Array" THEN
+                    FOR EACH v IN JsItems(JsId(args[i]))
+                        out.Add(v)
+                    NEXT
+                ELSE
+                    out.Add(args[i])
+                END IF
+            NEXT
+            RETURN JsO(JsNewArray(out))
+        CASE "slice"
+            i = JsInt(JsArg(args, 0))
+            IF i < 0 THEN i = MATH.Max(0, n + i)
+            j = n
+            IF JsArg(args, 1) <> "u" THEN j = JsInt(args[1])
+            IF j < 0 THEN j = MATH.Max(0, n + j)
+            FOR k = i TO MATH.Min(j, n) - 1
+                out.Add(items[k])
+            NEXT
+            RETURN JsO(JsNewArray(out))
+        CASE "splice"
+            i = JsInt(JsArg(args, 0))
+            IF i < 0 THEN i = MATH.Max(0, n + i)
+            IF i > n THEN i = n
+            k = n - i
+            IF args.Count > 1 THEN k = MATH.Max(0, MATH.Min(JsInt(args[1]), n - i))
+            FOR j = i TO i + k - 1
+                out.Add(items[j])
+            NEXT
+            FOR j = 0 TO i - 1
+                keys.Add(items[j])
+            NEXT
+            FOR j = 2 TO args.Count - 1
+                keys.Add(args[j])
+            NEXT
+            FOR j = i + k TO n - 1
+                keys.Add(items[j])
+            NEXT
+            FOR j = 0 TO keys.Count - 1
+                JsPutOwn(id, Str(j), keys[j])
+            NEXT
+            JsSetLength(id, keys.Count)
+            RETURN JsO(JsNewArray(out))
+        CASE "indexOf"
+            FOR i = 0 TO n - 1
+                IF JsStrictEq(items[i], JsArg(args, 0)) THEN RETURN JsN(i)
+            NEXT
+            RETURN "n-1"
+        CASE "sort"
+            IF JsCallable(JsArg(args, 0)) THEN
+                ' insertion sort with the page's own comparison
+                FOR i = 1 TO n - 1
+                    v = items[i]
+                    j = i - 1
+                    WHILE j >= 0
+                        pair.Clear()
+                        pair.Add(items[j])
+                        pair.Add(v)
+                        IF JsReal(JsCall(args[0], JsO(jsGlobal), pair)) <= 0 THEN BREAK
+                        items[j + 1] = items[j]
+                        j = j - 1
+                    END WHILE
+                    items[j + 1] = v
+                NEXT
+            ELSE
+                ' as text: sort "text<tab>index" and read the order back
+                FOR i = 0 TO n - 1
+                    IF items[i] = "u" THEN
+                        keys.Add(Chr(65535) + Chr(9) + Str(i))
+                    ELSE
+                        keys.Add(JsStr(items[i]) + Chr(9) + Str(i))
+                    END IF
+                NEXT
+                keys.Sort()
+                FOR EACH tmp IN keys
+                    out.Add(items[Int(Val(tmp.Split(Chr(9))[tmp.Split(Chr(9)).Count - 1]))])
+                NEXT
+                items = out
+            END IF
+            FOR i = 0 TO n - 1
+                JsPutOwn(id, Str(i), items[i])
+            NEXT
+            RETURN JsO(id)
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+FUNCTION JsDateMethod (name AS String, thisVal AS String, args AS Array OF String) AS String
+    VAR ms AS Real
+    VAR id AS Integer
+    VAR y AS Real
+    VAR mon AS Real
+    VAR d AS Real
+    VAR h AS Real
+    VAR mi AS Real
+    VAR sec AS Real
+    VAR part AS Real
+    id = JsId(thisVal)
+    IF id = 0 OR joClass[id] <> "Date" THEN THROW Str(jsLine) + "|Date object expected"
+    IF joS[id] = "NaN" THEN RETURN "nNaN"
+    ms = Val(joS[id])
+    SELECT CASE name
+        CASE "getTime", "valueOf"
+            RETURN JsN(ms)
+        CASE "getFullYear"
+            RETURN JsN(JsDatePart(ms, "year"))
+        CASE "getYear"
+            ' Internet Explorer's famous quirk: 96 for 1996, but 2001 for 2001
+            IF JsDatePart(ms, "year") >= 1900 AND JsDatePart(ms, "year") < 2000 THEN RETURN JsN(JsDatePart(ms, "year") - 1900)
+            RETURN JsN(JsDatePart(ms, "year"))
+        CASE "getMonth"
+            RETURN JsN(JsDatePart(ms, "month"))
+        CASE "getDate"
+            RETURN JsN(JsDatePart(ms, "date"))
+        CASE "getDay"
+            RETURN JsN(JsDatePart(ms, "day"))
+        CASE "getHours"
+            RETURN JsN(JsDatePart(ms, "hours"))
+        CASE "getMinutes"
+            RETURN JsN(JsDatePart(ms, "minutes"))
+        CASE "getSeconds"
+            RETURN JsN(JsDatePart(ms, "seconds"))
+        CASE "getMilliseconds"
+            RETURN JsN(JsDatePart(ms, "ms"))
+        CASE "getTimezoneOffset"
+            RETURN JsN(-JsZone() / 60)
+        CASE "toString", "toLocaleString", "toGMTString", "toUTCString"
+            RETURN JsS(JsDateText(ms))
+        CASE "setTime"
+            joS[id] = JsNum(JsArg(args, 0))
+            RETURN "n" + joS[id]
+        CASE "setFullYear", "setYear", "setMonth", "setDate", "setHours", "setMinutes", "setSeconds", "setMilliseconds"
+            y = JsDatePart(ms, "year")
+            mon = JsDatePart(ms, "month")
+            d = JsDatePart(ms, "date")
+            h = JsDatePart(ms, "hours")
+            mi = JsDatePart(ms, "minutes")
+            sec = JsDatePart(ms, "seconds")
+            part = JsDatePart(ms, "ms")
+            IF NOT JsFinite(JsNum(JsArg(args, 0))) THEN
+                joS[id] = "NaN"
+                RETURN "nNaN"
+            END IF
+            SELECT CASE name
+                CASE "setFullYear", "setYear"
+                    y = JsReal(args[0])
+                    IF name = "setYear" AND y >= 0 AND y < 100 THEN y = y + 1900
+                CASE "setMonth"
+                    mon = JsReal(args[0])
+                CASE "setDate"
+                    d = JsReal(args[0])
+                CASE "setHours"
+                    h = JsReal(args[0])
+                CASE "setMinutes"
+                    mi = JsReal(args[0])
+                CASE "setSeconds"
+                    sec = JsReal(args[0])
+                CASE "setMilliseconds"
+                    part = JsReal(args[0])
+            END SELECT
+            joS[id] = JsFmt(JsLocalMs(y, mon, d, h, mi, sec, part))
+            RETURN "n" + joS[id]
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+' ---------------------------------------------------------------- a fresh page
+
+SUB JsReset ()
+    VAR mathObj AS Integer
+    VAR o AS Integer
+    VAR f AS Integer
+    VAR none AS Array OF String
+    jtType.Clear()
+    jtText.Clear()
+    jtLine.Clear()
+    jtNl.Clear()
+    nk.Clear()
+    na.Clear()
+    nb.Clear()
+    nc.Clear()
+    nd.Clear()
+    ns.Clear()
+    nl.Clear()
+    nline.Clear()
+    jpKey.Clear()
+    jpVal.Clear()
+    joClass.Clear()
+    joProto.Clear()
+    joA.Clear()
+    joB.Clear()
+    joS.Clear()
+    joKeys.Clear()
+    jsHostCache.Clear()
+    f = JsNode("none", 0, 0, 0, 0, "", "", 0)
+    o = JsNewObject("Nothing", 0)
+    jsOut = ""
+    jsSig = ""
+    jsRet = "u"
+    jsDepth = 0
+    jsSteps = 0
+    jsLimit = JSSTEPLIMIT
+    jsThrown = ""
+    jsLineBase = 1
+
+    jsObjectProto = JsNewObject("Object", 0)
+    JsMethods(jsObjectProto, "Object.", "toString,hasOwnProperty")
+    jsFunctionProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsFunctionProto, "Function.", "call,apply")
+    jsArrayProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsArrayProto, "Array.", "join,toString,push,pop,shift,unshift,reverse,concat,slice,splice,indexOf,sort")
+    jsStringProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsStringProto, "String.", "charAt,charCodeAt,indexOf,lastIndexOf,substring,substr,slice,toUpperCase,toLowerCase,toLocaleUpperCase,toLocaleLowerCase,trim,split,concat,toString,valueOf,bold,italics,fixed,big,small,blink,strike,sub,sup,fontcolor,fontsize,anchor,link")
+    jsNumberProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsNumberProto, "Number.", "toString,toFixed")
+    jsDateProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsDateProto, "Date.", "getTime,valueOf,getFullYear,getYear,getMonth,getDate,getDay,getHours,getMinutes,getSeconds,getMilliseconds,getTimezoneOffset,toString,toLocaleString,toGMTString,toUTCString,setTime,setFullYear,setYear,setMonth,setDate,setHours,setMinutes,setSeconds,setMilliseconds")
+
+    ' window, which is also the global scope
+    jsGlobal = JsNewObject("Global", jsObjectProto)
+    JsPutOwn(jsGlobal, "window", JsO(jsGlobal))
+    JsPutOwn(jsGlobal, "self", JsO(jsGlobal))
+    JsPutOwn(jsGlobal, "top", JsO(jsGlobal))
+    JsPutOwn(jsGlobal, "parent", JsO(jsGlobal))
+    JsPutOwn(jsGlobal, "NaN", "nNaN")
+    JsPutOwn(jsGlobal, "Infinity", "nInfinity")
+    JsMethods(jsGlobal, "", "alert,confirm,prompt,parseInt,parseFloat,isNaN,isFinite,escape,unescape,setTimeout,setInterval,clearTimeout,clearInterval,open,String,Number,Boolean,Array,Object,Date,Error")
+    JsPutOwn(jsGlobal, "eval", JsNative("eval"))
+    JsPutOwn(jsGlobal, "close", JsNative("noop"))
+    JsPutOwn(jsGlobal, "focus", JsNative("noop"))
+    JsPutOwn(jsGlobal, "blur", JsNative("noop"))
+    JsPutOwn(jsGlobal, "scroll", JsNative("noop"))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "String")), "fromCharCode", JsNative("String.fromCharCode"))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "String")), "prototype", JsO(jsStringProto))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "prototype", JsO(jsNumberProto))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Array")), "prototype", JsO(jsArrayProto))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Object")), "prototype", JsO(jsObjectProto))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Date")), "prototype", JsO(jsDateProto))
+
+    mathObj = JsNewObject("Object", jsObjectProto)
+    JsMethods(mathObj, "Math.", "abs,floor,ceil,round,random,max,min,sqrt,pow,sin,cos,tan,atan,exp,log")
+    JsPutOwn(mathObj, "PI", JsN(MATH.Pi))
+    JsPutOwn(mathObj, "E", JsN(MATH.Exp(1)))
+    JsPutOwn(mathObj, "LN2", JsN(MATH.Log(2)))
+    JsPutOwn(mathObj, "LN10", JsN(MATH.Log(10)))
+    JsPutOwn(mathObj, "SQRT2", JsN(MATH.Sqrt(2)))
+    JsPutOwn(jsGlobal, "Math", JsO(mathObj))
+
+    jsDocument = JsNewObject("Document", jsObjectProto)
+    JsMethods(jsDocument, "document.", "write,writeln,getElementById")
+    JsPutOwn(jsDocument, "open", JsNative("noop"))
+    JsPutOwn(jsDocument, "close", JsNative("noop"))
+    jsFormsArray = JsNewArray(none)
+    JsPutOwn(jsDocument, "forms", JsO(jsFormsArray))
+    JsPutOwn(jsDocument, "images", JsO(JsNewArray(none)))
+    JsPutOwn(jsDocument, "links", JsO(JsNewArray(none)))
+    JsPutOwn(jsDocument, "bgColor", JsS("#FFFFFF"))
+    JsPutOwn(jsDocument, "fgColor", JsS("#000000"))
+    JsPutOwn(jsGlobal, "document", JsO(jsDocument))
+
+    jsLocation = JsNewObject("Location", jsObjectProto)
+    JsPutOwn(jsDocument, "location", JsO(jsLocation))
+
+    o = JsNewObject("Object", jsObjectProto)
+    JsMethods(o, "history.", "back,forward,go")
+    JsPutOwn(o, "length", JsN(HostHistory(0)))
+    JsPutOwn(jsGlobal, "history", JsO(o))
+
+    o = JsNewObject("Object", jsObjectProto)
+    JsPutOwn(o, "appName", JsS("Microsoft Internet Explorer"))
+    JsPutOwn(o, "appCodeName", JsS("Mozilla"))
+    JsPutOwn(o, "appVersion", JsS("2.0 (compatible; MSIE 3.02; SIM95)"))
+    JsPutOwn(o, "userAgent", JsS("Mozilla/2.0 (compatible; MSIE 3.02; SIM95)"))
+    JsPutOwn(o, "platform", JsS("SIM95"))
+    JsPutOwn(o, "javaEnabled", JsNative("navigator.javaEnabled"))
+    JsPutOwn(jsGlobal, "navigator", JsO(o))
+
+    o = JsNewObject("Object", jsObjectProto)
+    JsPutOwn(o, "width", "n640")
+    JsPutOwn(o, "height", "n480")
+    JsPutOwn(o, "colorDepth", "n4")
+    JsPutOwn(jsGlobal, "screen", JsO(o))
+END SUB
+
+' Runs a script on the page. Returns "" or "line|message".
+FUNCTION JsRun (source AS String, firstLine AS Integer) AS String
+    VAR prog AS Integer
+    jsSig = ""
+    jsDepth = 0
+    jsThrown = ""
+    jsRet = "u"
+    jsLineBase = firstLine
+    TRY
+        prog = JsParse(source)
+        JsHoist(prog, jsGlobal)
+        JsExec(prog, jsGlobal)
+    CATCH err
+        RETURN JsTidyError(err)
+    END TRY
+    jsSig = ""
+    RETURN ""
+END FUNCTION
+
+' Runs an event handler (onclick="..."): like a function body, so "return
+' false" works. The value it returned is in jsRet.
+FUNCTION JsHandler (code AS String) AS String
+    RETURN JsRun(code, 1)
+END FUNCTION
+
+' Calls a function value (for setTimeout(f, ms)). Returns "" or an error.
+FUNCTION JsCallValue (fn AS String) AS String
+    VAR none AS Array OF String
+    jsSig = ""
+    jsDepth = 0
+    jsThrown = ""
+    TRY
+        jsRet = JsCall(fn, JsO(jsGlobal), none)
+    CATCH err
+        RETURN JsTidyError(err)
+    END TRY
+    RETURN ""
+END FUNCTION
+
+FUNCTION JsTidyError (err AS String) AS String
+    VAR thrown AS String
+    jsSig = ""
+    jsDepth = 0
+    thrown = jsThrown
+    jsThrown = ""
+    IF err.Contains("@thrown") THEN
+        IF thrown.StartsWith("o") THEN RETURN err.Substring(0, err.IndexOf("|")) + "|Exception thrown and not caught: " + JsStr(JsGet(thrown, "message"))
+        RETURN err.Substring(0, err.IndexOf("|")) + "|Exception thrown and not caught: " + JsStr(thrown)
+    END IF
+    IF err.Contains("@aborted") THEN RETURN Str(jsLine) + "|@aborted"
+    IF err.Contains("Stack overflow") THEN RETURN Str(jsLine) + "|Out of stack space"
+    IF err.Contains("|") AND OnlyChars(err.Substring(0, err.IndexOf("|")), "0123456789") AND err.IndexOf("|") > 0 THEN RETURN err
+    RETURN Str(jsLine) + "|" + err
 END FUNCTION
