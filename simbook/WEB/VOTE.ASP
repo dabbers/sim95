@@ -10,8 +10,8 @@ RequireToken()
 id = REQUEST.Query("id")
 line = FindPost(id)
 IF line <> "" AND CanTalk(viewer, line) THEN
-    IF REQUEST.Query("v") = "up" THEN Vote(viewer, id, "+")
-    IF REQUEST.Query("v") = "down" THEN Vote(viewer, id, "-")
+    IF REQUEST.Query("v") = "up" THEN Vote(viewer, line, "+")
+    IF REQUEST.Query("v") = "down" THEN Vote(viewer, line, "-")
 END IF
 back = REQUEST.Query("b")
 IF back = "view" THEN RESPONSE.Redirect("view.asp?id=" + id)

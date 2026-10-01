@@ -26,6 +26,7 @@ SUB Main ()
     NL = Chr(10)
     IF NOT FS.Exists("C:\\WEB\\PICS") THEN FS.MakeDir("C:\\WEB\\PICS")
     MoveHomePage()
+    Migrate()
 ${files.map((f, i) => `    File${i}()`).join("\n")}
     Print("SimBook is installed in C:\\WEB (${files.length} files).")
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
@@ -60,5 +61,7 @@ files.forEach((f, i) => {
   for (const l of lines) out += `    t = t + ${lit(l)} + NL\n`;
   out += `    Put(${lit(f)})\nEND SUB\n`;
 });
+// Data from older versions is brought forward by MIGRATE.SPK, pasted in whole.
+out += "\n" + fs.readFileSync(path.join(root, "simbook/MIGRATE.SPK"), "utf8");
 fs.writeFileSync(path.join(root, "simbook/INSTALL.SPK"), out);
 console.log(`simbook/INSTALL.SPK: ${files.length} files, ${out.length} bytes`);

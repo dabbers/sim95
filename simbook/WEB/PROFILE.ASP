@@ -27,13 +27,15 @@ friend = IsFriend(viewer, who)
 <form action="friend.asp" method="post"><%= TokenField() %>
 <input type="hidden" name="u" value="<%= who %>">
 <% IF friend THEN %>
-<p><font size="2"><%= H(Field(rec, "name")) %> is your friend.</font><br>
+<p><font size="2"><%= H(Field(rec, "name")) %> is your friend.
+<a href="poke.asp?u=<%= who %>&do=poke&b=profile&<%= TokenArg() %>">Poke <%= H(Field(rec, "name")) %></a></font><br>
 <input type="hidden" name="do" value="remove"><input type="submit" value="Remove from Friends"></p>
 <% ELSE %>
 <input type="hidden" name="do" value="add"><p><input type="submit" value="Add to Friends"></p>
 <% END IF %>
 </form>
 <% END IF %>
+<p><font size="2"><a href="photos.asp?u=<%= who %>">Photos (<%= Album(who).Count %>)</a></font></p>
 <a name="friends"></a>
 <%= BoxTop("Friends (" + Str(pals.Count) + ")") %>
 <font size="2">

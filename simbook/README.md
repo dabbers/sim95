@@ -2,7 +2,8 @@
 
 A tiny social network for [SIM95](https://sim95.kippy.io/), in the spirit of
 the 2004 PHP-era thefacebook: accounts, profiles with a picture, friends,
-Walls, a News Feed, thumbs up and down, and replies. It is written entirely in SPARK as ActiveSparkPages
+Walls, a News Feed, thumbs up and down, replies, notifications, pokes and
+photo albums. It is written entirely in SPARK as ActiveSparkPages
 (`.ASP`) served by the machine's own `HTTPD.SPK`, and it installs as the
 machine's home page.
 
@@ -30,7 +31,10 @@ the pages without touching anyone's data.
 | `edit.asp` | Edit your profile |
 | `picture.asp` | Upload or remove your picture (a `.PIC`, up to 100x100) |
 | `view.asp?id=N` | One post with all its replies, and a reply box |
-| `vote.asp`, `reply.asp` | Thumbs and replies; they redirect back |
+| `photos.asp?u=name` | Photo album; add photos (`.PIC`, up to 200x200) to your own |
+| `notify.asp` | Your notifications, new ones highlighted |
+| `delete.asp?id=N[&r=R]` | "Delete this?", then deletes a post or a reply |
+| `vote.asp`, `reply.asp`, `poke.asp` | Thumbs, replies and pokes; they redirect back |
 | `people.asp?q=text` | Member directory and search |
 | `post.asp`, `friend.asp`, `login.asp`, `join.asp`, `logout.asp` | Form handlers that redirect back |
 
@@ -42,6 +46,19 @@ the pages without touching anyone's data.
   thumb up or down (click again to take it back) or reply. That means its
   author, the owner of its Wall, and their friends. The feed and Walls show
   the newest two replies; the post's own page shows the rest.
+* **Deleting**: whoever wrote a post, or the owner of the Wall it is on, can
+  delete it, along with its thumbs, replies and photo. The same goes for
+  replies. You are always asked first.
+* **Notifications**: you get one when someone writes on your Wall, replies to
+  your post or to one on your Wall, gives your post a thumb, pokes you, or
+  adds you as a friend. The header shows how many are new. The newest 100 are
+  kept.
+* **Pokes**: poke a friend from their profile. Your home page lists who
+  poked you, with "poke back" and "remove".
+* **Photos**: a photo is a post on your own Wall with a picture attached, so
+  it shows up in the feed and takes thumbs and replies. Run `SHRINK.SPK` with
+  the size 200 to turn a Sketch drawing into a 200x150 `PHOTO.PIC` (about
+  30K).
 * **Counters**: every text box counts down as you type, and the button greys
   out while a box holds too much. This is a SPARK page script, which Voyager
   runs on every keystroke. The server checks the limits again anyway.
@@ -92,16 +109,26 @@ lives in `C:\BOOKDATA`, outside `C:\WEB`, so the web server never hands it out:
 C:\BOOKDATA\USERS\<user>.TXT    profile, key=value per line (password salted + hashed)
 C:\BOOKDATA\FRIENDS\<user>.TXT  |ann|bob|cat|
 C:\BOOKDATA\WALLS\<user>.TXT    posts on that user's Wall, one per line
-C:\BOOKDATA\POSTS.TXT           every post, append-only (the feed reads this)
+C:\BOOKDATA\LOG\<n>.TXT         every post, 500 to a file by number (the feed reads the newest two)
 C:\BOOKDATA\PEOPLE.TXT          user|name directory
 C:\BOOKDATA\SESSIONS\<id>.TXT   sign-in cookie -> user, form token
 C:\BOOKDATA\NEXTID.TXT          post counter
 C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|
-C:\BOOKDATA\REPLIES\<post>.TXT  date|author|name|text, one reply per line
+C:\BOOKDATA\REPLIES\<post>.TXT  number|date|author|name|text, one reply per line
+C:\BOOKDATA\NOTES\<user>.TXT    notifications (.SEE: the last one read)
+C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them
+C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos
+C:\WEB\PHOTOS\<post>.PIC        photos
 C:\WEB\PICS\<user>.PIC          profile pictures
 ```
 
 User names are 3–8 letters or digits, because they double as 8.3 file names.
+
+Finding a post reads only its own log file, and writing one rewrites only
+the newest file, so this stays quick however big SimBook gets. The installer
+upgrades older data in place: it splits the first version's `POSTS.TXT` into
+`LOG` files (keeping `POSTS.OLD`) and numbers old replies. See
+[`MIGRATE.SPK`](MIGRATE.SPK).
 
 ## Caveats (it is a toy)
 
@@ -109,7 +136,7 @@ User names are 3–8 letters or digits, because they double as 8.3 file names.
   passwords off the disk in plain text, and that is about all.
 * There is no locking. Two requests at the same moment could race on a file.
   HTTPD handles one request at a time, so this is mostly theoretical.
-* There is no post deletion and there are no friend requests.
+* There are no friend requests.
 * Login and registration have no form token, so another site could sign you
   in to an account of its choosing.
 

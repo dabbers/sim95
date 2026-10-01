@@ -14,6 +14,7 @@ SUB Main ()
     NL = Chr(10)
     IF NOT FS.Exists("C:\WEB\PICS") THEN FS.MakeDir("C:\WEB\PICS")
     MoveHomePage()
+    Migrate()
     File0()
     File1()
     File2()
@@ -31,7 +32,11 @@ SUB Main ()
     File14()
     File15()
     File16()
-    Print("SimBook is installed in C:\WEB (17 files).")
+    File17()
+    File18()
+    File19()
+    File20()
+    Print("SimBook is installed in C:\WEB (21 files).")
     Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
 
@@ -70,13 +75,17 @@ SUB File0 ()
     t = t + "'   C:\BOOKDATA\USERS\<user>.TXT    one profile, key=value per line" + NL
     t = t + "'   C:\BOOKDATA\FRIENDS\<user>.TXT  |ann|bob|cat|  (friendship is mutual)" + NL
     t = t + "'   C:\BOOKDATA\WALLS\<user>.TXT    every post on that user's wall, oldest first" + NL
-    t = t + "'   C:\BOOKDATA\POSTS.TXT           every post on every wall: the feed reads this" + NL
+    t = t + "'   C:\BOOKDATA\LOG\<n>.TXT         every post, LOGSIZE to a file: the feed reads these" + NL
     t = t + "'   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory" + NL
     t = t + "'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to, and its form token" + NL
-    t = t + "'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out" + NL
+    t = t + "'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out (NEXTRID: replies)" + NL
     t = t + "'   C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|  thumbs up and down on one post" + NL
-    t = t + "'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post: date|author|author name|text" + NL
+    t = t + "'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post, one per line" + NL
+    t = t + "'   C:\BOOKDATA\NOTES\<user>.TXT    their notifications (and .SEE: how far they read)" + NL
+    t = t + "'   C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them" + NL
+    t = t + "'   C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos" + NL
     t = t + "'   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)" + NL
+    t = t + "'   C:\WEB\PHOTOS\<post>.PIC        photos" + NL
     t = t + "'" + NL
     t = t + "' A post is one line: id|date time|author|author name|wall|wall name|text" + NL
     t = t + "' Names and text are escaped with Esc so they never contain | or a line break." + NL
@@ -87,9 +96,12 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "CONST DATADIR = ""C:\BOOKDATA""" + NL
     t = t + "CONST PICDIR = ""C:\WEB\PICS""" + NL
+    t = t + "CONST PHOTODIR = ""C:\WEB\PHOTOS""" + NL
     t = t + "CONST COOKIE = ""simbook""" + NL
     t = t + "CONST FEEDSIZE = 25" + NL
-    t = t + "CONST FEEDSCAN = 1000" + NL
+    t = t + "CONST LOGSIZE = 500           ' posts to a log file; MIGRATE.SPK knows this too" + NL
+    t = t + "CONST NOTEKEEP = 100          ' notifications kept per member" + NL
+    t = t + "CONST NOTESHOW = 40           ' notifications shown at once" + NL
     t = t + "CONST MAXPOST = 1000" + NL
     t = t + "CONST MAXREPLY = 500" + NL
     t = t + "CONST FEEDREPLIES = 2         ' replies shown under a post in the feed and on Walls" + NL
@@ -98,6 +110,10 @@ SUB File0 ()
     t = t + "CONST LONGFIELD = 500" + NL
     t = t + "CONST MAXPIC = 20000" + NL
     t = t + "CONST PICSIZE = 100" + NL
+    t = t + "CONST MAXPHOTO = 45000" + NL
+    t = t + "CONST PHOTOSIZE = 200" + NL
+    t = t + "CONST MAXCAPTION = 200" + NL
+    t = t + "CONST ALBUMSHOW = 20" + NL
     t = t + "CONST PAGEROOM = 20000        ' how much feed, Wall or replies one page may carry" + NL
     t = t + "" + NL
     t = t + "' HTTPD.SPK sends a whole page as one network message, and a message holds" + NL
@@ -112,11 +128,12 @@ SUB File0 ()
     t = t + "SUB EnsureDisk ()" + NL
     t = t + "    VAR dir AS String" + NL
     t = t + "    VAR dirs AS Array OF String" + NL
-    t = t + "    dirs = ["""", ""\USERS"", ""\FRIENDS"", ""\WALLS"", ""\SESSIONS"", ""\VOTES"", ""\REPLIES""]" + NL
+    t = t + "    dirs = ["""", ""\USERS"", ""\FRIENDS"", ""\WALLS"", ""\SESSIONS"", ""\VOTES"", ""\REPLIES"", ""\LOG"", ""\NOTES"", ""\POKES"", ""\ALBUMS""]" + NL
     t = t + "    FOR EACH dir IN dirs" + NL
     t = t + "        IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)" + NL
     t = t + "    NEXT" + NL
     t = t + "    IF NOT FS.Exists(PICDIR) THEN FS.MakeDir(PICDIR)" + NL
+    t = t + "    IF NOT FS.Exists(PHOTODIR) THEN FS.MakeDir(PHOTODIR)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "FUNCTION ReadOr (path AS String, fallback AS String) AS String" + NL
@@ -277,13 +294,20 @@ SUB File0 ()
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' A picture is a SIM95PIC file: ""SIM95PIC width height"", then a row of hex digits" + NL
-    t = t + "' per line. Returns """" when it was saved, otherwise what is wrong with it." + NL
-    t = t + "FUNCTION SavePicture (u AS String, pic AS String) AS String" + NL
+    t = t + "' per line. Returns """" when it will do, otherwise what is wrong with it." + NL
+    t = t + "FUNCTION CheckPicture (pic AS String, most AS Integer, longest AS Integer) AS String" + NL
     t = t + "    VAR size AS Array OF String" + NL
     t = t + "    IF pic = """" THEN RETURN ""Choose a .PIC file first.""" + NL
     t = t + "    size = pic.Lines()[0].Trim().Split("" "")" + NL
     t = t + "    IF NOT pic.StartsWith(""SIM95PIC "") OR size.Count < 3 THEN RETURN ""That is not a picture. Save one from Sketch as a .PIC file.""" + NL
-    t = t + "    IF pic.Length > MAXPIC OR Val(size[1]) > PICSIZE OR Val(size[2]) > PICSIZE THEN RETURN ""That picture is "" + size[1] + "" by "" + size[2] + "". Shrink it to "" + Str(PICSIZE) + "" by "" + Str(PICSIZE) + "" or less with SHRINK.SPK below.""" + NL
+    t = t + "    IF pic.Length > longest OR Val(size[1]) > most OR Val(size[2]) > most THEN RETURN ""That picture is "" + size[1] + "" by "" + size[2] + "". Shrink it to "" + Str(most) + "" by "" + Str(most) + "" or less with SHRINK.SPK.""" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION SavePicture (u AS String, pic AS String) AS String" + NL
+    t = t + "    VAR problem AS String" + NL
+    t = t + "    problem = CheckPicture(pic, PICSIZE, MAXPIC)" + NL
+    t = t + "    IF problem <> """" THEN RETURN problem" + NL
     t = t + "    EnsureDisk()" + NL
     t = t + "    FS.Write(PICDIR + ""\"" + u + "".PIC"", pic)" + NL
     t = t + "    RETURN """"" + NL
@@ -404,6 +428,7 @@ SUB File0 ()
     t = t + "    IF a = b OR IsFriend(a, b) THEN RETURN" + NL
     t = t + "    FS.Write(DATADIR + ""\FRIENDS\"" + a + "".TXT"", FriendList(a) + b + ""|"")" + NL
     t = t + "    FS.Write(DATADIR + ""\FRIENDS\"" + b + "".TXT"", FriendList(b) + a + ""|"")" + NL
+    t = t + "    Notify(b, ""friend"", """")" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "SUB RemoveFriend (a AS String, b AS String)" + NL
@@ -411,44 +436,101 @@ SUB File0 ()
     t = t + "    FS.Write(DATADIR + ""\FRIENDS\"" + b + "".TXT"", FriendList(b).Replace(""|"" + a + ""|"", ""|""))" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "' ---------------------------------------------------------------- posts" + NL
+    t = t + "' ---------------------------------------------------------------- numbers" + NL
     t = t + "" + NL
-    t = t + "FUNCTION NextId () AS Integer" + NL
+    t = t + "' A counter kept in C:\BOOKDATA\<name>.TXT: posts use NEXTID, replies NEXTRID," + NL
+    t = t + "' and each one only ever goes up." + NL
+    t = t + "FUNCTION Counter (name AS String) AS Integer" + NL
     t = t + "    VAR n AS Integer" + NL
-    t = t + "    n = Int(Val(ReadOr(DATADIR + ""\NEXTID.TXT"", ""0""))) + 1" + NL
-    t = t + "    FS.Write(DATADIR + ""\NEXTID.TXT"", Str(n))" + NL
+    t = t + "    n = Int(Val(ReadOr(DATADIR + ""\"" + name + "".TXT"", ""0""))) + 1" + NL
+    t = t + "    FS.Write(DATADIR + ""\"" + name + "".TXT"", Str(n))" + NL
     t = t + "    RETURN n" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
-    t = t + "' Write on someone's wall (your own wall is your status). Returns """" or a problem." + NL
-    t = t + "FUNCTION AddPost (author AS String, wall AS String, text AS String) AS String" + NL
-    t = t + "    VAR line AS String" + NL
-    t = t + "    text = text.Replace(Chr(13), """").Trim()" + NL
-    t = t + "    IF text = """" THEN RETURN ""Write something first.""" + NL
-    t = t + "    IF text.Length > MAXPOST THEN RETURN ""Keep it under "" + Str(MAXPOST) + "" characters.""" + NL
-    t = t + "    IF NOT UserExists(wall) THEN RETURN ""There is nobody called "" + wall + "".""" + NL
-    t = t + "    IF author <> wall AND NOT IsFriend(author, wall) THEN RETURN ""Only friends can write on "" + wall + ""'s Wall.""" + NL
-    t = t + "    EnsureDisk()" + NL
-    t = t + "    line = Str(NextId()) + ""|"" + TIME.Date + "" "" + TIME.Clock.Substring(0, 5) + ""|"" + author + ""|"" + Esc(NameOf(author)) + ""|"" + wall + ""|"" + Esc(NameOf(wall)) + ""|"" + Esc(text)" + NL
-    t = t + "    FS.Append(DATADIR + ""\POSTS.TXT"", line + Chr(10))" + NL
-    t = t + "    FS.Append(DATADIR + ""\WALLS\"" + wall + "".TXT"", line + Chr(10))" + NL
-    t = t + "    RETURN """"" + NL
-    t = t + "END FUNCTION" + NL
-    t = t + "" + NL
-    t = t + "' The line of post number id, or """" when there is none. IndexOf does the" + NL
-    t = t + "' searching, so this costs a handful of steps however long the log is." + NL
-    t = t + "FUNCTION FindPost (id AS String) AS String" + NL
-    t = t + "    VAR text AS String" + NL
+    t = t + "' The line in text (lines of ""key|..."") that starts with key, or """". IndexOf does" + NL
+    t = t + "' the searching, so this costs a handful of steps however long the text is." + NL
+    t = t + "FUNCTION FindLine (text AS String, key AS String) AS String" + NL
     t = t + "    VAR at AS Integer" + NL
-    t = t + "    IF id = """" OR id.Length > 8 THEN RETURN """"" + NL
-    t = t + "    IF NOT OnlyFrom(id, ""0123456789"") THEN RETURN """"" + NL
-    t = t + "    text = Chr(10) + ReadOr(DATADIR + ""\POSTS.TXT"", """")" + NL
-    t = t + "    at = text.IndexOf(Chr(10) + id + ""|"")" + NL
+    t = t + "    text = Chr(10) + text" + NL
+    t = t + "    at = text.IndexOf(Chr(10) + key + ""|"")" + NL
     t = t + "    IF at < 0 THEN RETURN """"" + NL
     t = t + "    text = text.Substring(at + 1, text.Length - at - 1)" + NL
     t = t + "    at = text.IndexOf(Chr(10))" + NL
     t = t + "    IF at >= 0 THEN text = text.Substring(0, at)" + NL
     t = t + "    RETURN text" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' text without the whole line given. The line breaks around it make sure a" + NL
+    t = t + "' line that merely ends the same way is left alone." + NL
+    t = t + "FUNCTION WithoutLine (text AS String, line AS String) AS String" + NL
+    t = t + "    text = (Chr(10) + text).Replace(Chr(10) + line + Chr(10), Chr(10))" + NL
+    t = t + "    RETURN text.Substring(1, text.Length - 1)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION IsNumber (s AS String) AS Bool" + NL
+    t = t + "    IF s = """" OR s.Length > 8 THEN RETURN FALSE" + NL
+    t = t + "    RETURN OnlyFrom(s, ""0123456789"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- the post log" + NL
+    t = t + "" + NL
+    t = t + "' Every post is in the log, in chunks of LOGSIZE: post n lives in" + NL
+    t = t + "' C:\BOOKDATA\LOG\<(n - 1) / LOGSIZE>.TXT. Finding a post reads one small" + NL
+    t = t + "' file, and writing one rewrites only the newest chunk, however big SimBook" + NL
+    t = t + "' grows. The feed reads the newest two chunks." + NL
+    t = t + "" + NL
+    t = t + "FUNCTION ChunkPath (id AS Integer) AS String" + NL
+    t = t + "    RETURN DATADIR + ""\LOG\"" + Str(Int((id - 1) / LOGSIZE)) + "".TXT""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION LastId () AS Integer" + NL
+    t = t + "    RETURN Int(Val(ReadOr(DATADIR + ""\NEXTID.TXT"", ""0"")))" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The newest posts, oldest first: between LOGSIZE and twice that many." + NL
+    t = t + "FUNCTION RecentPosts () AS Array OF String" + NL
+    t = t + "    VAR last AS Integer" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    last = LastId()" + NL
+    t = t + "    IF last = 0 THEN RETURN """".Lines()" + NL
+    t = t + "    text = ReadOr(ChunkPath(last), """")" + NL
+    t = t + "    IF last > LOGSIZE THEN text = ReadOr(ChunkPath(last - LOGSIZE), """") + text" + NL
+    t = t + "    RETURN text.Lines()" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The line of post number id, or """" when there is none." + NL
+    t = t + "FUNCTION FindPost (id AS String) AS String" + NL
+    t = t + "    IF NOT IsNumber(id) THEN RETURN """"" + NL
+    t = t + "    RETURN FindLine(ReadOr(ChunkPath(Int(Val(id))), """"), id)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Writes a post into the log and onto the Wall, and returns its number." + NL
+    t = t + "FUNCTION WritePost (author AS String, wall AS String, text AS String) AS Integer" + NL
+    t = t + "    VAR id AS Integer" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    id = Counter(""NEXTID"")" + NL
+    t = t + "    line = Str(id) + ""|"" + Stamp() + ""|"" + author + ""|"" + Esc(NameOf(author)) + ""|"" + wall + ""|"" + Esc(NameOf(wall)) + ""|"" + Esc(text)" + NL
+    t = t + "    FS.Append(ChunkPath(id), line + Chr(10))" + NL
+    t = t + "    FS.Append(DATADIR + ""\WALLS\"" + wall + "".TXT"", line + Chr(10))" + NL
+    t = t + "    RETURN id" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION Stamp () AS String" + NL
+    t = t + "    RETURN TIME.Date + "" "" + TIME.Clock.Substring(0, 5)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Write on someone's Wall (your own Wall is your status). Returns """" or a problem." + NL
+    t = t + "FUNCTION AddPost (author AS String, wall AS String, text AS String) AS String" + NL
+    t = t + "    VAR id AS Integer" + NL
+    t = t + "    text = text.Replace(Chr(13), """").Trim()" + NL
+    t = t + "    IF text = """" THEN RETURN ""Write something first.""" + NL
+    t = t + "    IF text.Length > MAXPOST THEN RETURN ""Keep it under "" + Str(MAXPOST) + "" characters.""" + NL
+    t = t + "    IF NOT UserExists(wall) THEN RETURN ""There is nobody called "" + wall + "".""" + NL
+    t = t + "    IF author <> wall AND NOT IsFriend(author, wall) THEN RETURN ""Only friends can write on "" + wall + ""'s Wall.""" + NL
+    t = t + "    id = WritePost(author, wall, text)" + NL
+    t = t + "    Notify(wall, ""wall"", Str(id))" + NL
+    t = t + "    RETURN """"" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' Who may give a post a thumb or a reply: the people whose News Feed it reaches." + NL
@@ -461,6 +543,34 @@ SUB File0 ()
     t = t + "    RETURN IsFriend(u, p[2]) OR IsFriend(u, p[4])" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
+    t = t + "' A post can be deleted by whoever wrote it and by the owner of its Wall." + NL
+    t = t + "FUNCTION CanDelete (u AS String, line AS String) AS Bool" + NL
+    t = t + "    VAR p AS Array OF String" + NL
+    t = t + "    p = line.Split(""|"")" + NL
+    t = t + "    IF p.Count < 7 THEN RETURN FALSE" + NL
+    t = t + "    RETURN u = p[2] OR u = p[4]" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Takes a post out of the log and off its Wall, with its thumbs, replies and photo." + NL
+    t = t + "SUB DeletePost (line AS String)" + NL
+    t = t + "    VAR p AS Array OF String" + NL
+    t = t + "    VAR path AS String" + NL
+    t = t + "    p = line.Split(""|"")" + NL
+    t = t + "    path = ChunkPath(Int(Val(p[0])))" + NL
+    t = t + "    FS.Write(path, WithoutLine(FS.Read(path), line))" + NL
+    t = t + "    path = DATADIR + ""\WALLS\"" + p[4] + "".TXT""" + NL
+    t = t + "    IF FS.Exists(path) THEN FS.Write(path, WithoutLine(FS.Read(path), line))" + NL
+    t = t + "    path = DATADIR + ""\VOTES\"" + p[0] + "".TXT""" + NL
+    t = t + "    IF FS.Exists(path) THEN FS.Delete(path)" + NL
+    t = t + "    path = DATADIR + ""\REPLIES\"" + p[0] + "".TXT""" + NL
+    t = t + "    IF FS.Exists(path) THEN FS.Delete(path)" + NL
+    t = t + "    IF IsPhoto(p[0]) THEN" + NL
+    t = t + "        FS.Delete(PHOTODIR + ""\"" + p[0] + "".PIC"")" + NL
+    t = t + "        path = DATADIR + ""\ALBUMS\"" + p[2] + "".TXT""" + NL
+    t = t + "        IF FS.Exists(path) THEN FS.Write(path, FS.Read(path).Replace(""|"" + p[0] + ""|"", ""|""))" + NL
+    t = t + "    END IF" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- thumbs" + NL
     t = t + "" + NL
     t = t + "FUNCTION VotesOf (id AS String) AS String" + NL
@@ -472,22 +582,32 @@ SUB File0 ()
     t = t + "    RETURN (votes.Length - votes.Replace(sign + ""|"", """").Length) / 2" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
-    t = t + "' Thumbs up (""+"") or down (""-""). The same thumb again takes it back." + NL
-    t = t + "SUB Vote (u AS String, id AS String, sign AS String)" + NL
+    t = t + "' Thumbs up (""+"") or down (""-"") on a post. The same thumb again takes it back." + NL
+    t = t + "SUB Vote (u AS String, line AS String, sign AS String)" + NL
+    t = t + "    VAR id AS String" + NL
     t = t + "    VAR votes AS String" + NL
     t = t + "    VAR had AS Bool" + NL
     t = t + "    EnsureDisk()" + NL
+    t = t + "    id = line.Split(""|"")[0]" + NL
     t = t + "    votes = VotesOf(id)" + NL
     t = t + "    had = votes.Contains(""|"" + u + sign + ""|"")" + NL
     t = t + "    votes = votes.Replace(""|"" + u + ""+|"", ""|"").Replace(""|"" + u + ""-|"", ""|"")" + NL
-    t = t + "    IF NOT had THEN votes = votes + u + sign + ""|""" + NL
+    t = t + "    IF NOT had THEN" + NL
+    t = t + "        votes = votes + u + sign + ""|""" + NL
+    t = t + "        IF sign = ""+"" THEN Notify(line.Split(""|"")[2], ""up"", id)" + NL
+    t = t + "        IF sign = ""-"" THEN Notify(line.Split(""|"")[2], ""down"", id)" + NL
+    t = t + "    END IF" + NL
     t = t + "    FS.Write(DATADIR + ""\VOTES\"" + id + "".TXT"", votes)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- replies" + NL
     t = t + "" + NL
+    t = t + "' A reply is one line of C:\BOOKDATA\REPLIES\<post>.TXT:" + NL
+    t = t + "'   reply number|date time|author|author name|text" + NL
+    t = t + "" + NL
     t = t + "FUNCTION AddReply (u AS String, id AS String, text AS String) AS String" + NL
     t = t + "    VAR line AS String" + NL
+    t = t + "    VAR p AS Array OF String" + NL
     t = t + "    line = FindPost(id)" + NL
     t = t + "    text = text.Replace(Chr(13), """").Trim()" + NL
     t = t + "    IF line = """" THEN RETURN ""That post is gone.""" + NL
@@ -495,7 +615,10 @@ SUB File0 ()
     t = t + "    IF text = """" THEN RETURN ""Write something first.""" + NL
     t = t + "    IF text.Length > MAXREPLY THEN RETURN ""Keep replies under "" + Str(MAXREPLY) + "" characters.""" + NL
     t = t + "    EnsureDisk()" + NL
-    t = t + "    FS.Append(DATADIR + ""\REPLIES\"" + id + "".TXT"", TIME.Date + "" "" + TIME.Clock.Substring(0, 5) + ""|"" + u + ""|"" + Esc(NameOf(u)) + ""|"" + Esc(text) + Chr(10))" + NL
+    t = t + "    FS.Append(DATADIR + ""\REPLIES\"" + id + "".TXT"", Str(Counter(""NEXTRID"")) + ""|"" + Stamp() + ""|"" + u + ""|"" + Esc(NameOf(u)) + ""|"" + Esc(text) + Chr(10))" + NL
+    t = t + "    p = line.Split(""|"")" + NL
+    t = t + "    Notify(p[2], ""reply"", id)" + NL
+    t = t + "    IF p[4] <> p[2] THEN Notify(p[4], ""wallreply"", id)" + NL
     t = t + "    RETURN """"" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
@@ -510,72 +633,237 @@ SUB File0 ()
     t = t + "    RETURN out" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
-    t = t + "FUNCTION ReplyHtml (line AS String) AS String" + NL
+    t = t + "FUNCTION FindReply (id AS String, rid AS String) AS String" + NL
+    t = t + "    IF NOT IsNumber(rid) THEN RETURN """"" + NL
+    t = t + "    RETURN FindLine(ReadOr(DATADIR + ""\REPLIES\"" + id + "".TXT"", """"), rid)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' A reply can be deleted by whoever wrote it and by the owner of the post's Wall." + NL
+    t = t + "FUNCTION CanDeleteReply (u AS String, post AS String, reply AS String) AS Bool" + NL
+    t = t + "    RETURN u = reply.Split(""|"")[2] OR u = post.Split(""|"")[4]" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB DeleteReply (id AS String, reply AS String)" + NL
+    t = t + "    VAR path AS String" + NL
+    t = t + "    path = DATADIR + ""\REPLIES\"" + id + "".TXT""" + NL
+    t = t + "    FS.Write(path, WithoutLine(FS.Read(path), reply))" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION ReplyHtml (line AS String, post AS String) AS String" + NL
     t = t + "    VAR r AS Array OF String" + NL
+    t = t + "    VAR del AS String" + NL
     t = t + "    r = line.Split(""|"")" + NL
-    t = t + "    IF r.Count < 4 THEN RETURN """"" + NL
-    t = t + "    RETURN ""<tr><td width=""""16""""></td><td bgcolor=""""#EDEFF4""""><font size=""""2""""><a href=""""profile.asp?u="" + r[1] + """"""><b>"" + H(Unesc(r[2])) + ""</b></a> <font color=""""#808080"""">"" + r[0] + ""</font><br>"" + Br(Unesc(r[3])) + ""</font></td></tr>""" + NL
+    t = t + "    IF r.Count < 5 THEN RETURN """"" + NL
+    t = t + "    IF CanDeleteReply(viewer, post, line) THEN del = "" <font size=""""1""""><a href=""""delete.asp?id="" + post.Split(""|"")[0] + ""&r="" + r[0] + """""">delete</a></font>""" + NL
+    t = t + "    RETURN ""<tr><td width=""""16""""></td><td bgcolor=""""#EDEFF4""""><font size=""""2""""><a href=""""profile.asp?u="" + r[2] + """"""><b>"" + H(Unesc(r[3])) + ""</b></a> <font color=""""#808080"""">"" + r[1] + ""</font>"" + del + ""<br>"" + Br(Unesc(r[4])) + ""</font></td></tr>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' The newest replies to a post that fit in room characters, oldest first, with a" + NL
     t = t + "' link to the rest. most = 0 means as many as fit." + NL
-    t = t + "FUNCTION RepliesHtml (id AS String, most AS Integer, room AS Integer) AS String" + NL
-    t = t + "    VAR all AS Array OF String" + NL
+    t = t + "FUNCTION RepliesHtml (post AS String, all AS Array OF String, most AS Integer, room AS Integer) AS String" + NL
     t = t + "    VAR out AS String" + NL
     t = t + "    VAR i AS Integer" + NL
     t = t + "    VAR shown AS Integer" + NL
-    t = t + "    all = Replies(id)" + NL
     t = t + "    IF all.Count = 0 THEN RETURN """"" + NL
     t = t + "    FOR i = all.Count - 1 TO 0 STEP -1" + NL
     t = t + "        IF most > 0 AND shown >= most THEN BREAK" + NL
     t = t + "        IF out.Length > room THEN BREAK" + NL
-    t = t + "        out = ReplyHtml(all[i]) + out" + NL
+    t = t + "        out = ReplyHtml(all[i], post) + out" + NL
     t = t + "        shown = shown + 1" + NL
     t = t + "    NEXT" + NL
     t = t + "    IF shown < all.Count THEN" + NL
-    t = t + "        out = ""<tr><td width=""""16""""></td><td><font size=""""1""""><a href=""""view.asp?id="" + id + """""">See all "" + Str(all.Count) + "" replies</a></font></td></tr>"" + out" + NL
+    t = t + "        out = ""<tr><td width=""""16""""></td><td><font size=""""1""""><a href=""""view.asp?id="" + post.Split(""|"")[0] + """""">See all "" + Str(all.Count) + "" replies</a></font></td></tr>"" + out" + NL
     t = t + "    END IF" + NL
     t = t + "    RETURN ""<table width=""""100%"""" cellpadding=""""3"""" cellspacing=""""1"""">"" + out + ""</table>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- notifications" + NL
+    t = t + "" + NL
+    t = t + "' C:\BOOKDATA\NOTES\<user>.TXT holds the newest NOTEKEEP of them, one per line:" + NL
+    t = t + "'   number|date time|kind|who|their name|post number" + NL
+    t = t + "' and <user>.SEE the number of the last one they have looked at. Kinds: wall," + NL
+    t = t + "' reply, wallreply, up, down, poke, friend. The one acting is always the viewer." + NL
+    t = t + "" + NL
+    t = t + "FUNCTION LastNote (lines AS Array OF String) AS Integer" + NL
+    t = t + "    VAR i AS Integer" + NL
+    t = t + "    FOR i = lines.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF lines[i] <> """" THEN RETURN Int(Val(lines[i].Split(""|"")[0]))" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN 0" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION NoteLines (u AS String) AS Array OF String" + NL
+    t = t + "    RETURN ReadOr(DATADIR + ""\NOTES\"" + u + "".TXT"", """").Lines()" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB Notify (u AS String, kind AS String, ref AS String)" + NL
+    t = t + "    VAR lines AS Array OF String" + NL
+    t = t + "    VAR keep AS Array OF String" + NL
+    t = t + "    VAR i AS Integer" + NL
+    t = t + "    IF u = viewer OR NOT UserExists(u) THEN RETURN" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    lines = NoteLines(u)" + NL
+    t = t + "    FOR i = 0 TO lines.Count - 1" + NL
+    t = t + "        IF lines[i] <> """" AND i >= lines.Count - NOTEKEEP THEN keep.Add(lines[i])" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    keep.Add(Str(LastNote(lines) + 1) + ""|"" + Stamp() + ""|"" + kind + ""|"" + viewer + ""|"" + Esc(NameOf(viewer)) + ""|"" + ref)" + NL
+    t = t + "    FS.Write(DATADIR + ""\NOTES\"" + u + "".TXT"", keep.Join(Chr(10)) + Chr(10))" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION SeenNote (u AS String) AS Integer" + NL
+    t = t + "    RETURN Int(Val(ReadOr(DATADIR + ""\NOTES\"" + u + "".SEE"", ""0"")))" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION Unread (u AS String) AS Integer" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    n = LastNote(NoteLines(u)) - SeenNote(u)" + NL
+    t = t + "    IF n < 0 THEN RETURN 0" + NL
+    t = t + "    RETURN n" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB MarkSeen (u AS String)" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    FS.Write(DATADIR + ""\NOTES\"" + u + "".SEE"", Str(LastNote(NoteLines(u))))" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION NoteHtml (line AS String, fresh AS Bool) AS String" + NL
+    t = t + "    VAR n AS Array OF String" + NL
+    t = t + "    VAR who AS String" + NL
+    t = t + "    VAR what AS String" + NL
+    t = t + "    VAR post AS String" + NL
+    t = t + "    n = line.Split(""|"")" + NL
+    t = t + "    IF n.Count < 6 THEN RETURN """"" + NL
+    t = t + "    who = ""<a href=""""profile.asp?u="" + n[3] + """"""><b>"" + H(Unesc(n[4])) + ""</b></a>""" + NL
+    t = t + "    post = ""<a href=""""view.asp?id="" + n[5] + """""">""" + NL
+    t = t + "    SELECT CASE n[2]" + NL
+    t = t + "        CASE ""wall""" + NL
+    t = t + "            what = who + "" wrote on your "" + post + ""Wall</a>.""" + NL
+    t = t + "        CASE ""reply""" + NL
+    t = t + "            what = who + "" replied to "" + post + ""your post</a>.""" + NL
+    t = t + "        CASE ""wallreply""" + NL
+    t = t + "            what = who + "" replied to "" + post + ""a post on your Wall</a>.""" + NL
+    t = t + "        CASE ""up""" + NL
+    t = t + "            what = who + "" gave "" + post + ""your post</a> a thumbs up.""" + NL
+    t = t + "        CASE ""down""" + NL
+    t = t + "            what = who + "" gave "" + post + ""your post</a> a thumbs down.""" + NL
+    t = t + "        CASE ""poke""" + NL
+    t = t + "            what = who + "" poked you. <a href=""""home.asp"""">Poke back?</a>""" + NL
+    t = t + "        CASE ""friend""" + NL
+    t = t + "            what = who + "" added you as a friend.""" + NL
+    t = t + "        CASE ELSE" + NL
+    t = t + "            RETURN """"" + NL
+    t = t + "    END SELECT" + NL
+    t = t + "    IF fresh THEN RETURN ""<tr><td bgcolor=""""#FFF9D7""""><font size=""""2"""">"" + what + "" <font color=""""#808080"""">"" + n[1] + ""</font></font></td></tr>""" + NL
+    t = t + "    RETURN ""<tr><td><font size=""""2"""">"" + what + "" <font color=""""#808080"""">"" + n[1] + ""</font></font></td></tr>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- pokes" + NL
+    t = t + "" + NL
+    t = t + "' C:\BOOKDATA\POKES\<user>.TXT: |bob|cat| - who has poked them and not been" + NL
+    t = t + "' poked back or brushed off yet." + NL
+    t = t + "" + NL
+    t = t + "FUNCTION PokesOf (u AS String) AS String" + NL
+    t = t + "    RETURN ReadOr(DATADIR + ""\POKES\"" + u + "".TXT"", ""|"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Returns """" or why not. Poking someone back also clears their poke." + NL
+    t = t + "FUNCTION Poke (u AS String, target AS String) AS String" + NL
+    t = t + "    IF NOT UserExists(target) OR target = u THEN RETURN ""You cannot poke that.""" + NL
+    t = t + "    IF NOT IsFriend(u, target) THEN RETURN ""You can only poke your friends.""" + NL
+    t = t + "    IF PokesOf(target).Contains(""|"" + u + ""|"") THEN RETURN ""You have already poked "" + NameOf(target) + "". Wait for them to poke back.""" + NL
+    t = t + "    EnsureDisk()" + NL
+    t = t + "    FS.Write(DATADIR + ""\POKES\"" + target + "".TXT"", PokesOf(target) + u + ""|"")" + NL
+    t = t + "    ClearPoke(u, target)" + NL
+    t = t + "    Notify(target, ""poke"", """")" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB ClearPoke (u AS String, from AS String)" + NL
+    t = t + "    IF PokesOf(u).Contains(""|"" + from + ""|"") THEN FS.Write(DATADIR + ""\POKES\"" + u + "".TXT"", PokesOf(u).Replace(""|"" + from + ""|"", ""|""))" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- photos" + NL
+    t = t + "" + NL
+    t = t + "' A photo is a post on its owner's own Wall with a picture beside it in" + NL
+    t = t + "' C:\WEB\PHOTOS\<post>.PIC, so it gets thumbs, replies and the feed for free." + NL
+    t = t + "' C:\BOOKDATA\ALBUMS\<user>.TXT lists their photos: |12|40|" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION IsPhoto (id AS String) AS Bool" + NL
+    t = t + "    RETURN FS.Exists(PHOTODIR + ""\"" + id + "".PIC"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION Album (u AS String) AS Array OF String" + NL
+    t = t + "    VAR all AS Array OF String" + NL
+    t = t + "    VAR out AS Array OF String" + NL
+    t = t + "    VAR id AS String" + NL
+    t = t + "    all = ReadOr(DATADIR + ""\ALBUMS\"" + u + "".TXT"", ""|"").Split(""|"")" + NL
+    t = t + "    FOR EACH id IN all" + NL
+    t = t + "        IF id <> """" THEN out.Add(id)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN out" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION AddPhoto (u AS String, pic AS String, caption AS String) AS String" + NL
+    t = t + "    VAR problem AS String" + NL
+    t = t + "    VAR id AS Integer" + NL
+    t = t + "    caption = caption.Replace(Chr(13), """").Trim()" + NL
+    t = t + "    IF caption.Length > MAXCAPTION THEN RETURN ""Keep the caption under "" + Str(MAXCAPTION) + "" characters.""" + NL
+    t = t + "    problem = CheckPicture(pic, PHOTOSIZE, MAXPHOTO)" + NL
+    t = t + "    IF problem <> """" THEN RETURN problem" + NL
+    t = t + "    id = WritePost(u, u, caption)" + NL
+    t = t + "    FS.Write(PHOTODIR + ""\"" + Str(id) + "".PIC"", pic)" + NL
+    t = t + "    FS.Write(DATADIR + ""\ALBUMS\"" + u + "".TXT"", ReadOr(DATADIR + ""\ALBUMS\"" + u + "".TXT"", ""|"") + Str(id) + ""|"")" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- showing posts" + NL
     t = t + "" + NL
-    t = t + "' Thumbs and the reply link under a post. back says where a thumb returns to:" + NL
-    t = t + "' ""home"", ""view"", or the user whose Wall it is on." + NL
-    t = t + "FUNCTION ActionsHtml (id AS String, line AS String, back AS String) AS String" + NL
+    t = t + "' Thumbs, reply and delete links under a post. back says where a thumb returns" + NL
+    t = t + "' to: ""home"", ""view"", or the user whose Wall it is on." + NL
+    t = t + "FUNCTION ActionsHtml (line AS String, back AS String, replies AS Integer) AS String" + NL
+    t = t + "    VAR id AS String" + NL
     t = t + "    VAR votes AS String" + NL
     t = t + "    VAR up AS String" + NL
     t = t + "    VAR down AS String" + NL
-    t = t + "    VAR n AS Integer" + NL
+    t = t + "    VAR del AS String" + NL
+    t = t + "    id = line.Split(""|"")[0]" + NL
     t = t + "    votes = VotesOf(id)" + NL
     t = t + "    up = ""thumbs up ("" + Str(CountVotes(votes, ""+"")) + "")""" + NL
     t = t + "    down = ""thumbs down ("" + Str(CountVotes(votes, ""-"")) + "")""" + NL
     t = t + "    IF votes.Contains(""|"" + viewer + ""+|"") THEN up = ""<b>"" + up + ""</b>""" + NL
     t = t + "    IF votes.Contains(""|"" + viewer + ""-|"") THEN down = ""<b>"" + down + ""</b>""" + NL
-    t = t + "    n = Replies(id).Count" + NL
+    t = t + "    IF CanDelete(viewer, line) THEN del = "" &middot; <a href=""""delete.asp?id="" + id + """""">delete</a>""" + NL
     t = t + "    IF NOT CanTalk(viewer, line) THEN" + NL
-    t = t + "        RETURN ""<font size=""""1"""" color=""""#808080"""">"" + up + "" &middot; "" + down + "" &middot; <a href=""""view.asp?id="" + id + """""">"" + Str(n) + "" replies</a></font>""" + NL
+    t = t + "        RETURN ""<font size=""""1"""" color=""""#808080"""">"" + up + "" &middot; "" + down + "" &middot; <a href=""""view.asp?id="" + id + """""">"" + Str(replies) + "" replies</a></font>""" + NL
     t = t + "    END IF" + NL
     t = t + "    RETURN ""<font size=""""1""""><a href=""""vote.asp?id="" + id + ""&v=up&b="" + back + ""&"" + TokenArg() + """""">"" + up + ""</a> &middot; "" _" + NL
     t = t + "         + ""<a href=""""vote.asp?id="" + id + ""&v=down&b="" + back + ""&"" + TokenArg() + """""">"" + down + ""</a> &middot; "" _" + NL
-    t = t + "         + ""<a href=""""view.asp?id="" + id + """""">reply</a></font>""" + NL
+    t = t + "         + ""<a href=""""view.asp?id="" + id + """""">reply</a>"" + del + ""</font>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
-    t = t + "' One post as a row of the feed or a Wall, with its thumbs and newest replies." + NL
-    t = t + "' onWall leaves out the Wall it is on; most is how many replies to show (0 = all" + NL
-    t = t + "' that fit)." + NL
+    t = t + "' One post as a row of the feed or a Wall, with its photo, thumbs and newest" + NL
+    t = t + "' replies. onWall leaves out the Wall it is on; most is how many replies to" + NL
+    t = t + "' show (0 = all that fit)." + NL
     t = t + "FUNCTION PostHtml (line AS String, onWall AS Bool, back AS String, most AS Integer) AS String" + NL
     t = t + "    VAR p AS Array OF String" + NL
     t = t + "    VAR who AS String" + NL
+    t = t + "    VAR body AS String" + NL
+    t = t + "    VAR all AS Array OF String" + NL
     t = t + "    p = line.Split(""|"")" + NL
     t = t + "    IF p.Count < 7 THEN RETURN """"" + NL
     t = t + "    who = ""<a href=""""profile.asp?u="" + p[2] + """"""><b>"" + H(Unesc(p[3])) + ""</b></a>""" + NL
     t = t + "    IF p[2] <> p[4] AND NOT onWall THEN" + NL
     t = t + "        who = who + "" &raquo; <a href=""""profile.asp?u="" + p[4] + """"""><b>"" + H(Unesc(p[5])) + ""</b></a>""" + NL
     t = t + "    END IF" + NL
+    t = t + "    body = Br(Unesc(p[6]))" + NL
+    t = t + "    IF IsPhoto(p[0]) THEN" + NL
+    t = t + "        who = who + "" added a photo""" + NL
+    t = t + "        body = ""<a href=""""view.asp?id="" + p[0] + """"""><img src=""""photos/"" + p[0] + "".pic"""" alt=""""photo""""></a><br>"" + body" + NL
+    t = t + "    END IF" + NL
+    t = t + "    all = Replies(p[0])" + NL
     t = t + "    RETURN ""<tr><td bgcolor=""""#F7F7F7""""><font size=""""2"""">"" + who + "" <a href=""""view.asp?id="" + p[0] + """"""><font color=""""#808080"""">"" + p[1] + ""</font></a><br>"" _" + NL
-    t = t + "         + Br(Unesc(p[6])) + ""</font><br>"" + ActionsHtml(p[0], line, back) _" + NL
-    t = t + "         + RepliesHtml(p[0], most, PAGEROOM) + ""</td></tr>""" + NL
+    t = t + "         + body + ""</font><br>"" + ActionsHtml(line, back, all.Count) _" + NL
+    t = t + "         + RepliesHtml(line, all, most, PAGEROOM) + ""</td></tr>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' The newest posts on one wall." + NL
@@ -603,13 +891,10 @@ SUB File0 ()
     t = t + "    VAR circle AS String" + NL
     t = t + "    VAR out AS String" + NL
     t = t + "    VAR i AS Integer" + NL
-    t = t + "    VAR stop AS Integer" + NL
     t = t + "    VAR shown AS Integer" + NL
     t = t + "    circle = FriendList(u) + u + ""|""" + NL
-    t = t + "    lines = ReadOr(DATADIR + ""\POSTS.TXT"", """").Lines()" + NL
-    t = t + "    stop = lines.Count - FEEDSCAN" + NL
-    t = t + "    IF stop < 0 THEN stop = 0" + NL
-    t = t + "    FOR i = lines.Count - 1 TO stop STEP -1" + NL
+    t = t + "    lines = RecentPosts()" + NL
+    t = t + "    FOR i = lines.Count - 1 TO 0 STEP -1" + NL
     t = t + "        p = lines[i].Split(""|"")" + NL
     t = t + "        IF p.Count >= 7 THEN" + NL
     t = t + "            IF circle.Contains(""|"" + p[2] + ""|"") OR circle.Contains(""|"" + p[4] + ""|"") THEN" + NL
@@ -634,6 +919,7 @@ SUB File0 ()
     t = t + "      + ""<td align=""""right""""><font color=""""#FFFFFF"""" size=""""2"""">""" + NL
     t = t + "    IF viewer <> """" THEN" + NL
     t = t + "        s = s + ""<a href=""""home.asp""""><font color=""""#FFFFFF"""">home</font></a> | "" _" + NL
+    t = t + "              + NotesLink() + "" | "" _" + NL
     t = t + "              + ""<a href=""""profile.asp?u="" + viewer + """"""><font color=""""#FFFFFF"""">profile</font></a> | "" _" + NL
     t = t + "              + ""<a href=""""people.asp""""><font color=""""#FFFFFF"""">people</font></a> | "" _" + NL
     t = t + "              + ""<a href=""""edit.asp""""><font color=""""#FFFFFF"""">edit</font></a> | "" _" + NL
@@ -642,6 +928,13 @@ SUB File0 ()
     t = t + "        s = s + ""<a href=""""index.asp""""><font color=""""#FFFFFF"""">login</font></a> | <a href=""""index.asp""""><font color=""""#FFFFFF"""">register</font></a>""" + NL
     t = t + "    END IF" + NL
     t = t + "    RETURN s + ""</font></td></tr></table>""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION NotesLink () AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    n = Unread(viewer)" + NL
+    t = t + "    IF n > 0 THEN RETURN ""<a href=""""notify.asp""""><font color=""""#FFFF00""""><b>notifications ("" + Str(n) + "")</b></font></a>""" + NL
+    t = t + "    RETURN ""<a href=""""notify.asp""""><font color=""""#FFFFFF"""">notifications</font></a>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "FUNCTION Bottom () AS String" + NL
@@ -711,6 +1004,64 @@ SUB File1 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
+    t = t + "' DELETE.ASP?id=N[&r=R] - asks ""are you sure?"" about a post, or one reply to it" + NL
+    t = t + "' (GET), and deletes it (POST, with the form token). The author can delete, and" + NL
+    t = t + "' so can the owner of the Wall it is on." + NL
+    t = t + "VAR id AS String" + NL
+    t = t + "VAR rid AS String" + NL
+    t = t + "VAR post AS String" + NL
+    t = t + "VAR reply AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
+    t = t + "    RequireToken()" + NL
+    t = t + "    id = REQUEST.Form(""id"")" + NL
+    t = t + "    rid = REQUEST.Form(""r"")" + NL
+    t = t + "ELSE" + NL
+    t = t + "    id = REQUEST.Query(""id"")" + NL
+    t = t + "    rid = REQUEST.Query(""r"")" + NL
+    t = t + "END IF" + NL
+    t = t + "post = FindPost(id)" + NL
+    t = t + "IF post = """" THEN RESPONSE.Redirect(""home.asp"")" + NL
+    t = t + "IF rid <> """" THEN" + NL
+    t = t + "    reply = FindReply(id, rid)" + NL
+    t = t + "    IF reply = """" OR NOT CanDeleteReply(viewer, post, reply) THEN RESPONSE.Redirect(""view.asp?id="" + id)" + NL
+    t = t + "ELSEIF NOT CanDelete(viewer, post) THEN" + NL
+    t = t + "    RESPONSE.Redirect(""view.asp?id="" + id)" + NL
+    t = t + "END IF" + NL
+    t = t + "" + NL
+    t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
+    t = t + "    IF rid <> """" THEN" + NL
+    t = t + "        DeleteReply(id, reply)" + NL
+    t = t + "        RESPONSE.Redirect(""view.asp?id="" + id)" + NL
+    t = t + "    END IF" + NL
+    t = t + "    DeletePost(post)" + NL
+    t = t + "    RESPONSE.Redirect(""profile.asp?u="" + post.Split(""|"")[4] + ""&why="" + UrlEnc(""The post was deleted.""))" + NL
+    t = t + "END IF" + NL
+    t = t + "%>" + NL
+    t = t + "<%= Top(""Delete"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr><td valign=""top"">" + NL
+    t = t + "<% IF rid <> """" THEN %>" + NL
+    t = t + "<%= BoxTop(""Delete this reply?"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""5"" cellspacing=""2""><%= ReplyHtml(reply, post) %></table>" + NL
+    t = t + "<% ELSE %>" + NL
+    t = t + "<%= BoxTop(""Delete this post?"") %>" + NL
+    t = t + "<p><font size=""2"">Its thumbs and replies go with it<% IF IsPhoto(id) THEN %>, and so does the photo<% END IF %>. There is no undo.</font></p>" + NL
+    t = t + "<table width=""100%"" cellpadding=""5"" cellspacing=""2""><%= PostHtml(post, FALSE, ""view"", 2) %></table>" + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "<form action=""delete.asp"" method=""post""><%= TokenField() %>" + NL
+    t = t + "<input type=""hidden"" name=""id"" value=""<%= id %>"">" + NL
+    t = t + "<input type=""hidden"" name=""r"" value=""<%= rid %>"">" + NL
+    t = t + "<p><input type=""submit"" value=""Delete""> <a href=""view.asp?id=<%= id %>"">Cancel</a></p>" + NL
+    t = t + "</form>" + NL
+    t = t + "</td></tr></table>" + NL
+    t = t + "<%= Bottom() %>" + NL
+    Put("DELETE.ASP")
+END SUB
+
+SUB File2 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
     t = t + "' EDIT.ASP - change your profile. GET shows the form; POST saves it." + NL
     t = t + "' The picture has its own page, PICTURE.ASP." + NL
     t = t + "VAR rec AS Array OF String" + NL
@@ -770,7 +1121,7 @@ SUB File1 ()
     Put("EDIT.ASP")
 END SUB
 
-SUB File2 ()
+SUB File3 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -791,14 +1142,17 @@ SUB File2 ()
     Put("FRIEND.ASP")
 END SUB
 
-SUB File3 ()
+SUB File4 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
     t = t + "' HOME.ASP - the News Feed: what you and your friends have been writing." + NL
     t = t + "VAR rec AS Array OF String" + NL
+    t = t + "VAR pokers AS Array OF String" + NL
+    t = t + "VAR who AS String" + NL
     t = t + "RequireLogin()" + NL
     t = t + "rec = LoadUser(viewer)" + NL
+    t = t + "pokers = PokesOf(viewer).Split(""|"")" + NL
     t = t + "%>" + NL
     t = t + "<%= Top(""Home"") %>" + NL
     t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr>" + NL
@@ -808,11 +1162,23 @@ SUB File3 ()
     t = t + "<a href=""profile.asp?u=<%= viewer %>"">My Profile</a><br>" + NL
     t = t + "<a href=""edit.asp"">Edit My Profile</a><br>" + NL
     t = t + "<a href=""picture.asp"">Change My Picture</a><br>" + NL
+    t = t + "<a href=""photos.asp?u=<%= viewer %>"">My Photos</a><br>" + NL
     t = t + "<a href=""profile.asp?u=<%= viewer %>#friends"">My Friends (<%= Friends(viewer).Count %>)</a><br>" + NL
     t = t + "<a href=""people.asp"">Find People</a></font>" + NL
     t = t + "</td>" + NL
     t = t + "<td valign=""top"">" + NL
     t = t + "<%= Notice(REQUEST.Query(""why"")) %>" + NL
+    t = t + "<% IF PokesOf(viewer) <> ""|"" THEN %>" + NL
+    t = t + "<%= BoxTop(""Pokes"") %>" + NL
+    t = t + "<table cellpadding=""3"">" + NL
+    t = t + "<% FOR EACH who IN pokers" + NL
+    t = t + "     IF who = """" OR NOT UserExists(who) THEN CONTINUE %>" + NL
+    t = t + "<tr><td><font size=""2""><a href=""profile.asp?u=<%= who %>""><b><%= H(NameOf(who)) %></b></a> poked you." + NL
+    t = t + "<a href=""poke.asp?u=<%= who %>&do=poke&<%= TokenArg() %>"">poke back</a> &middot;" + NL
+    t = t + "<a href=""poke.asp?u=<%= who %>&do=clear&<%= TokenArg() %>"">remove</a></font></td></tr>" + NL
+    t = t + "<% NEXT %>" + NL
+    t = t + "</table>" + NL
+    t = t + "<% END IF %>" + NL
     t = t + "<%= BoxTop(""What are you doing right now?"") %>" + NL
     t = t + "<form action=""post.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""to"" value=""<%= viewer %>"">" + NL
@@ -831,7 +1197,7 @@ SUB File3 ()
     Put("HOME.ASP")
 END SUB
 
-SUB File4 ()
+SUB File5 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -890,7 +1256,7 @@ SUB File4 ()
     Put("INDEX.ASP")
 END SUB
 
-SUB File5 ()
+SUB File6 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -911,7 +1277,7 @@ SUB File5 ()
     Put("JOIN.ASP")
 END SUB
 
-SUB File6 ()
+SUB File7 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -926,7 +1292,7 @@ SUB File6 ()
     Put("LOGIN.ASP")
 END SUB
 
-SUB File7 ()
+SUB File8 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -940,7 +1306,7 @@ SUB File7 ()
     Put("LOGOUT.ASP")
 END SUB
 
-SUB File8 ()
+SUB File9 ()
     t = ""
     t = t + "SIM95PIC 48 48" + NL
     t = t + "888888888888888888888888888888888888888888888888" + NL
@@ -994,7 +1360,45 @@ SUB File8 ()
     Put("NOPIC.PIC")
 END SUB
 
-SUB File9 ()
+SUB File10 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' NOTIFY.ASP - your notifications, newest first. The new ones are highlighted," + NL
+    t = t + "' and looking at them marks them read." + NL
+    t = t + "VAR lines AS Array OF String" + NL
+    t = t + "VAR seen AS Integer" + NL
+    t = t + "VAR i AS Integer" + NL
+    t = t + "VAR shown AS Integer" + NL
+    t = t + "VAR out AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "lines = NoteLines(viewer)" + NL
+    t = t + "seen = SeenNote(viewer)" + NL
+    t = t + "FOR i = lines.Count - 1 TO 0 STEP -1" + NL
+    t = t + "    IF lines[i] <> """" THEN" + NL
+    t = t + "        out = out + NoteHtml(lines[i], Int(Val(lines[i].Split(""|"")[0])) > seen)" + NL
+    t = t + "        shown = shown + 1" + NL
+    t = t + "        IF shown >= NOTESHOW THEN BREAK" + NL
+    t = t + "    END IF" + NL
+    t = t + "NEXT" + NL
+    t = t + "MarkSeen(viewer)" + NL
+    t = t + "%>" + NL
+    t = t + "<%= Top(""Notifications"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr><td valign=""top"">" + NL
+    t = t + "<%= BoxTop(""Notifications"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""4"" cellspacing=""1"">" + NL
+    t = t + "<% IF out = """" THEN %>" + NL
+    t = t + "<tr><td><font size=""2"" color=""#808080"">Nothing yet. When somebody writes on your Wall, replies, gives you a thumb, pokes you or adds you as a friend, it shows up here.</font></td></tr>" + NL
+    t = t + "<% ELSE %>" + NL
+    t = t + "<%= out %>" + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "</table>" + NL
+    t = t + "</td></tr></table>" + NL
+    t = t + "<%= Bottom() %>" + NL
+    Put("NOTIFY.ASP")
+END SUB
+
+SUB File11 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1033,7 +1437,72 @@ SUB File9 ()
     Put("PEOPLE.ASP")
 END SUB
 
-SUB File10 ()
+SUB File12 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' PHOTOS.ASP?u=name - someone's photos, newest first; on your own, a form to add" + NL
+    t = t + "' one. Each photo is a post, so it lands in the feed and takes thumbs and replies." + NL
+    t = t + "VAR who AS String" + NL
+    t = t + "VAR rec AS Array OF String" + NL
+    t = t + "VAR ids AS Array OF String" + NL
+    t = t + "VAR problem AS String" + NL
+    t = t + "VAR line AS String" + NL
+    t = t + "VAR i AS Integer" + NL
+    t = t + "VAR shown AS Integer" + NL
+    t = t + "VAR cells AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "who = viewer" + NL
+    t = t + "IF REQUEST.Query(""u"") <> """" THEN who = CleanName(REQUEST.Query(""u""))" + NL
+    t = t + "IF NOT UserExists(who) THEN RESPONSE.Redirect(""people.asp"")" + NL
+    t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
+    t = t + "    RequireToken()" + NL
+    t = t + "    who = viewer" + NL
+    t = t + "    problem = AddPhoto(viewer, REQUEST.Form(""pic""), REQUEST.Form(""caption""))" + NL
+    t = t + "    IF problem = """" THEN RESPONSE.Redirect(""photos.asp?u="" + viewer)" + NL
+    t = t + "END IF" + NL
+    t = t + "rec = LoadUser(who)" + NL
+    t = t + "ids = Album(who)" + NL
+    t = t + "' Two to a row, newest first, as many as fit" + NL
+    t = t + "FOR i = ids.Count - 1 TO 0 STEP -1" + NL
+    t = t + "    line = FindPost(ids[i])" + NL
+    t = t + "    IF line <> """" THEN" + NL
+    t = t + "        IF shown MOD 2 = 0 THEN cells = cells + ""<tr>""" + NL
+    t = t + "        cells = cells + ""<td valign=""""top"""" width=""""50%""""><a href=""""view.asp?id="" + ids[i] + """"""><img src=""""photos/"" + ids[i] + "".pic"""" alt=""""photo""""></a><br><font size=""""2"""">"" + Br(Unesc(line.Split(""|"")[6])) + ""</font><br><font size=""""1"""" color=""""#808080"""">"" + line.Split(""|"")[1] + "" &middot; <a href=""""view.asp?id="" + ids[i] + """""">"" + Str(Replies(ids[i]).Count) + "" replies</a></font></td>""" + NL
+    t = t + "        shown = shown + 1" + NL
+    t = t + "        IF shown MOD 2 = 0 THEN cells = cells + ""</tr>""" + NL
+    t = t + "        IF shown >= ALBUMSHOW OR cells.Length > PAGEROOM THEN BREAK" + NL
+    t = t + "    END IF" + NL
+    t = t + "NEXT" + NL
+    t = t + "IF shown MOD 2 = 1 THEN cells = cells + ""<td></td></tr>""" + NL
+    t = t + "%>" + NL
+    t = t + "<%= Top(""Photos"") %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""8"" cellspacing=""0""><tr><td valign=""top"">" + NL
+    t = t + "<h2><font color=""#3B5998""><a href=""profile.asp?u=<%= who %>""><%= H(Field(rec, ""name"")) %></a>'s Photos</font></h2>" + NL
+    t = t + "<%= Notice(problem) %>" + NL
+    t = t + "<% IF who = viewer THEN %>" + NL
+    t = t + "<%= BoxTop(""Add a Photo"") %>" + NL
+    t = t + "<form action=""photos.asp"" method=""post""><%= TokenField() %>" + NL
+    t = t + "<p><font size=""2"">Photo:</font> <input type=""file"" name=""pic"" size=""30""><br>" + NL
+    t = t + "<font size=""2"">Caption:</font> <input name=""caption"" size=""40"" maxlength=""<%= MAXCAPTION %>""><br>" + NL
+    t = t + "<input type=""submit"" value=""Add Photo""></p>" + NL
+    t = t + "</form>" + NL
+    t = t + "<p><font size=""1"" color=""#808080"">A .PIC file of up to <%= PHOTOSIZE %> by <%= PHOTOSIZE %>. To fit a Sketch drawing, run" + NL
+    t = t + "<a href=""picture.asp"">SHRINK.SPK</a> on it with the size 200: it saves PHOTO.PIC, 200 by 150.</font></p>" + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "<%= BoxTop(""Photos ("" + Str(ids.Count) + "")"") %>" + NL
+    t = t + "<% IF shown = 0 THEN %>" + NL
+    t = t + "<p><font size=""2"" color=""#808080"">No photos yet.</font></p>" + NL
+    t = t + "<% ELSE %>" + NL
+    t = t + "<table width=""100%"" cellpadding=""6"" cellspacing=""4""><%= cells %></table>" + NL
+    t = t + "<% IF shown < ids.Count THEN %><p><font size=""1"" color=""#808080"">The newest <%= shown %> of <%= ids.Count %>.</font></p><% END IF %>" + NL
+    t = t + "<% END IF %>" + NL
+    t = t + "</td></tr></table>" + NL
+    t = t + "<%= Bottom() %>" + NL
+    Put("PHOTOS.ASP")
+END SUB
+
+SUB File13 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1070,7 +1539,8 @@ SUB File10 ()
     t = t + "<ol><font size=""2"">" + NL
     t = t + "<li>Draw yourself in Sketch and save it, say as <tt>C:\MYFILES\ME.PIC</tt>.</li>" + NL
     t = t + "<li>Copy the program below into SPARK, save it as <tt>C:\MYFILES\SHRINK.SPK</tt> and press F5.</li>" + NL
-    t = t + "<li>Give it <tt>C:\MYFILES\ME.PIC</tt>. It saves <tt>C:\MYFILES\AVATAR.PIC</tt>, 100 by 75.</li>" + NL
+    t = t + "<li>Give it <tt>C:\MYFILES\ME.PIC</tt> and the size 100. It saves <tt>C:\MYFILES\AVATAR.PIC</tt>, 100 by 75." + NL
+    t = t + "(The size 200 makes <tt>PHOTO.PIC</tt>, 200 by 150, for your <a href=""photos.asp"">photos</a>.)</li>" + NL
     t = t + "<li>Upload <tt>AVATAR.PIC</tt> here.</li>" + NL
     t = t + "</font></ol>" + NL
     t = t + "<form><textarea rows=""12"" cols=""70"" readonly><%= H(ReadOr(SERVER.MapPath(""/shrink.spk""), """")) %></textarea></form>" + NL
@@ -1087,7 +1557,35 @@ SUB File10 ()
     Put("PICTURE.ASP")
 END SUB
 
-SUB File11 ()
+SUB File14 ()
+    t = ""
+    t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
+    t = t + "<%" + NL
+    t = t + "' POKE.ASP?u=name&do=poke|clear&b=home|profile - poke a friend (which also" + NL
+    t = t + "' clears their poke at you), or brush their poke off. Carries the form token." + NL
+    t = t + "VAR who AS String" + NL
+    t = t + "VAR problem AS String" + NL
+    t = t + "VAR back AS String" + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "RequireToken()" + NL
+    t = t + "who = CleanName(REQUEST.Query(""u""))" + NL
+    t = t + "IF REQUEST.Query(""do"") = ""clear"" THEN" + NL
+    t = t + "    ClearPoke(viewer, who)" + NL
+    t = t + "ELSE" + NL
+    t = t + "    problem = Poke(viewer, who)" + NL
+    t = t + "    IF problem = """" THEN problem = ""You poked "" + NameOf(who) + "".""" + NL
+    t = t + "END IF" + NL
+    t = t + "IF REQUEST.Query(""b"") = ""profile"" AND UserExists(who) THEN" + NL
+    t = t + "    back = ""profile.asp?u="" + who + ""&why=""" + NL
+    t = t + "ELSE" + NL
+    t = t + "    back = ""home.asp?why=""" + NL
+    t = t + "END IF" + NL
+    t = t + "RESPONSE.Redirect(back + UrlEnc(problem))" + NL
+    t = t + "%>" + NL
+    Put("POKE.ASP")
+END SUB
+
+SUB File15 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1112,7 +1610,7 @@ SUB File11 ()
     Put("POST.ASP")
 END SUB
 
-SUB File12 ()
+SUB File16 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1143,13 +1641,15 @@ SUB File12 ()
     t = t + "<form action=""friend.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""u"" value=""<%= who %>"">" + NL
     t = t + "<% IF friend THEN %>" + NL
-    t = t + "<p><font size=""2""><%= H(Field(rec, ""name"")) %> is your friend.</font><br>" + NL
+    t = t + "<p><font size=""2""><%= H(Field(rec, ""name"")) %> is your friend." + NL
+    t = t + "<a href=""poke.asp?u=<%= who %>&do=poke&b=profile&<%= TokenArg() %>"">Poke <%= H(Field(rec, ""name"")) %></a></font><br>" + NL
     t = t + "<input type=""hidden"" name=""do"" value=""remove""><input type=""submit"" value=""Remove from Friends""></p>" + NL
     t = t + "<% ELSE %>" + NL
     t = t + "<input type=""hidden"" name=""do"" value=""add""><p><input type=""submit"" value=""Add to Friends""></p>" + NL
     t = t + "<% END IF %>" + NL
     t = t + "</form>" + NL
     t = t + "<% END IF %>" + NL
+    t = t + "<p><font size=""2""><a href=""photos.asp?u=<%= who %>"">Photos (<%= Album(who).Count %>)</a></font></p>" + NL
     t = t + "<a name=""friends""></a>" + NL
     t = t + "<%= BoxTop(""Friends ("" + Str(pals.Count) + "")"") %>" + NL
     t = t + "<font size=""2"">" + NL
@@ -1196,7 +1696,7 @@ SUB File12 ()
     Put("PROFILE.ASP")
 END SUB
 
-SUB File13 ()
+SUB File17 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1215,22 +1715,24 @@ SUB File13 ()
     Put("REPLY.ASP")
 END SUB
 
-SUB File14 ()
+SUB File18 ()
     t = ""
-    t = t + "' SHRINK.SPK - makes a Sketch picture small enough to be a SimBook profile picture." + NL
+    t = t + "' SHRINK.SPK - makes a Sketch picture small enough for SimBook." + NL
     t = t + "'" + NL
     t = t + "' Sketch always saves 400 by 300 pictures, about 120K of text, but one network" + NL
     t = t + "' message holds 64K, so Voyager cannot send one to a web server. This shrinks a" + NL
-    t = t + "' picture until it fits in 100 by 100 (a Sketch picture becomes 100 by 75, about" + NL
-    t = t + "' 8K) and saves it as AVATAR.PIC next to the original." + NL
+    t = t + "' picture until it fits a square:" + NL
     t = t + "'" + NL
-    t = t + "'     SPARK C:\MYFILES\SHRINK.SPK C:\MYFILES\ME.PIC" + NL
-    t = t + "' or run it from SPARK with F5 and type the name when it asks." + NL
+    t = t + "'   100  a profile picture: a Sketch picture becomes 100 by 75 (8K), AVATAR.PIC" + NL
+    t = t + "'   200  a photo:           a Sketch picture becomes 200 by 150 (30K), PHOTO.PIC" + NL
+    t = t + "'" + NL
+    t = t + "' and saves it next to the original." + NL
+    t = t + "'" + NL
+    t = t + "'     SPARK C:\MYFILES\SHRINK.SPK C:\MYFILES\ME.PIC 100" + NL
+    t = t + "' or run it from SPARK with F5 and answer the two questions." + NL
     t = t + "'" + NL
     t = t + "' Each block of pixels becomes the colour it holds most of, not counting white," + NL
     t = t + "' so thin lines survive the trip." + NL
-    t = t + "" + NL
-    t = t + "CONST LIMIT = 100" + NL
     t = t + "" + NL
     t = t + "SUB Main ()" + NL
     t = t + "    VAR path AS String" + NL
@@ -1248,13 +1750,19 @@ SUB File14 ()
     t = t + "    VAR nh AS Integer" + NL
     t = t + "    VAR x AS Integer" + NL
     t = t + "    VAR y AS Integer" + NL
+    t = t + "    VAR limit AS Integer" + NL
+    t = t + "    VAR answer AS String" + NL
     t = t + "" + NL
     t = t + "    IF SYS.Args.Count > 0 THEN" + NL
     t = t + "        path = SYS.Args[0]" + NL
+    t = t + "        IF SYS.Args.Count > 1 THEN answer = SYS.Args[1]" + NL
     t = t + "    ELSE" + NL
     t = t + "        path = Input(""Picture to shrink (for example C:\MYFILES\ME.PIC): "")" + NL
+    t = t + "        answer = Input(""Type 100 for a profile picture, or 200 for a photo: "")" + NL
     t = t + "    END IF" + NL
     t = t + "    path = path.Trim()" + NL
+    t = t + "    limit = 100" + NL
+    t = t + "    IF answer.Trim() = ""200"" THEN limit = 200" + NL
     t = t + "    TRY" + NL
     t = t + "        text = FS.Read(path)" + NL
     t = t + "    CATCH err" + NL
@@ -1273,7 +1781,7 @@ SUB File14 ()
     t = t + "" + NL
     t = t + "    ' The smallest whole-number shrink that fits" + NL
     t = t + "    f = 1" + NL
-    t = t + "    WHILE w > f * LIMIT OR h > f * LIMIT" + NL
+    t = t + "    WHILE w > f * limit OR h > f * limit" + NL
     t = t + "        f = f + 1" + NL
     t = t + "    END WHILE" + NL
     t = t + "    nw = MATH.Ceil(w / f)" + NL
@@ -1297,9 +1805,14 @@ SUB File14 ()
     t = t + "" + NL
     t = t + "    dest = path.Upper()" + NL
     t = t + "    IF dest.Contains(""\"") THEN" + NL
-    t = t + "        dest = dest.Substring(0, dest.Length - dest.Split(""\"")[dest.Split(""\"").Count - 1].Length) + ""AVATAR.PIC""" + NL
+    t = t + "        dest = dest.Substring(0, dest.Length - dest.Split(""\"")[dest.Split(""\"").Count - 1].Length)" + NL
     t = t + "    ELSE" + NL
-    t = t + "        dest = ""AVATAR.PIC""" + NL
+    t = t + "        dest = """"" + NL
+    t = t + "    END IF" + NL
+    t = t + "    IF limit = 100 THEN" + NL
+    t = t + "        dest = dest + ""AVATAR.PIC""" + NL
+    t = t + "    ELSE" + NL
+    t = t + "        dest = dest + ""PHOTO.PIC""" + NL
     t = t + "    END IF" + NL
     t = t + "    FS.Write(dest, ""SIM95PIC "" + Str(nw) + "" "" + Str(nh) + Chr(10) + out.Join(Chr(10)) + Chr(10))" + NL
     t = t + "    Print(""Saved "" + dest + "" ("" + Str(nw) + "" by "" + Str(nh) + ""). Upload that one to SimBook."")" + NL
@@ -1332,7 +1845,7 @@ SUB File14 ()
     Put("SHRINK.SPK")
 END SUB
 
-SUB File15 ()
+SUB File19 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1367,7 +1880,7 @@ SUB File15 ()
     Put("VIEW.ASP")
 END SUB
 
-SUB File16 ()
+SUB File20 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
@@ -1381,8 +1894,8 @@ SUB File16 ()
     t = t + "id = REQUEST.Query(""id"")" + NL
     t = t + "line = FindPost(id)" + NL
     t = t + "IF line <> """" AND CanTalk(viewer, line) THEN" + NL
-    t = t + "    IF REQUEST.Query(""v"") = ""up"" THEN Vote(viewer, id, ""+"")" + NL
-    t = t + "    IF REQUEST.Query(""v"") = ""down"" THEN Vote(viewer, id, ""-"")" + NL
+    t = t + "    IF REQUEST.Query(""v"") = ""up"" THEN Vote(viewer, line, ""+"")" + NL
+    t = t + "    IF REQUEST.Query(""v"") = ""down"" THEN Vote(viewer, line, ""-"")" + NL
     t = t + "END IF" + NL
     t = t + "back = REQUEST.Query(""b"")" + NL
     t = t + "IF back = ""view"" THEN RESPONSE.Redirect(""view.asp?id="" + id)" + NL
@@ -1390,4 +1903,75 @@ SUB File16 ()
     t = t + "RESPONSE.Redirect(""home.asp"")" + NL
     t = t + "%>" + NL
     Put("VOTE.ASP")
+END SUB
+
+' MIGRATE.SPK - brings an older SimBook's data forward. INSTALL.SPK runs it
+' before writing the pages; it is safe to run any number of times.
+'
+'   POSTS.TXT     The first SimBook kept every post in one file. Posts now live
+'                 in LOG\<n>.TXT, 500 to a file (LOGSIZE in BOOK.SPK), by number;
+'                 POSTS.TXT is kept as POSTS.OLD.
+'   REPLIES\*.TXT Replies were date|author|name|text. They now start with a
+'                 reply number, so a single reply can be deleted.
+
+SUB Migrate ()
+    IF NOT FS.Exists("C:\BOOKDATA") THEN RETURN
+    MigrateLog()
+    MigrateReplies()
+END SUB
+
+SUB MigrateLog ()
+    VAR lines AS Array OF String
+    VAR line AS String
+    VAR text AS String
+    VAR chunk AS Integer
+    VAR last AS Integer = -1
+    VAR moved AS Integer
+    IF NOT FS.Exists("C:\BOOKDATA\POSTS.TXT") THEN RETURN
+    IF NOT FS.Exists("C:\BOOKDATA\LOG") THEN FS.MakeDir("C:\BOOKDATA\LOG")
+    lines = FS.Read("C:\BOOKDATA\POSTS.TXT").Lines()
+    FOR EACH line IN lines
+        IF line = "" THEN CONTINUE
+        chunk = Int((Int(Val(line.Split("|")[0])) - 1) / 500)
+        IF chunk <> last AND last >= 0 THEN
+            FS.Append("C:\BOOKDATA\LOG\" + Str(last) + ".TXT", text)
+            text = ""
+        END IF
+        last = chunk
+        text = text + line + Chr(10)
+        moved = moved + 1
+    NEXT
+    IF last >= 0 THEN FS.Append("C:\BOOKDATA\LOG\" + Str(last) + ".TXT", text)
+    IF FS.Exists("C:\BOOKDATA\POSTS.OLD") THEN FS.Delete("C:\BOOKDATA\POSTS.OLD")
+    FS.Rename("C:\BOOKDATA\POSTS.TXT", "C:\BOOKDATA\POSTS.OLD")
+    Print("  moved " + Str(moved) + " posts into C:\BOOKDATA\LOG")
+END SUB
+
+SUB MigrateReplies ()
+    VAR files AS Array OF String
+    VAR file AS String
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR changed AS Bool
+    VAR numbered AS Integer
+    IF NOT FS.Exists("C:\BOOKDATA\REPLIES") THEN RETURN
+    IF FS.Exists("C:\BOOKDATA\NEXTRID.TXT") THEN n = Int(Val(FS.Read("C:\BOOKDATA\NEXTRID.TXT")))
+    files = FS.List("C:\BOOKDATA\REPLIES")
+    FOR EACH file IN files
+        IF file.EndsWith("\") THEN CONTINUE
+        lines = FS.Read("C:\BOOKDATA\REPLIES\" + file).Lines()
+        changed = FALSE
+        FOR i = 0 TO lines.Count - 1
+            IF lines[i] <> "" AND lines[i].Split("|").Count = 4 THEN
+                n = n + 1
+                lines[i] = Str(n) + "|" + lines[i]
+                changed = TRUE
+                numbered = numbered + 1
+            END IF
+        NEXT
+        IF changed THEN FS.Write("C:\BOOKDATA\REPLIES\" + file, lines.Join(Chr(10)))
+    NEXT
+    FS.Write("C:\BOOKDATA\NEXTRID.TXT", Str(n))
+    IF numbered > 0 THEN Print("  numbered " + Str(numbered) + " replies")
 END SUB

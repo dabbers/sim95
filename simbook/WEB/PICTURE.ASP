@@ -33,7 +33,8 @@ Sketch picture first:</font></p>
 <ol><font size="2">
 <li>Draw yourself in Sketch and save it, say as <tt>C:\MYFILES\ME.PIC</tt>.</li>
 <li>Copy the program below into SPARK, save it as <tt>C:\MYFILES\SHRINK.SPK</tt> and press F5.</li>
-<li>Give it <tt>C:\MYFILES\ME.PIC</tt>. It saves <tt>C:\MYFILES\AVATAR.PIC</tt>, 100 by 75.</li>
+<li>Give it <tt>C:\MYFILES\ME.PIC</tt> and the size 100. It saves <tt>C:\MYFILES\AVATAR.PIC</tt>, 100 by 75.
+(The size 200 makes <tt>PHOTO.PIC</tt>, 200 by 150, for your <a href="photos.asp">photos</a>.)</li>
 <li>Upload <tt>AVATAR.PIC</tt> here.</li>
 </font></ol>
 <form><textarea rows="12" cols="70" readonly><%= H(ReadOr(SERVER.MapPath("/shrink.spk"), "")) %></textarea></form>

@@ -1,0 +1,70 @@
+' MIGRATE.SPK - brings an older SimBook's data forward. INSTALL.SPK runs it
+' before writing the pages; it is safe to run any number of times.
+'
+'   POSTS.TXT     The first SimBook kept every post in one file. Posts now live
+'                 in LOG\<n>.TXT, 500 to a file (LOGSIZE in BOOK.SPK), by number;
+'                 POSTS.TXT is kept as POSTS.OLD.
+'   REPLIES\*.TXT Replies were date|author|name|text. They now start with a
+'                 reply number, so a single reply can be deleted.
+
+SUB Migrate ()
+    IF NOT FS.Exists("C:\BOOKDATA") THEN RETURN
+    MigrateLog()
+    MigrateReplies()
+END SUB
+
+SUB MigrateLog ()
+    VAR lines AS Array OF String
+    VAR line AS String
+    VAR text AS String
+    VAR chunk AS Integer
+    VAR last AS Integer = -1
+    VAR moved AS Integer
+    IF NOT FS.Exists("C:\BOOKDATA\POSTS.TXT") THEN RETURN
+    IF NOT FS.Exists("C:\BOOKDATA\LOG") THEN FS.MakeDir("C:\BOOKDATA\LOG")
+    lines = FS.Read("C:\BOOKDATA\POSTS.TXT").Lines()
+    FOR EACH line IN lines
+        IF line = "" THEN CONTINUE
+        chunk = Int((Int(Val(line.Split("|")[0])) - 1) / 500)
+        IF chunk <> last AND last >= 0 THEN
+            FS.Append("C:\BOOKDATA\LOG\" + Str(last) + ".TXT", text)
+            text = ""
+        END IF
+        last = chunk
+        text = text + line + Chr(10)
+        moved = moved + 1
+    NEXT
+    IF last >= 0 THEN FS.Append("C:\BOOKDATA\LOG\" + Str(last) + ".TXT", text)
+    IF FS.Exists("C:\BOOKDATA\POSTS.OLD") THEN FS.Delete("C:\BOOKDATA\POSTS.OLD")
+    FS.Rename("C:\BOOKDATA\POSTS.TXT", "C:\BOOKDATA\POSTS.OLD")
+    Print("  moved " + Str(moved) + " posts into C:\BOOKDATA\LOG")
+END SUB
+
+SUB MigrateReplies ()
+    VAR files AS Array OF String
+    VAR file AS String
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR changed AS Bool
+    VAR numbered AS Integer
+    IF NOT FS.Exists("C:\BOOKDATA\REPLIES") THEN RETURN
+    IF FS.Exists("C:\BOOKDATA\NEXTRID.TXT") THEN n = Int(Val(FS.Read("C:\BOOKDATA\NEXTRID.TXT")))
+    files = FS.List("C:\BOOKDATA\REPLIES")
+    FOR EACH file IN files
+        IF file.EndsWith("\") THEN CONTINUE
+        lines = FS.Read("C:\BOOKDATA\REPLIES\" + file).Lines()
+        changed = FALSE
+        FOR i = 0 TO lines.Count - 1
+            IF lines[i] <> "" AND lines[i].Split("|").Count = 4 THEN
+                n = n + 1
+                lines[i] = Str(n) + "|" + lines[i]
+                changed = TRUE
+                numbered = numbered + 1
+            END IF
+        NEXT
+        IF changed THEN FS.Write("C:\BOOKDATA\REPLIES\" + file, lines.Join(Chr(10)))
+    NEXT
+    FS.Write("C:\BOOKDATA\NEXTRID.TXT", Str(n))
+    IF numbered > 0 THEN Print("  numbered " + Str(numbered) + " replies")
+END SUB

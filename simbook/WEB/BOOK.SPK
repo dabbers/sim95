@@ -9,13 +9,17 @@
 '   C:\BOOKDATA\USERS\<user>.TXT    one profile, key=value per line
 '   C:\BOOKDATA\FRIENDS\<user>.TXT  |ann|bob|cat|  (friendship is mutual)
 '   C:\BOOKDATA\WALLS\<user>.TXT    every post on that user's wall, oldest first
-'   C:\BOOKDATA\POSTS.TXT           every post on every wall: the feed reads this
+'   C:\BOOKDATA\LOG\<n>.TXT         every post, LOGSIZE to a file: the feed reads these
 '   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory
 '   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to, and its form token
-'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out
+'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out (NEXTRID: replies)
 '   C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|  thumbs up and down on one post
-'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post: date|author|author name|text
+'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post, one per line
+'   C:\BOOKDATA\NOTES\<user>.TXT    their notifications (and .SEE: how far they read)
+'   C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them
+'   C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos
 '   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)
+'   C:\WEB\PHOTOS\<post>.PIC        photos
 '
 ' A post is one line: id|date time|author|author name|wall|wall name|text
 ' Names and text are escaped with Esc so they never contain | or a line break.
@@ -26,9 +30,12 @@
 
 CONST DATADIR = "C:\BOOKDATA"
 CONST PICDIR = "C:\WEB\PICS"
+CONST PHOTODIR = "C:\WEB\PHOTOS"
 CONST COOKIE = "simbook"
 CONST FEEDSIZE = 25
-CONST FEEDSCAN = 1000
+CONST LOGSIZE = 500           ' posts to a log file; MIGRATE.SPK knows this too
+CONST NOTEKEEP = 100          ' notifications kept per member
+CONST NOTESHOW = 40           ' notifications shown at once
 CONST MAXPOST = 1000
 CONST MAXREPLY = 500
 CONST FEEDREPLIES = 2         ' replies shown under a post in the feed and on Walls
@@ -37,6 +44,10 @@ CONST SHORTFIELD = 60
 CONST LONGFIELD = 500
 CONST MAXPIC = 20000
 CONST PICSIZE = 100
+CONST MAXPHOTO = 45000
+CONST PHOTOSIZE = 200
+CONST MAXCAPTION = 200
+CONST ALBUMSHOW = 20
 CONST PAGEROOM = 20000        ' how much feed, Wall or replies one page may carry
 
 ' HTTPD.SPK sends a whole page as one network message, and a message holds
@@ -51,11 +62,12 @@ VAR formToken AS String       ' their session's form token; see RequireToken
 SUB EnsureDisk ()
     VAR dir AS String
     VAR dirs AS Array OF String
-    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES"]
+    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES", "\LOG", "\NOTES", "\POKES", "\ALBUMS"]
     FOR EACH dir IN dirs
         IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
     NEXT
     IF NOT FS.Exists(PICDIR) THEN FS.MakeDir(PICDIR)
+    IF NOT FS.Exists(PHOTODIR) THEN FS.MakeDir(PHOTODIR)
 END SUB
 
 FUNCTION ReadOr (path AS String, fallback AS String) AS String
@@ -216,13 +228,20 @@ FUNCTION HasPicture (u AS String) AS Bool
 END FUNCTION
 
 ' A picture is a SIM95PIC file: "SIM95PIC width height", then a row of hex digits
-' per line. Returns "" when it was saved, otherwise what is wrong with it.
-FUNCTION SavePicture (u AS String, pic AS String) AS String
+' per line. Returns "" when it will do, otherwise what is wrong with it.
+FUNCTION CheckPicture (pic AS String, most AS Integer, longest AS Integer) AS String
     VAR size AS Array OF String
     IF pic = "" THEN RETURN "Choose a .PIC file first."
     size = pic.Lines()[0].Trim().Split(" ")
     IF NOT pic.StartsWith("SIM95PIC ") OR size.Count < 3 THEN RETURN "That is not a picture. Save one from Sketch as a .PIC file."
-    IF pic.Length > MAXPIC OR Val(size[1]) > PICSIZE OR Val(size[2]) > PICSIZE THEN RETURN "That picture is " + size[1] + " by " + size[2] + ". Shrink it to " + Str(PICSIZE) + " by " + Str(PICSIZE) + " or less with SHRINK.SPK below."
+    IF pic.Length > longest OR Val(size[1]) > most OR Val(size[2]) > most THEN RETURN "That picture is " + size[1] + " by " + size[2] + ". Shrink it to " + Str(most) + " by " + Str(most) + " or less with SHRINK.SPK."
+    RETURN ""
+END FUNCTION
+
+FUNCTION SavePicture (u AS String, pic AS String) AS String
+    VAR problem AS String
+    problem = CheckPicture(pic, PICSIZE, MAXPIC)
+    IF problem <> "" THEN RETURN problem
     EnsureDisk()
     FS.Write(PICDIR + "\" + u + ".PIC", pic)
     RETURN ""
@@ -343,6 +362,7 @@ SUB AddFriend (a AS String, b AS String)
     IF a = b OR IsFriend(a, b) THEN RETURN
     FS.Write(DATADIR + "\FRIENDS\" + a + ".TXT", FriendList(a) + b + "|")
     FS.Write(DATADIR + "\FRIENDS\" + b + ".TXT", FriendList(b) + a + "|")
+    Notify(b, "friend", "")
 END SUB
 
 SUB RemoveFriend (a AS String, b AS String)
@@ -350,44 +370,101 @@ SUB RemoveFriend (a AS String, b AS String)
     FS.Write(DATADIR + "\FRIENDS\" + b + ".TXT", FriendList(b).Replace("|" + a + "|", "|"))
 END SUB
 
-' ---------------------------------------------------------------- posts
+' ---------------------------------------------------------------- numbers
 
-FUNCTION NextId () AS Integer
+' A counter kept in C:\BOOKDATA\<name>.TXT: posts use NEXTID, replies NEXTRID,
+' and each one only ever goes up.
+FUNCTION Counter (name AS String) AS Integer
     VAR n AS Integer
-    n = Int(Val(ReadOr(DATADIR + "\NEXTID.TXT", "0"))) + 1
-    FS.Write(DATADIR + "\NEXTID.TXT", Str(n))
+    n = Int(Val(ReadOr(DATADIR + "\" + name + ".TXT", "0"))) + 1
+    FS.Write(DATADIR + "\" + name + ".TXT", Str(n))
     RETURN n
 END FUNCTION
 
-' Write on someone's wall (your own wall is your status). Returns "" or a problem.
-FUNCTION AddPost (author AS String, wall AS String, text AS String) AS String
-    VAR line AS String
-    text = text.Replace(Chr(13), "").Trim()
-    IF text = "" THEN RETURN "Write something first."
-    IF text.Length > MAXPOST THEN RETURN "Keep it under " + Str(MAXPOST) + " characters."
-    IF NOT UserExists(wall) THEN RETURN "There is nobody called " + wall + "."
-    IF author <> wall AND NOT IsFriend(author, wall) THEN RETURN "Only friends can write on " + wall + "'s Wall."
-    EnsureDisk()
-    line = Str(NextId()) + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|" + author + "|" + Esc(NameOf(author)) + "|" + wall + "|" + Esc(NameOf(wall)) + "|" + Esc(text)
-    FS.Append(DATADIR + "\POSTS.TXT", line + Chr(10))
-    FS.Append(DATADIR + "\WALLS\" + wall + ".TXT", line + Chr(10))
-    RETURN ""
-END FUNCTION
-
-' The line of post number id, or "" when there is none. IndexOf does the
-' searching, so this costs a handful of steps however long the log is.
-FUNCTION FindPost (id AS String) AS String
-    VAR text AS String
+' The line in text (lines of "key|...") that starts with key, or "". IndexOf does
+' the searching, so this costs a handful of steps however long the text is.
+FUNCTION FindLine (text AS String, key AS String) AS String
     VAR at AS Integer
-    IF id = "" OR id.Length > 8 THEN RETURN ""
-    IF NOT OnlyFrom(id, "0123456789") THEN RETURN ""
-    text = Chr(10) + ReadOr(DATADIR + "\POSTS.TXT", "")
-    at = text.IndexOf(Chr(10) + id + "|")
+    text = Chr(10) + text
+    at = text.IndexOf(Chr(10) + key + "|")
     IF at < 0 THEN RETURN ""
     text = text.Substring(at + 1, text.Length - at - 1)
     at = text.IndexOf(Chr(10))
     IF at >= 0 THEN text = text.Substring(0, at)
     RETURN text
+END FUNCTION
+
+' text without the whole line given. The line breaks around it make sure a
+' line that merely ends the same way is left alone.
+FUNCTION WithoutLine (text AS String, line AS String) AS String
+    text = (Chr(10) + text).Replace(Chr(10) + line + Chr(10), Chr(10))
+    RETURN text.Substring(1, text.Length - 1)
+END FUNCTION
+
+FUNCTION IsNumber (s AS String) AS Bool
+    IF s = "" OR s.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(s, "0123456789")
+END FUNCTION
+
+' ---------------------------------------------------------------- the post log
+
+' Every post is in the log, in chunks of LOGSIZE: post n lives in
+' C:\BOOKDATA\LOG\<(n - 1) / LOGSIZE>.TXT. Finding a post reads one small
+' file, and writing one rewrites only the newest chunk, however big SimBook
+' grows. The feed reads the newest two chunks.
+
+FUNCTION ChunkPath (id AS Integer) AS String
+    RETURN DATADIR + "\LOG\" + Str(Int((id - 1) / LOGSIZE)) + ".TXT"
+END FUNCTION
+
+FUNCTION LastId () AS Integer
+    RETURN Int(Val(ReadOr(DATADIR + "\NEXTID.TXT", "0")))
+END FUNCTION
+
+' The newest posts, oldest first: between LOGSIZE and twice that many.
+FUNCTION RecentPosts () AS Array OF String
+    VAR last AS Integer
+    VAR text AS String
+    last = LastId()
+    IF last = 0 THEN RETURN "".Lines()
+    text = ReadOr(ChunkPath(last), "")
+    IF last > LOGSIZE THEN text = ReadOr(ChunkPath(last - LOGSIZE), "") + text
+    RETURN text.Lines()
+END FUNCTION
+
+' The line of post number id, or "" when there is none.
+FUNCTION FindPost (id AS String) AS String
+    IF NOT IsNumber(id) THEN RETURN ""
+    RETURN FindLine(ReadOr(ChunkPath(Int(Val(id))), ""), id)
+END FUNCTION
+
+' Writes a post into the log and onto the Wall, and returns its number.
+FUNCTION WritePost (author AS String, wall AS String, text AS String) AS Integer
+    VAR id AS Integer
+    VAR line AS String
+    EnsureDisk()
+    id = Counter("NEXTID")
+    line = Str(id) + "|" + Stamp() + "|" + author + "|" + Esc(NameOf(author)) + "|" + wall + "|" + Esc(NameOf(wall)) + "|" + Esc(text)
+    FS.Append(ChunkPath(id), line + Chr(10))
+    FS.Append(DATADIR + "\WALLS\" + wall + ".TXT", line + Chr(10))
+    RETURN id
+END FUNCTION
+
+FUNCTION Stamp () AS String
+    RETURN TIME.Date + " " + TIME.Clock.Substring(0, 5)
+END FUNCTION
+
+' Write on someone's Wall (your own Wall is your status). Returns "" or a problem.
+FUNCTION AddPost (author AS String, wall AS String, text AS String) AS String
+    VAR id AS Integer
+    text = text.Replace(Chr(13), "").Trim()
+    IF text = "" THEN RETURN "Write something first."
+    IF text.Length > MAXPOST THEN RETURN "Keep it under " + Str(MAXPOST) + " characters."
+    IF NOT UserExists(wall) THEN RETURN "There is nobody called " + wall + "."
+    IF author <> wall AND NOT IsFriend(author, wall) THEN RETURN "Only friends can write on " + wall + "'s Wall."
+    id = WritePost(author, wall, text)
+    Notify(wall, "wall", Str(id))
+    RETURN ""
 END FUNCTION
 
 ' Who may give a post a thumb or a reply: the people whose News Feed it reaches.
@@ -400,6 +477,34 @@ FUNCTION CanTalk (u AS String, line AS String) AS Bool
     RETURN IsFriend(u, p[2]) OR IsFriend(u, p[4])
 END FUNCTION
 
+' A post can be deleted by whoever wrote it and by the owner of its Wall.
+FUNCTION CanDelete (u AS String, line AS String) AS Bool
+    VAR p AS Array OF String
+    p = line.Split("|")
+    IF p.Count < 7 THEN RETURN FALSE
+    RETURN u = p[2] OR u = p[4]
+END FUNCTION
+
+' Takes a post out of the log and off its Wall, with its thumbs, replies and photo.
+SUB DeletePost (line AS String)
+    VAR p AS Array OF String
+    VAR path AS String
+    p = line.Split("|")
+    path = ChunkPath(Int(Val(p[0])))
+    FS.Write(path, WithoutLine(FS.Read(path), line))
+    path = DATADIR + "\WALLS\" + p[4] + ".TXT"
+    IF FS.Exists(path) THEN FS.Write(path, WithoutLine(FS.Read(path), line))
+    path = DATADIR + "\VOTES\" + p[0] + ".TXT"
+    IF FS.Exists(path) THEN FS.Delete(path)
+    path = DATADIR + "\REPLIES\" + p[0] + ".TXT"
+    IF FS.Exists(path) THEN FS.Delete(path)
+    IF IsPhoto(p[0]) THEN
+        FS.Delete(PHOTODIR + "\" + p[0] + ".PIC")
+        path = DATADIR + "\ALBUMS\" + p[2] + ".TXT"
+        IF FS.Exists(path) THEN FS.Write(path, FS.Read(path).Replace("|" + p[0] + "|", "|"))
+    END IF
+END SUB
+
 ' ---------------------------------------------------------------- thumbs
 
 FUNCTION VotesOf (id AS String) AS String
@@ -411,22 +516,32 @@ FUNCTION CountVotes (votes AS String, sign AS String) AS Integer
     RETURN (votes.Length - votes.Replace(sign + "|", "").Length) / 2
 END FUNCTION
 
-' Thumbs up ("+") or down ("-"). The same thumb again takes it back.
-SUB Vote (u AS String, id AS String, sign AS String)
+' Thumbs up ("+") or down ("-") on a post. The same thumb again takes it back.
+SUB Vote (u AS String, line AS String, sign AS String)
+    VAR id AS String
     VAR votes AS String
     VAR had AS Bool
     EnsureDisk()
+    id = line.Split("|")[0]
     votes = VotesOf(id)
     had = votes.Contains("|" + u + sign + "|")
     votes = votes.Replace("|" + u + "+|", "|").Replace("|" + u + "-|", "|")
-    IF NOT had THEN votes = votes + u + sign + "|"
+    IF NOT had THEN
+        votes = votes + u + sign + "|"
+        IF sign = "+" THEN Notify(line.Split("|")[2], "up", id)
+        IF sign = "-" THEN Notify(line.Split("|")[2], "down", id)
+    END IF
     FS.Write(DATADIR + "\VOTES\" + id + ".TXT", votes)
 END SUB
 
 ' ---------------------------------------------------------------- replies
 
+' A reply is one line of C:\BOOKDATA\REPLIES\<post>.TXT:
+'   reply number|date time|author|author name|text
+
 FUNCTION AddReply (u AS String, id AS String, text AS String) AS String
     VAR line AS String
+    VAR p AS Array OF String
     line = FindPost(id)
     text = text.Replace(Chr(13), "").Trim()
     IF line = "" THEN RETURN "That post is gone."
@@ -434,7 +549,10 @@ FUNCTION AddReply (u AS String, id AS String, text AS String) AS String
     IF text = "" THEN RETURN "Write something first."
     IF text.Length > MAXREPLY THEN RETURN "Keep replies under " + Str(MAXREPLY) + " characters."
     EnsureDisk()
-    FS.Append(DATADIR + "\REPLIES\" + id + ".TXT", TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|" + u + "|" + Esc(NameOf(u)) + "|" + Esc(text) + Chr(10))
+    FS.Append(DATADIR + "\REPLIES\" + id + ".TXT", Str(Counter("NEXTRID")) + "|" + Stamp() + "|" + u + "|" + Esc(NameOf(u)) + "|" + Esc(text) + Chr(10))
+    p = line.Split("|")
+    Notify(p[2], "reply", id)
+    IF p[4] <> p[2] THEN Notify(p[4], "wallreply", id)
     RETURN ""
 END FUNCTION
 
@@ -449,72 +567,237 @@ FUNCTION Replies (id AS String) AS Array OF String
     RETURN out
 END FUNCTION
 
-FUNCTION ReplyHtml (line AS String) AS String
+FUNCTION FindReply (id AS String, rid AS String) AS String
+    IF NOT IsNumber(rid) THEN RETURN ""
+    RETURN FindLine(ReadOr(DATADIR + "\REPLIES\" + id + ".TXT", ""), rid)
+END FUNCTION
+
+' A reply can be deleted by whoever wrote it and by the owner of the post's Wall.
+FUNCTION CanDeleteReply (u AS String, post AS String, reply AS String) AS Bool
+    RETURN u = reply.Split("|")[2] OR u = post.Split("|")[4]
+END FUNCTION
+
+SUB DeleteReply (id AS String, reply AS String)
+    VAR path AS String
+    path = DATADIR + "\REPLIES\" + id + ".TXT"
+    FS.Write(path, WithoutLine(FS.Read(path), reply))
+END SUB
+
+FUNCTION ReplyHtml (line AS String, post AS String) AS String
     VAR r AS Array OF String
+    VAR del AS String
     r = line.Split("|")
-    IF r.Count < 4 THEN RETURN ""
-    RETURN "<tr><td width=""16""></td><td bgcolor=""#EDEFF4""><font size=""2""><a href=""profile.asp?u=" + r[1] + """><b>" + H(Unesc(r[2])) + "</b></a> <font color=""#808080"">" + r[0] + "</font><br>" + Br(Unesc(r[3])) + "</font></td></tr>"
+    IF r.Count < 5 THEN RETURN ""
+    IF CanDeleteReply(viewer, post, line) THEN del = " <font size=""1""><a href=""delete.asp?id=" + post.Split("|")[0] + "&r=" + r[0] + """>delete</a></font>"
+    RETURN "<tr><td width=""16""></td><td bgcolor=""#EDEFF4""><font size=""2""><a href=""profile.asp?u=" + r[2] + """><b>" + H(Unesc(r[3])) + "</b></a> <font color=""#808080"">" + r[1] + "</font>" + del + "<br>" + Br(Unesc(r[4])) + "</font></td></tr>"
 END FUNCTION
 
 ' The newest replies to a post that fit in room characters, oldest first, with a
 ' link to the rest. most = 0 means as many as fit.
-FUNCTION RepliesHtml (id AS String, most AS Integer, room AS Integer) AS String
-    VAR all AS Array OF String
+FUNCTION RepliesHtml (post AS String, all AS Array OF String, most AS Integer, room AS Integer) AS String
     VAR out AS String
     VAR i AS Integer
     VAR shown AS Integer
-    all = Replies(id)
     IF all.Count = 0 THEN RETURN ""
     FOR i = all.Count - 1 TO 0 STEP -1
         IF most > 0 AND shown >= most THEN BREAK
         IF out.Length > room THEN BREAK
-        out = ReplyHtml(all[i]) + out
+        out = ReplyHtml(all[i], post) + out
         shown = shown + 1
     NEXT
     IF shown < all.Count THEN
-        out = "<tr><td width=""16""></td><td><font size=""1""><a href=""view.asp?id=" + id + """>See all " + Str(all.Count) + " replies</a></font></td></tr>" + out
+        out = "<tr><td width=""16""></td><td><font size=""1""><a href=""view.asp?id=" + post.Split("|")[0] + """>See all " + Str(all.Count) + " replies</a></font></td></tr>" + out
     END IF
     RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""1"">" + out + "</table>"
 END FUNCTION
 
+' ---------------------------------------------------------------- notifications
+
+' C:\BOOKDATA\NOTES\<user>.TXT holds the newest NOTEKEEP of them, one per line:
+'   number|date time|kind|who|their name|post number
+' and <user>.SEE the number of the last one they have looked at. Kinds: wall,
+' reply, wallreply, up, down, poke, friend. The one acting is always the viewer.
+
+FUNCTION LastNote (lines AS Array OF String) AS Integer
+    VAR i AS Integer
+    FOR i = lines.Count - 1 TO 0 STEP -1
+        IF lines[i] <> "" THEN RETURN Int(Val(lines[i].Split("|")[0]))
+    NEXT
+    RETURN 0
+END FUNCTION
+
+FUNCTION NoteLines (u AS String) AS Array OF String
+    RETURN ReadOr(DATADIR + "\NOTES\" + u + ".TXT", "").Lines()
+END FUNCTION
+
+SUB Notify (u AS String, kind AS String, ref AS String)
+    VAR lines AS Array OF String
+    VAR keep AS Array OF String
+    VAR i AS Integer
+    IF u = viewer OR NOT UserExists(u) THEN RETURN
+    EnsureDisk()
+    lines = NoteLines(u)
+    FOR i = 0 TO lines.Count - 1
+        IF lines[i] <> "" AND i >= lines.Count - NOTEKEEP THEN keep.Add(lines[i])
+    NEXT
+    keep.Add(Str(LastNote(lines) + 1) + "|" + Stamp() + "|" + kind + "|" + viewer + "|" + Esc(NameOf(viewer)) + "|" + ref)
+    FS.Write(DATADIR + "\NOTES\" + u + ".TXT", keep.Join(Chr(10)) + Chr(10))
+END SUB
+
+FUNCTION SeenNote (u AS String) AS Integer
+    RETURN Int(Val(ReadOr(DATADIR + "\NOTES\" + u + ".SEE", "0")))
+END FUNCTION
+
+FUNCTION Unread (u AS String) AS Integer
+    VAR n AS Integer
+    n = LastNote(NoteLines(u)) - SeenNote(u)
+    IF n < 0 THEN RETURN 0
+    RETURN n
+END FUNCTION
+
+SUB MarkSeen (u AS String)
+    EnsureDisk()
+    FS.Write(DATADIR + "\NOTES\" + u + ".SEE", Str(LastNote(NoteLines(u))))
+END SUB
+
+FUNCTION NoteHtml (line AS String, fresh AS Bool) AS String
+    VAR n AS Array OF String
+    VAR who AS String
+    VAR what AS String
+    VAR post AS String
+    n = line.Split("|")
+    IF n.Count < 6 THEN RETURN ""
+    who = "<a href=""profile.asp?u=" + n[3] + """><b>" + H(Unesc(n[4])) + "</b></a>"
+    post = "<a href=""view.asp?id=" + n[5] + """>"
+    SELECT CASE n[2]
+        CASE "wall"
+            what = who + " wrote on your " + post + "Wall</a>."
+        CASE "reply"
+            what = who + " replied to " + post + "your post</a>."
+        CASE "wallreply"
+            what = who + " replied to " + post + "a post on your Wall</a>."
+        CASE "up"
+            what = who + " gave " + post + "your post</a> a thumbs up."
+        CASE "down"
+            what = who + " gave " + post + "your post</a> a thumbs down."
+        CASE "poke"
+            what = who + " poked you. <a href=""home.asp"">Poke back?</a>"
+        CASE "friend"
+            what = who + " added you as a friend."
+        CASE ELSE
+            RETURN ""
+    END SELECT
+    IF fresh THEN RETURN "<tr><td bgcolor=""#FFF9D7""><font size=""2"">" + what + " <font color=""#808080"">" + n[1] + "</font></font></td></tr>"
+    RETURN "<tr><td><font size=""2"">" + what + " <font color=""#808080"">" + n[1] + "</font></font></td></tr>"
+END FUNCTION
+
+' ---------------------------------------------------------------- pokes
+
+' C:\BOOKDATA\POKES\<user>.TXT: |bob|cat| - who has poked them and not been
+' poked back or brushed off yet.
+
+FUNCTION PokesOf (u AS String) AS String
+    RETURN ReadOr(DATADIR + "\POKES\" + u + ".TXT", "|")
+END FUNCTION
+
+' Returns "" or why not. Poking someone back also clears their poke.
+FUNCTION Poke (u AS String, target AS String) AS String
+    IF NOT UserExists(target) OR target = u THEN RETURN "You cannot poke that."
+    IF NOT IsFriend(u, target) THEN RETURN "You can only poke your friends."
+    IF PokesOf(target).Contains("|" + u + "|") THEN RETURN "You have already poked " + NameOf(target) + ". Wait for them to poke back."
+    EnsureDisk()
+    FS.Write(DATADIR + "\POKES\" + target + ".TXT", PokesOf(target) + u + "|")
+    ClearPoke(u, target)
+    Notify(target, "poke", "")
+    RETURN ""
+END FUNCTION
+
+SUB ClearPoke (u AS String, from AS String)
+    IF PokesOf(u).Contains("|" + from + "|") THEN FS.Write(DATADIR + "\POKES\" + u + ".TXT", PokesOf(u).Replace("|" + from + "|", "|"))
+END SUB
+
+' ---------------------------------------------------------------- photos
+
+' A photo is a post on its owner's own Wall with a picture beside it in
+' C:\WEB\PHOTOS\<post>.PIC, so it gets thumbs, replies and the feed for free.
+' C:\BOOKDATA\ALBUMS\<user>.TXT lists their photos: |12|40|
+
+FUNCTION IsPhoto (id AS String) AS Bool
+    RETURN FS.Exists(PHOTODIR + "\" + id + ".PIC")
+END FUNCTION
+
+FUNCTION Album (u AS String) AS Array OF String
+    VAR all AS Array OF String
+    VAR out AS Array OF String
+    VAR id AS String
+    all = ReadOr(DATADIR + "\ALBUMS\" + u + ".TXT", "|").Split("|")
+    FOR EACH id IN all
+        IF id <> "" THEN out.Add(id)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION AddPhoto (u AS String, pic AS String, caption AS String) AS String
+    VAR problem AS String
+    VAR id AS Integer
+    caption = caption.Replace(Chr(13), "").Trim()
+    IF caption.Length > MAXCAPTION THEN RETURN "Keep the caption under " + Str(MAXCAPTION) + " characters."
+    problem = CheckPicture(pic, PHOTOSIZE, MAXPHOTO)
+    IF problem <> "" THEN RETURN problem
+    id = WritePost(u, u, caption)
+    FS.Write(PHOTODIR + "\" + Str(id) + ".PIC", pic)
+    FS.Write(DATADIR + "\ALBUMS\" + u + ".TXT", ReadOr(DATADIR + "\ALBUMS\" + u + ".TXT", "|") + Str(id) + "|")
+    RETURN ""
+END FUNCTION
+
 ' ---------------------------------------------------------------- showing posts
 
-' Thumbs and the reply link under a post. back says where a thumb returns to:
-' "home", "view", or the user whose Wall it is on.
-FUNCTION ActionsHtml (id AS String, line AS String, back AS String) AS String
+' Thumbs, reply and delete links under a post. back says where a thumb returns
+' to: "home", "view", or the user whose Wall it is on.
+FUNCTION ActionsHtml (line AS String, back AS String, replies AS Integer) AS String
+    VAR id AS String
     VAR votes AS String
     VAR up AS String
     VAR down AS String
-    VAR n AS Integer
+    VAR del AS String
+    id = line.Split("|")[0]
     votes = VotesOf(id)
     up = "thumbs up (" + Str(CountVotes(votes, "+")) + ")"
     down = "thumbs down (" + Str(CountVotes(votes, "-")) + ")"
     IF votes.Contains("|" + viewer + "+|") THEN up = "<b>" + up + "</b>"
     IF votes.Contains("|" + viewer + "-|") THEN down = "<b>" + down + "</b>"
-    n = Replies(id).Count
+    IF CanDelete(viewer, line) THEN del = " &middot; <a href=""delete.asp?id=" + id + """>delete</a>"
     IF NOT CanTalk(viewer, line) THEN
-        RETURN "<font size=""1"" color=""#808080"">" + up + " &middot; " + down + " &middot; <a href=""view.asp?id=" + id + """>" + Str(n) + " replies</a></font>"
+        RETURN "<font size=""1"" color=""#808080"">" + up + " &middot; " + down + " &middot; <a href=""view.asp?id=" + id + """>" + Str(replies) + " replies</a></font>"
     END IF
     RETURN "<font size=""1""><a href=""vote.asp?id=" + id + "&v=up&b=" + back + "&" + TokenArg() + """>" + up + "</a> &middot; " _
          + "<a href=""vote.asp?id=" + id + "&v=down&b=" + back + "&" + TokenArg() + """>" + down + "</a> &middot; " _
-         + "<a href=""view.asp?id=" + id + """>reply</a></font>"
+         + "<a href=""view.asp?id=" + id + """>reply</a>" + del + "</font>"
 END FUNCTION
 
-' One post as a row of the feed or a Wall, with its thumbs and newest replies.
-' onWall leaves out the Wall it is on; most is how many replies to show (0 = all
-' that fit).
+' One post as a row of the feed or a Wall, with its photo, thumbs and newest
+' replies. onWall leaves out the Wall it is on; most is how many replies to
+' show (0 = all that fit).
 FUNCTION PostHtml (line AS String, onWall AS Bool, back AS String, most AS Integer) AS String
     VAR p AS Array OF String
     VAR who AS String
+    VAR body AS String
+    VAR all AS Array OF String
     p = line.Split("|")
     IF p.Count < 7 THEN RETURN ""
     who = "<a href=""profile.asp?u=" + p[2] + """><b>" + H(Unesc(p[3])) + "</b></a>"
     IF p[2] <> p[4] AND NOT onWall THEN
         who = who + " &raquo; <a href=""profile.asp?u=" + p[4] + """><b>" + H(Unesc(p[5])) + "</b></a>"
     END IF
+    body = Br(Unesc(p[6]))
+    IF IsPhoto(p[0]) THEN
+        who = who + " added a photo"
+        body = "<a href=""view.asp?id=" + p[0] + """><img src=""photos/" + p[0] + ".pic"" alt=""photo""></a><br>" + body
+    END IF
+    all = Replies(p[0])
     RETURN "<tr><td bgcolor=""#F7F7F7""><font size=""2"">" + who + " <a href=""view.asp?id=" + p[0] + """><font color=""#808080"">" + p[1] + "</font></a><br>" _
-         + Br(Unesc(p[6])) + "</font><br>" + ActionsHtml(p[0], line, back) _
-         + RepliesHtml(p[0], most, PAGEROOM) + "</td></tr>"
+         + body + "</font><br>" + ActionsHtml(line, back, all.Count) _
+         + RepliesHtml(line, all, most, PAGEROOM) + "</td></tr>"
 END FUNCTION
 
 ' The newest posts on one wall.
@@ -542,13 +825,10 @@ FUNCTION FeedHtml (u AS String) AS String
     VAR circle AS String
     VAR out AS String
     VAR i AS Integer
-    VAR stop AS Integer
     VAR shown AS Integer
     circle = FriendList(u) + u + "|"
-    lines = ReadOr(DATADIR + "\POSTS.TXT", "").Lines()
-    stop = lines.Count - FEEDSCAN
-    IF stop < 0 THEN stop = 0
-    FOR i = lines.Count - 1 TO stop STEP -1
+    lines = RecentPosts()
+    FOR i = lines.Count - 1 TO 0 STEP -1
         p = lines[i].Split("|")
         IF p.Count >= 7 THEN
             IF circle.Contains("|" + p[2] + "|") OR circle.Contains("|" + p[4] + "|") THEN
@@ -573,6 +853,7 @@ FUNCTION Top (title AS String) AS String
       + "<td align=""right""><font color=""#FFFFFF"" size=""2"">"
     IF viewer <> "" THEN
         s = s + "<a href=""home.asp""><font color=""#FFFFFF"">home</font></a> | " _
+              + NotesLink() + " | " _
               + "<a href=""profile.asp?u=" + viewer + """><font color=""#FFFFFF"">profile</font></a> | " _
               + "<a href=""people.asp""><font color=""#FFFFFF"">people</font></a> | " _
               + "<a href=""edit.asp""><font color=""#FFFFFF"">edit</font></a> | " _
@@ -581,6 +862,13 @@ FUNCTION Top (title AS String) AS String
         s = s + "<a href=""index.asp""><font color=""#FFFFFF"">login</font></a> | <a href=""index.asp""><font color=""#FFFFFF"">register</font></a>"
     END IF
     RETURN s + "</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION NotesLink () AS String
+    VAR n AS Integer
+    n = Unread(viewer)
+    IF n > 0 THEN RETURN "<a href=""notify.asp""><font color=""#FFFF00""><b>notifications (" + Str(n) + ")</b></font></a>"
+    RETURN "<a href=""notify.asp""><font color=""#FFFFFF"">notifications</font></a>"
 END FUNCTION
 
 FUNCTION Bottom () AS String
