@@ -24,8 +24,8 @@ await m.runScript(fs.readFileSync(path.join(root, "eliza/INSTALL.SPK"), "utf8"))
 
 // Say something; the newest answer as plain text.
 async function chat(b, say, temp = "0") {
-  const r = ok(await b.post("/bot/index.asp", { say, temp }));
-  assert.equal(r.url, "/bot/index.asp");
+  const r = ok(await b.post("/index.asp", { say, temp }));
+  assert.equal(r.url, "/index.asp");
   const i = r.body.indexOf('<pre id="answer">');
   assert.ok(i >= 0, "no answer for " + say);
   return decode(r.body.slice(i + 17, r.body.indexOf("</pre>", i))).replace(/\s+/g, " ").trim();
@@ -34,7 +34,7 @@ async function chat(b, say, temp = "0") {
 const you = browser(m);
 
 await test("the front page introduces itself", async () => {
-  const r = ok(await you.get("/bot/"));
+  const r = ok(await you.get("/"));
   assert.match(r.body, /ELIZA-95/);
   assert.match(r.body, /build me a website about cats/);
   assert.match(you.cookies(), /eliza95=[0-9A-F]{8}/);
@@ -65,12 +65,12 @@ await test("ELIZA underneath: reflection, family, and memory", async () => {
 });
 
 await test("the SPARK it writes actually runs", async () => {
-  const reply = ok(await you.post("/bot/index.asp", { say: "Write a FizzBuzz program up to 15", temp: "0" })).body;
+  const reply = ok(await you.post("/index.asp", { say: "Write a FizzBuzz program up to 15", temp: "0" })).body;
   const code = decode(reply.slice(reply.indexOf('<pre id="answer">') + 17, reply.indexOf("</pre>", reply.indexOf('<pre id="answer">'))));
   const program = code.slice(code.indexOf("SUB Main"), code.indexOf("END SUB") + 7);
   const out = await m.runScript(program);
   assert.deepEqual(out, ["1", "2", "Fizz", "4", "Buzz", "Fizz", "7", "8", "Fizz", "Buzz", "11", "Fizz", "13", "14", "FizzBuzz"]);
-  const count = ok(await you.post("/bot/index.asp", { say: "make a program to count from 3 to 6", temp: "0" })).body;
+  const count = ok(await you.post("/index.asp", { say: "make a program to count from 3 to 6", temp: "0" })).body;
   const c = decode(count.slice(count.indexOf('<pre id="answer">') + 17, count.indexOf("</pre>", count.indexOf('<pre id="answer">'))));
   assert.deepEqual(await m.runScript(c.slice(c.indexOf("SUB Main"), c.indexOf("END SUB") + 7)), ["3", "4", "5", "6"]);
   const times = await chat(you, "write a program for the 9 times table");
@@ -91,19 +91,19 @@ await test("a hot temperature hallucinates; regenerate and new chat work", async
   const cold = await chat(you, "blah blah", "0");
   const hot = await chat(you, "blah blah", "1.5");
   assert.ok(hot.length > cold.length + 20, hot);
-  let r = ok(await you.post("/bot/index.asp", { do: "regen" }));
+  let r = ok(await you.post("/index.asp", { do: "regen" }));
   assert.match(r.body, /<option selected>1\.5<\/option>/, "the temperature is remembered");
   const turns = () => m.read("C:\\BOTDATA\\CHATS\\" + you.cookies().split("=")[1] + ".TXT").trim().split("\n");
   const before = turns().length;
-  ok(await you.post("/bot/index.asp", { do: "regen" }));
+  ok(await you.post("/index.asp", { do: "regen" }));
   assert.equal(turns().length, before, "regenerate replaces the answer");
-  r = ok(await you.post("/bot/index.asp", { do: "new" }));
+  r = ok(await you.post("/index.asp", { do: "new" }));
   assert.match(r.body, /I can answer questions, write SPARK programs/);
   assert.equal(m.read("C:\\BOTDATA\\CHATS\\" + you.cookies().split("=")[1] + ".TXT").trim(), "");
 });
 
 await test("the newest answer types itself out in Voyager", async () => {
-  const r = ok(await you.post("/bot/index.asp", { say: "build me a website about dogs", temp: "0" }));
+  const r = ok(await you.post("/index.asp", { say: "build me a website about dogs", temp: "0" }));
   assert.match(r.body, /<body [^>]*onload="Type_It"/);
   const p = await page(r.body);
   assert.match(p.el("answer").Text, /^Certainly! Here is a complete, production-ready website about dogs:\n\nimport website\n/);
@@ -113,16 +113,16 @@ await test("the newest answer types itself out in Voyager", async () => {
 
 await test("other visitors have their own conversations", async () => {
   const other = browser(m);
-  ok(await other.get("/bot/"));
+  ok(await other.get("/"));
   assert.notEqual(other.cookies(), you.cookies());
   assert.match(await chat(other, "hello"), /^Hello! I am ELIZA-95/, "does not know Dana");
-  for (const bad of ["../X", "ZZZZZZZZ", "1234"]) assert.equal((await m.request("GET", "/bot/", { cookies: "eliza95=" + bad })).status, "200 OK");
+  for (const bad of ["../X", "ZZZZZZZZ", "1234"]) assert.equal((await m.request("GET", "/", { cookies: "eliza95=" + bad })).status, "200 OK");
 });
 
 await test("a long conversation of long messages still fits in a message", async () => {
   const b = browser(m);
-  for (let i = 0; i < 25; i++) await b.post("/bot/index.asp", { say: i % 2 ? "<".repeat(500) : "build me a website about " + "<".repeat(400), temp: "0" });
-  const r = ok(await b.get("/bot/"));
+  for (let i = 0; i < 25; i++) await b.post("/index.asp", { say: i % 2 ? "<".repeat(500) : "build me a website about " + "<".repeat(400), temp: "0" });
+  const r = ok(await b.get("/"));
   assert.ok(r.raw.length < MESSAGE_LIMIT - 8000, r.raw.length);
 });
 

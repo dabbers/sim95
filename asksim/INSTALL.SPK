@@ -2,19 +2,20 @@
 ' edit the files in asksim/ and rebuild rather than editing this.
 '
 ' Save this as C:\MYFILES\INSTALL.SPK in SPARK and press F5. It puts the
-' search pages in C:\WEB\ASK and the crawler in C:\PROGRAMS\CRAWLER.SPK, starts
+' search pages in C:\WEB as this machine's home page (the stock INDEX.HTM moves
+' to WELCOME.HTM) and the crawler in C:\PROGRAMS\CRAWLER.SPK, starts
 ' the crawler (it goes round the network straight away, then every hour), and
 ' adds it to C:\SYSTEM\STARTUP. The index in C:\ASKDATA is kept, so running
-' this again upgrades AskSim. Then open http://YOURNAME/ask/ in Voyager.
+' this again upgrades AskSim. Then open http://YOURNAME/ in Voyager.
 
 VAR t AS String
 VAR NL AS String
 
 SUB Main ()
     NL = Chr(10)
-    IF NOT FS.Exists("C:\WEB\ASK") THEN FS.MakeDir("C:\WEB\ASK")
 
 
+    MoveHomePage()
     File0()
     File1()
     File2()
@@ -23,7 +24,7 @@ SUB Main ()
     File5()
     Print("AskSim is installed (6 files).")
     StartService("CRAWLER", "C:\PROGRAMS\CRAWLER.SPK", "ASKSIM.RUN")
-    Print("Open http://" + NET.HostName.Lower() + "/ask/ in Voyager.")
+    Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
 
 SUB Put (path AS String)
@@ -71,12 +72,12 @@ SUB File0 ()
     t = t + "<p><font size=""1"" color=""#808080"">Simms is a polite robot: he reads /robots.txt, and stays out of any" + NL
     t = t + "path it lists after ""Disallow:"".</font></p>" + NL
     t = t + "<%= Bottom() %>" + NL
-    Put("C:\WEB\ASK\ADDURL.ASP")
+    Put("C:\WEB\ADDURL.ASP")
 END SUB
 
 SUB File1 ()
     t = ""
-    t = t + "' ASK.SPK - AskSim's search, shared by the pages in C:\WEB\ASK. The index is" + NL
+    t = t + "' ASK.SPK - AskSim's search, shared by its pages, which are this machine's home page (C:\WEB). The index is" + NL
     t = t + "' built by the crawler (C:\PROGRAMS\CRAWLER.SPK); these pages only read it." + NL
     t = t + "'" + NL
     t = t + "'   C:\ASKDATA\DOCS.TXT       id|url|title|crawled|state|since   (state ok or gone)" + NL
@@ -307,7 +308,7 @@ SUB File1 ()
     t = t + "    RETURN ""<hr><center><font size=""""1"""" color=""""#808080"""">AskSim on "" + H(NET.HostName.Lower()) + "" &middot; "" + H(Stats()) _" + NL
     t = t + "         + "" &middot; <a href=""""addurl.asp"""">Add your site</a></font></center></body></html>""" + NL
     t = t + "END FUNCTION" + NL
-    Put("C:\WEB\ASK\ASK.SPK")
+    Put("C:\WEB\ASK.SPK")
 END SUB
 
 SUB File2 ()
@@ -332,7 +333,7 @@ SUB File2 ()
     t = t + "<% END IF %>" + NL
     t = t + "</font></td></tr></table>" + NL
     t = t + "<%= ReadOr(DATADIR + ""\CACHE\"" + id + "".HTM"", ""<p>Simms has misplaced his copy of this page. Most embarrassing.</p>"") %>" + NL
-    Put("C:\WEB\ASK\CACHE.ASP")
+    Put("C:\WEB\CACHE.ASP")
 END SUB
 
 SUB File3 ()
@@ -435,7 +436,7 @@ SUB File3 ()
     t = t + "<% END IF %>" + NL
     t = t + "<% END IF %>" + NL
     t = t + "<%= Bottom() %>" + NL
-    Put("C:\WEB\ASK\INDEX.ASP")
+    Put("C:\WEB\INDEX.ASP")
 END SUB
 
 SUB File4 ()
@@ -497,7 +498,7 @@ SUB File4 ()
     t = t + "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" + NL
     t = t + "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" + NL
     t = t + "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" + NL
-    Put("C:\WEB\ASK\SIMMS.PIC")
+    Put("C:\WEB\SIMMS.PIC")
 END SUB
 
 SUB File5 ()
@@ -781,7 +782,7 @@ SUB File5 ()
     t = t + "    TRY" + NL
     t = t + "        conn = web.Connect(HostOf(url), PortOf(url))" + NL
     t = t + "        conn.Tag = Str(fNumber)" + NL
-    t = t + "        conn.Send(""GET "" + PathOf(url) + "" HTTP/1.0"" + NL + ""Host: "" + HostOf(url) + NL + ""User-Agent: AskSim/1.0 (http://"" + NET.HostName.Lower() + ""/ask/)"")" + NL
+    t = t + "        conn.Send(""GET "" + PathOf(url) + "" HTTP/1.0"" + NL + ""Host: "" + HostOf(url) + NL + ""User-Agent: AskSim/1.0 (http://"" + NET.HostName.Lower() + ""/)"")" + NL
     t = t + "    CATCH err" + NL
     t = t + "        fError = err" + NL
     t = t + "        fDone = TRUE" + NL
@@ -1273,4 +1274,21 @@ SUB StartService (name AS String, program AS String, runFile AS String)
     NEXT
     SYS.Run(program)
     Print("  started " + program)
+END SUB
+
+' HTTPD.SPK serves INDEX.ASP for a folder only when it has no INDEX.HTM, so the
+' stock home page steps aside (to the first free name) instead of being deleted.
+SUB MoveHomePage ()
+    VAR names AS Array OF String
+    VAR name AS String
+    IF NOT FS.Exists("C:\WEB\INDEX.HTM") THEN RETURN
+    names = ["WELCOME.HTM", "INDEX1.HTM", "INDEX2.HTM", "INDEX3.HTM", "INDEX4.HTM", "INDEX5.HTM", "INDEX6.HTM", "INDEX7.HTM", "INDEX8.HTM", "INDEX9.HTM"]
+    FOR EACH name IN names
+        IF NOT FS.Exists("C:\WEB\" + name) THEN
+            FS.Rename("C:\WEB\INDEX.HTM", "C:\WEB\" + name)
+            Print("  moved the old home page to C:\WEB\" + name)
+            RETURN
+        END IF
+    NEXT
+    THROW "C:\WEB\INDEX.HTM is in the way and there is nowhere to move it. Rename it yourself and run this again."
 END SUB

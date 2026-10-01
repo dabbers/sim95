@@ -65,46 +65,49 @@ const apps = {
   coldmail: {
     title: "ColdMail",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
-' webmail in C:\\WEB\\MAIL and the mail server in C:\\PROGRAMS\\MAILD.SPK, starts
+' webmail in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
+' WELCOME.HTM) and the mail server in C:\\PROGRAMS\\MAILD.SPK, starts
 ' the server, and adds it to C:\\SYSTEM\\STARTUP so it runs whenever the machine
 ' does. Mailboxes in C:\\MAILDATA are left alone, so running it again upgrades
-' ColdMail without losing any mail. Then open http://YOURNAME/mail/ in Voyager.`,
-    copy: [["coldmail/WEB/MAIL", "C:\\WEB\\MAIL"], ["coldmail/PROGRAMS", "C:\\PROGRAMS"]],
-    dirs: ["C:\\WEB\\MAIL"],
+' ColdMail without losing any mail. Then open http://YOURNAME/ in Voyager.`,
+    copy: [["coldmail/WEB", "C:\\WEB"], ["coldmail/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
     // Numbered copies of every file, served as plain text, for GETMAIL.SPK
     // (see coldmail/WEB/MAIL/GETMAIL.TXT) to fetch one at a time.
-    dist: "C:\\WEB\\MAIL\\DIST",
-    first: [],
+    dist: "C:\\WEB\\DIST",
+    first: ["MoveHomePage()"],
     last: [`StartService("MAILD", "C:\\PROGRAMS\\MAILD.SPK", "MAIL.RUN")`],
-    url: "/mail/",
-    code: () => startService,
+    url: "/",
+    code: () => startService + moveHomePage,
   },
   asksim: {
     title: "AskSim",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
-' search pages in C:\\WEB\\ASK and the crawler in C:\\PROGRAMS\\CRAWLER.SPK, starts
+' search pages in C:\\WEB as this machine's home page (the stock INDEX.HTM moves
+' to WELCOME.HTM) and the crawler in C:\\PROGRAMS\\CRAWLER.SPK, starts
 ' the crawler (it goes round the network straight away, then every hour), and
 ' adds it to C:\\SYSTEM\\STARTUP. The index in C:\\ASKDATA is kept, so running
-' this again upgrades AskSim. Then open http://YOURNAME/ask/ in Voyager.`,
-    copy: [["asksim/WEB/ASK", "C:\\WEB\\ASK"], ["asksim/PROGRAMS", "C:\\PROGRAMS"]],
-    dirs: ["C:\\WEB\\ASK"],
-    first: [],
+' this again upgrades AskSim. Then open http://YOURNAME/ in Voyager.`,
+    copy: [["asksim/WEB", "C:\\WEB"], ["asksim/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
+    first: ["MoveHomePage()"],
     last: [`StartService("CRAWLER", "C:\\PROGRAMS\\CRAWLER.SPK", "ASKSIM.RUN")`],
-    url: "/ask/",
-    code: () => startService,
+    url: "/",
+    code: () => startService + moveHomePage,
   },
   eliza: {
     title: "ELIZA-95",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95
-' in C:\\WEB\\BOT. Conversations live in C:\\BOTDATA. If AskSim is installed on
-' this machine too, ELIZA-95 answers "what is ...?" from its index. Then open
-' http://YOURNAME/bot/ in Voyager.`,
-    copy: [["eliza/WEB/BOT", "C:\\WEB\\BOT"]],
-    dirs: ["C:\\WEB\\BOT"],
-    first: [],
+' in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
+' WELCOME.HTM). Conversations live in C:\\BOTDATA. If this machine also has an
+' AskSim index in C:\\ASKDATA, ELIZA-95 answers "what is ...?" from it. Then open
+' http://YOURNAME/ in Voyager.`,
+    copy: [["eliza/WEB", "C:\\WEB"]],
+    dirs: [],
+    first: ["MoveHomePage()"],
     last: [],
-    url: "/bot/",
-    code: () => "",
+    url: "/",
+    code: () => moveHomePage,
   },
 };
 

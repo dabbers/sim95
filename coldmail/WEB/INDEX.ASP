@@ -27,7 +27,7 @@ any SIM95 machine that runs a mail server. Read your mail from any Voyager, anyw
 <table width="100%" cellpadding="8"><tr><td bgcolor="#EEF4FF"><font size="2">
 <b>Want your own mail server?</b> Every SIM95 machine can run one.
 <a href="host.asp"><b>Host ColdMail on your machine</b></a>: one small program copies it over
-from here, starts it, and gives you <tt>http://yourmachine/mail/</tt>.<br><br>
+from here, starts it, and gives you <tt>http://yourmachine/</tt>.<br><br>
 Mail server on <%= H(NET.HostName.Lower()) %>:
 <% IF ServerAlive() THEN %><font color="#008000"><b>running</b></font><% ELSE %><font color="#990000"><b>not running</b></font><% END IF %>
 </font></td></tr></table>

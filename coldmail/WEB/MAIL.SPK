@@ -1,4 +1,4 @@
-' MAIL.SPK - ColdMail webmail, shared by every page in C:\WEB\MAIL.
+' MAIL.SPK - ColdMail webmail, shared by its pages, which are this machine's home page (C:\WEB).
 '
 ' The pages cannot open network connections, so they never talk to another
 ' machine themselves. Sending leaves a letter in C:\MAILDATA\SPOOL for the mail

@@ -12,9 +12,11 @@ to you from MAILER-DAEMON.
 1. In SIM95 open **Start > Programs > SPARK**, paste in the whole of
    [`INSTALL.SPK`](INSTALL.SPK), save it as `C:\MYFILES\INSTALL.SPK`, and press
    **F5**.
-2. Open `http://YOURNAME/mail/` in Voyager and sign up.
+2. Open `http://YOURNAME/` in Voyager and sign up.
 
-The installer puts the webmail in `C:\WEB\MAIL` and the mail server in
+The installer makes the webmail this machine's home page: its pages go
+into `C:\WEB`, and the stock `INDEX.HTM` moves aside to `WELCOME.HTM`. It puts
+the mail server in
 `C:\PROGRAMS\MAILD.SPK`. It starts the server and adds `C:\SYSTEM\STARTUP\MAIL.RUN`
 so the server runs whenever the machine does. Running it again upgrades
 ColdMail and restarts the server; mailboxes are kept. Each machine that should
@@ -26,14 +28,14 @@ machine means this one.
 
 ## Hosting your own: GETMAIL.SPK
 
-The front page (`/mail/`) offers **Host ColdMail on your machine**
+The front page (`/`) offers **Host ColdMail on your machine**
 (`host.asp`). It hands out a small program, `GETMAIL.SPK`, with the machine
 you got it from filled in. Paste it into SPARK on your machine and press F5.
 It fetches ColdMail over the web one file at a time (the full installer is
 too big for one 64K page), installs it, starts your mail server, adds it to
-startup, and tells you to open `http://yourmachine/mail/`.
+startup, and tells you to open `http://yourmachine/`.
 
-Your machine also keeps the copies in `C:\WEB\MAIL\DIST`, so the next person
+Your machine also keeps the copies in `C:\WEB\DIST`, so the next person
 can get ColdMail from you the same way. That's how shareware spread in 1996.
 The installer writes those copies too: `DIST\<n>.TXT` plus a `MANIFEST.TXT`
 of `n|where it goes`.
@@ -41,7 +43,7 @@ of `n|where it goes`.
 ## How it works
 
 ```
- Voyager ──► C:\WEB\MAIL\*.ASP ──► C:\MAILDATA\SPOOL\<n>.MSG
+ Voyager ──► C:\WEB\*.ASP ──► C:\MAILDATA\SPOOL\<n>.MSG
                                          │  every 2 seconds
                                          ▼
                         C:\PROGRAMS\MAILD.SPK ──port 25──► MAILD.SPK on their machine
@@ -87,7 +89,7 @@ sender that has already hung up.
 | Page | |
 |---|---|
 | `index.asp` | Sign in, sign up, or go host your own |
-| `host.asp` | Hands out `GETMAIL.SPK`; sends you on to your own `/mail/` |
+| `host.asp` | Hands out `GETMAIL.SPK`; sends you on to your own `/` |
 | `inbox.asp?f=inbox\|sent` | A folder, newest first; unread letters in bold; tick and delete |
 | `read.asp?f=&n=` | One letter; opening it marks it read. Reply, Forward, Delete |
 | `compose.asp` | Write a letter (`?reply=N`, `?fwd=N` start from one, quoted) |

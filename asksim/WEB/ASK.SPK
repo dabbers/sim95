@@ -1,4 +1,4 @@
-' ASK.SPK - AskSim's search, shared by the pages in C:\WEB\ASK. The index is
+' ASK.SPK - AskSim's search, shared by its pages, which are this machine's home page (C:\WEB). The index is
 ' built by the crawler (C:\PROGRAMS\CRAWLER.SPK); these pages only read it.
 '
 '   C:\ASKDATA\DOCS.TXT       id|url|title|crawled|state|since   (state ok or gone)

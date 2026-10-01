@@ -56,7 +56,7 @@ const docs = () => alpha.read("C:\\ASKDATA\\DOCS.TXT").trim().split("\n");
 const doc = (url) => docs().find((l) => l.split("|")[1] === url);
 const asked = (m) => m.widgets(webOf[m.stack.hostname()], "ListBox")[0].get("Items").join("\n");
 const visitor = browser(alpha);
-const ask = async (q) => ok(await visitor.get("/ask/index.asp?q=" + encodeURIComponent(q)));
+const ask = async (q) => ok(await visitor.get("/index.asp?q=" + encodeURIComponent(q)));
 
 await test("the installer puts AskSim in place and the crawler goes round the network", async () => {
   alpha.write("C:\\MYFILES\\INSTALL.SPK", fs.readFileSync(path.join(root, "asksim/INSTALL.SPK"), "utf8"));
@@ -108,19 +108,19 @@ await test("all the words beat some of them; site: keeps to one machine", async 
 });
 
 await test("Just take me there goes to the best answer", async () => {
-  const r = await alpha.request("GET", "/ask/index.asp?q=chess&go=1");
+  const r = await alpha.request("GET", "/index.asp?q=chess&go=1");
   assert.equal(r.status, "302 Found");
   assert.ok(r.headers.includes("Location: http://charlie/club.htm"));
 });
 
 await test("the cached copy points back at the real site", async () => {
   const id = doc("http://charlie/club.htm").split("|")[0];
-  const r = ok(await visitor.get(`/ask/cache.asp?id=${id}`));
+  const r = ok(await visitor.get(`/cache.asp?id=${id}`));
   assert.match(r.body, /AskSim<\/b><\/a>'s copy of <a href="http:\/\/charlie\/club.htm">/);
   assert.match(r.body, /The real page may have changed since/);
   assert.match(r.body, /<img src="http:\/\/charlie\/board.pic">/);
   assert.match(r.body, /<a href="http:\/\/charlie\/">Charlie's home page/);
-  for (const bad of ["..\\..\\SYSTEM\\USERS", "999", "1.2"]) assert.equal((await alpha.request("GET", "/ask/cache.asp?id=" + encodeURIComponent(bad))).status, "302 Found", bad);
+  for (const bad of ["..\\..\\SYSTEM\\USERS", "999", "1.2"]) assert.equal((await alpha.request("GET", "/cache.asp?id=" + encodeURIComponent(bad))).status, "302 Found", bad);
 });
 
 await test("a machine that goes away stays findable, marked, with its cached copy", async () => {
@@ -133,17 +133,17 @@ await test("a machine that goes away stays findable, marked, with its cached cop
   let r = await ask("chess club");
   assert.match(r.body, /Charlie's Chess Club/);
   assert.match(r.body, /not answering since \d{4}-\d\d-\d\d/);
-  r = ok(await visitor.get(`/ask/cache.asp?id=${doc("http://charlie/club.htm").split("|")[0]}`));
+  r = ok(await visitor.get(`/cache.asp?id=${doc("http://charlie/club.htm").split("|")[0]}`));
   assert.match(r.body, /The real page has not answered since/);
   assert.match(r.body, /Bring your own chess board/);
 });
 
 await test("a submitted site is visited on the next crawl", async () => {
-  let r = ok(await visitor.post("/ask/addurl.asp", { url: "bravo/orphan.htm" }));
+  let r = ok(await visitor.post("/addurl.asp", { url: "bravo/orphan.htm" }));
   assert.match(r.body, /Simms will call on http:\/\/bravo\/orphan.htm/);
-  r = ok(await visitor.post("/ask/addurl.asp", { url: "http://bravo/orphan.htm" }));
+  r = ok(await visitor.post("/addurl.asp", { url: "http://bravo/orphan.htm" }));
   assert.match(r.body, /already has/);
-  r = ok(await visitor.post("/ask/addurl.asp", { url: "not a url at all" }));
+  r = ok(await visitor.post("/addurl.asp", { url: "not a url at all" }));
   assert.match(r.body, /doesn't look like an address/);
   const before = stats();
   alpha.button(crawlerPid(), "Crawl Now").call("Click");
@@ -152,7 +152,7 @@ await test("a submitted site is visited on the next crawl", async () => {
 });
 
 await test("the front page, and a results page full of answers, fit in a message", async () => {
-  let r = ok(await visitor.get("/ask/"));
+  let r = ok(await visitor.get("/"));
   assert.match(r.body, /Just ask Simms/);
   assert.match(r.body, /Simms knows \d+ pages on 3 machines/, [...new Set(docs().map((l) => l.split("|")[1].split("/")[2]))].join(", "));
   r = await ask("chess cooking pancakes knight bishop club hobby welcome");

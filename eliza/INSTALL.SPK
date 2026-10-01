@@ -2,23 +2,24 @@
 ' edit the files in eliza/ and rebuild rather than editing this.
 '
 ' Save this as C:\MYFILES\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95
-' in C:\WEB\BOT. Conversations live in C:\BOTDATA. If AskSim is installed on
-' this machine too, ELIZA-95 answers "what is ...?" from its index. Then open
-' http://YOURNAME/bot/ in Voyager.
+' in C:\WEB as this machine's home page (the stock INDEX.HTM moves to
+' WELCOME.HTM). Conversations live in C:\BOTDATA. If this machine also has an
+' AskSim index in C:\ASKDATA, ELIZA-95 answers "what is ...?" from it. Then open
+' http://YOURNAME/ in Voyager.
 
 VAR t AS String
 VAR NL AS String
 
 SUB Main ()
     NL = Chr(10)
-    IF NOT FS.Exists("C:\WEB\BOT") THEN FS.MakeDir("C:\WEB\BOT")
 
 
+    MoveHomePage()
     File0()
     File1()
     Print("ELIZA-95 is installed (2 files).")
 
-    Print("Open http://" + NET.HostName.Lower() + "/bot/ in Voyager.")
+    Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
 END SUB
 
 SUB Put (path AS String)
@@ -774,7 +775,7 @@ SUB File0 ()
     t = t + "         + ""END SUB"" + Chr(10) _" + NL
     t = t + "         + ""</script>""" + NL
     t = t + "END FUNCTION" + NL
-    Put("C:\WEB\BOT\BOT.SPK")
+    Put("C:\WEB\BOT.SPK")
 END SUB
 
 SUB File1 ()
@@ -877,5 +878,22 @@ SUB File1 ()
     t = t + "Temperature 0 is predictable; 1.5 is creative, in the sense that it makes things up.</font></center>" + NL
     t = t + "<% IF last <> """" THEN %><%= TypeScript(last) %><% END IF %>" + NL
     t = t + "</body></html>" + NL
-    Put("C:\WEB\BOT\INDEX.ASP")
+    Put("C:\WEB\INDEX.ASP")
+END SUB
+
+' HTTPD.SPK serves INDEX.ASP for a folder only when it has no INDEX.HTM, so the
+' stock home page steps aside (to the first free name) instead of being deleted.
+SUB MoveHomePage ()
+    VAR names AS Array OF String
+    VAR name AS String
+    IF NOT FS.Exists("C:\WEB\INDEX.HTM") THEN RETURN
+    names = ["WELCOME.HTM", "INDEX1.HTM", "INDEX2.HTM", "INDEX3.HTM", "INDEX4.HTM", "INDEX5.HTM", "INDEX6.HTM", "INDEX7.HTM", "INDEX8.HTM", "INDEX9.HTM"]
+    FOR EACH name IN names
+        IF NOT FS.Exists("C:\WEB\" + name) THEN
+            FS.Rename("C:\WEB\INDEX.HTM", "C:\WEB\" + name)
+            Print("  moved the old home page to C:\WEB\" + name)
+            RETURN
+        END IF
+    NEXT
+    THROW "C:\WEB\INDEX.HTM is in the way and there is nowhere to move it. Rename it yourself and run this again."
 END SUB

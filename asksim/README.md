@@ -12,10 +12,12 @@ pages answer plain-English questions from it.
 1. In SIM95 open **Start > Programs > SPARK**, paste in the whole of
    [`INSTALL.SPK`](INSTALL.SPK), save it as `C:\MYFILES\INSTALL.SPK`, and press
    **F5**.
-2. Open `http://YOURNAME/ask/` in Voyager. The first crawl starts within a few
+2. Open `http://YOURNAME/` in Voyager. The first crawl starts within a few
    seconds.
 
-The installer puts the search pages in `C:\WEB\ASK` and the crawler in
+The installer makes AskSim this machine's home page: its pages go into
+`C:\WEB`, and the stock `INDEX.HTM` moves aside to `WELCOME.HTM`. It puts the
+crawler in
 `C:\PROGRAMS\CRAWLER.SPK`, starts it, and adds `C:\SYSTEM\STARTUP\ASKSIM.RUN`.
 The crawler goes round the network when it starts and every hour after. Its
 window has a **Crawl Now** button and a log of what it found.

@@ -7,7 +7,7 @@ VAR there AS String
 viewer = CurrentUser()
 there = REQUEST.Query("go").Trim().Lower()
 IF there <> "" THEN
-    IF OnlyFrom(there, "abcdefghijklmnopqrstuvwxyz0123456789.-") AND there.Length <= 40 THEN RESPONSE.Redirect("http://" + there + "/mail/")
+    IF OnlyFrom(there, "abcdefghijklmnopqrstuvwxyz0123456789.-") AND there.Length <= 40 THEN RESPONSE.Redirect("http://" + there + "/")
 END IF
 %>
 <%= Top("Host ColdMail") %>
@@ -21,9 +21,9 @@ addresses like <b>you@yourmachine</b>, keep its own mailboxes, and trade letters
 <li>Copy the program below into it, save it as <tt>C:\MYFILES\GETMAIL.SPK</tt>, and press <b>F5</b>.</li>
 <li>It copies ColdMail from <b><%= H(NET.HostName.Lower()) %></b> file by file, starts your mail
 server, and sets it to start whenever your machine does.</li>
-<li>Then open your own webmail at <tt>http://yourmachine/mail/</tt>.</li>
+<li>Then open your own webmail at <tt>http://yourmachine/</tt>.</li>
 </font></ol>
-<form><textarea rows="14" cols="76" readonly><%= H(ReadOr(SERVER.MapPath("/mail/getmail.txt"), "").Replace("%HOST%", NET.HostName.Lower())) %></textarea></form>
+<form><textarea rows="14" cols="76" readonly><%= H(ReadOr(SERVER.MapPath("/getmail.txt"), "").Replace("%HOST%", NET.HostName.Lower())) %></textarea></form>
 <%= BoxTop("Already running it?") %>
 <form action="host.asp" method="get">
 <p><font size="2">Your machine's name:</font> <input name="go" size="30" maxlength="40">

@@ -9,8 +9,10 @@ habit people now expect from a large language model.
 ## Install
 
 Paste [`INSTALL.SPK`](INSTALL.SPK) into SPARK, save it, press **F5**, and open
-`http://YOURNAME/bot/`. If [AskSim](../asksim/) is installed on the same
-machine, ELIZA-95 uses its index to answer questions.
+`http://YOURNAME/`. ELIZA-95 becomes the machine's home page; the stock
+`INDEX.HTM` moves aside to `WELCOME.HTM`. If the machine also holds an AskSim
+index in `C:\ASKDATA` (left behind by the AskSim crawler), ELIZA-95 uses it to
+answer questions.
 
 ## What it does
 

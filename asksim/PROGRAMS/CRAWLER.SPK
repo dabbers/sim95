@@ -277,7 +277,7 @@ SUB StartFetch (url AS String)
     TRY
         conn = web.Connect(HostOf(url), PortOf(url))
         conn.Tag = Str(fNumber)
-        conn.Send("GET " + PathOf(url) + " HTTP/1.0" + NL + "Host: " + HostOf(url) + NL + "User-Agent: AskSim/1.0 (http://" + NET.HostName.Lower() + "/ask/)")
+        conn.Send("GET " + PathOf(url) + " HTTP/1.0" + NL + "Host: " + HostOf(url) + NL + "User-Agent: AskSim/1.0 (http://" + NET.HostName.Lower() + "/)")
     CATCH err
         fError = err
         fDone = TRUE

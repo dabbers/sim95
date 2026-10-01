@@ -13,3 +13,8 @@ A series of programs for the sim95 playground
   programs and `.ASP` pages from Node, including several machines on a
   pretend network running real programs.
 * `Sparks-language.txt` – the SPARK language reference.
+* [`SIM95-NOTES.md`](SIM95-NOTES.md) – platform limits and a kernel bug worth
+  knowing about.
+
+Each app installs as its machine's home page: one machine per app. Paste the
+app's `INSTALL.SPK` into SPARK and press F5.

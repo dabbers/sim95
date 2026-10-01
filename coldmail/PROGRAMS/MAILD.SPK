@@ -19,7 +19,7 @@
 '
 ' Mailboxes: C:\MAILDATA\BOX\<user>\<n>.MSG, listed in INBOX.TXT (and SENT.TXT)
 ' as  n|date|from|to|subject|size|flags  - flags holds N while a letter is unread.
-' The webmail (C:\WEB\MAIL\MAIL.SPK) reads and writes the same files.
+' The webmail (C:\WEB\MAIL.SPK) reads and writes the same files.
 '
 ' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>.
 '
