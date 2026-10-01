@@ -166,7 +166,7 @@ export class Network {
     const stack = new S.Stack({ hostname, jitter: () => 1, transport: this.hub.transport() });
     const m = await machine(hostname, stack);
     // SIM95_HTTPD=file: every machine has that web server instead of the stock
-    // one, so a suite can be run again against a replacement (SimDNS's).
+    // one, so a suite can be run again against a replacement (simweb's).
     if (process.env.SIM95_HTTPD) m.write("C:\\PROGRAMS\\HTTPD.SPK", fs.readFileSync(process.env.SIM95_HTTPD, "utf8"));
     const ui = new UI();
     const net = {

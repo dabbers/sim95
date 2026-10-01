@@ -38,3 +38,14 @@ keeps it from a glance and no more.
 
 Tests: `node tools/aspsim/frostbird.test.mjs` runs two ColdMail servers and
 Frostbird on a third machine.
+
+## Domain names
+
+The server is the part of the address after the `@`. For `ann@fun.sim`,
+Frostbird asks the central name server (STARTHERE.56k.net, see
+[simweb](../simweb/)) for fun.sim's MX record (the lowest preference), then
+for the CNAMEs of that machine, a tick each, and collects from the machine it
+names; with no answer, `fun.sim` is a machine name, as before. ColdMail on
+that machine takes mail for fun.sim once its MX points there (see
+[ColdMail](../coldmail/)). The builder joins the resolver onto
+`FROSTBRD.SPK`.

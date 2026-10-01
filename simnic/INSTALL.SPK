@@ -1372,8 +1372,9 @@ SUB File14 ()
     t = t + "' NORECURSE, so two servers can never bounce a question back and forth." + NL
     t = t + "'" + NL
     t = t + "' Zone files and NAMED.CNF are looked at every few seconds and loaded again" + NL
-    t = t + "' when they change (SIM95 has no file times, so the text is compared). The" + NL
-    t = t + "' registrar (/dns/) writes them; so can you, with Notes." + NL
+    t = t + "' when they change (SIM95 has no file times, so the text is compared)." + NL
+    t = t + "' SimNIC, the registrar (/nic/ on STARTHERE.56k.net, the central host, where" + NL
+    t = t + "' this runs), writes them; so can you, with Notes." + NL
     t = t + "'" + NL
     t = t + "' Answers are sent, and the connection is closed a little later by the" + NL
     t = t + "' asker or by us: a close can overtake the last message (SIM95-NOTES.md)." + NL

@@ -18,7 +18,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
 | SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
 | SimStats | `http://HOST/stats/` | `C:\WEB\STATS` |
-| SimDNS (SimNIC) | `http://HOST/dns/` | `C:\WEB\DNS` |
+| SimNIC   | `http://HOST/nic/`   | `C:\WEB\NIC`   |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
 `http://HOST/` becomes a front page that lists them. Each web app's installer leaves an `APP.INF` (name, blurb, colour) in its folder, and the front page lists every folder that has one, so apps added later show up without reinstalling SimHost. Each app keeps its data
@@ -95,12 +95,14 @@ Two things to know after moving:
 * **Simxplorer** sets its search engine to `/ask/` and its Mail button to
   `/mail/` when it finds them in their folders.
 * **Clippy** searches with the AskSim on the machine.
-* **SimDNS** gives the apps names of their own: register a domain at
-  `/dns/` and press *Point these names at the apps*, and `book.yourname.sim`
-  is SimBook, `mail.yourname.sim` ColdMail, and so on, for Simxplorer users
-  with this machine as their name server (see [SimDNS](../simdns/)). Move In
-  doesn't bring `C:\DNS` over: zones point at machine names, and the old
-  machine's would point at a machine that is about to close.
+* **Domain names:** [simweb](../simweb/)'s Personal Web Manager gives the
+  apps names of their own: *Domain Apps* makes `book.yourname.sim` SimBook,
+  `mail.yourname.sim` ColdMail, and so on, or a site such as `coolbook.sim`
+  can be SimBook. The names are registered, and pointed at this machine, at
+  [SimNIC](../simnic/) on STARTHERE.56k.net. (SimNIC itself belongs on that
+  one machine; on STARTHERE it is `/nic/` whether or not it is a SimHost
+  machine.) Move In brings neither names nor `C:\WEB\VHOSTS.TXT` over: point
+  the names at this machine at SimNIC, and add them here.
 * **Vapor** installs web apps into their folders without asking to take the
   home page. **Open** goes to the app's folder, and **Uninstall** removes
   the files from there.

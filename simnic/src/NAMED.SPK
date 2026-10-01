@@ -32,8 +32,9 @@
 ' NORECURSE, so two servers can never bounce a question back and forth.
 '
 ' Zone files and NAMED.CNF are looked at every few seconds and loaded again
-' when they change (SIM95 has no file times, so the text is compared). The
-' registrar (/dns/) writes them; so can you, with Notes.
+' when they change (SIM95 has no file times, so the text is compared).
+' SimNIC, the registrar (/nic/ on STARTHERE.56k.net, the central host, where
+' this runs), writes them; so can you, with Notes.
 '
 ' Answers are sent, and the connection is closed a little later by the
 ' asker or by us: a close can overtake the last message (SIM95-NOTES.md).

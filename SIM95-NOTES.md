@@ -151,7 +151,23 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
 * **`ASP.Render` reads everything from the request text it is given:** the
   request line becomes `REQUEST.Path` and `QueryString`, and the headers
   `REQUEST.Host` and `REQUEST.Header`. So a web server can change the request
-  before handing it over, which is how SimDNS's `HTTPD.SPK` shows a page at
+  before handing it over, which is how simweb's `HTTPD.SPK` shows a page at
   `/www.coolsite.sim/page.asp` the path `/page.asp`.
 * **`<%= ... %>` writes text as it is**, not HTML-encoded: use
   `SERVER.HtmlEncode` for anything a visitor typed.
+
+## SPARK details (found for simweb)
+
+* **`onDraw`'s handler takes a `GUI_Canvas`.** The reference writes
+  `onDraw(canvas AS Any)`, but `Any` is not a type a program can write:
+  `SUB Side_OnDraw (canvas AS Any)` stops the compile with *Unknown type
+  'Any'*. `SUB Side_OnDraw (canvas AS GUI_Canvas)` works.
+* **`Handler` is a type for parameters too.** `FUNCTION SideButton (text AS
+  String, y AS Integer, h AS Handler) AS GUI_Button` can set
+  `b.onClick = h`, and is called with a SUB's name. And `x = NOTHING` empties
+  an object variable, so `IsNothing(x)` is TRUE again (a closed dialog).
+* **A timer tick can come between a key and its handler.** Enter in a text
+  box queues `onEnter`; a tick that runs first and sets the box's `Text`
+  (to clear it, say) leaves the handler reading what the tick wrote. Don't
+  reset an input box from a tick that repeats; do it once, and remember that
+  it was done. (The Sim Shell's password prompt did this, now and then.)

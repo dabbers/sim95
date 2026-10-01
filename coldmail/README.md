@@ -163,3 +163,19 @@ node tools/aspsim/coldmail.test.mjs       # run the tests
 The tests boot two machines on a pretend network (`tools/aspsim/network.mjs`).
 They run the real SIM95 kernel, network stack and SPARK runtime, install
 ColdMail on each by running `INSTALL.SPK`, and send mail between them.
+
+## Domain names
+
+Mail for `ann@fun.sim` goes where fun.sim's MX record says (the lowest
+preference), or failing that to fun.sim's own machine (its CNAME), or failing
+that to a machine called `fun.sim`, as before; the spool and its retries are
+the same. MAILD asks the central name server (STARTHERE.56k.net, see
+[simweb](../simweb/)), one question a tick; the builder joins the resolver
+onto `MAILD.SPK`.
+
+To get mail at your own domain, point its MX at your machine in SimNIC's
+Advanced DNS (`@ MX 10 alpha`). MAILD then takes `ann@fun.sim` for the
+mailbox `ann`: the first time a domain comes up it answers *451 Looking up
+fun.sim; try again shortly*, looks it up, and takes the letter when the
+sending server tries again. A domain listed in `C:\MAILDATA\DOMAINS.TXT`
+(one a line) is taken at once, MX or not. GETMAIL still goes by machine name.

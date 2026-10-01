@@ -1,12 +1,17 @@
-# SimDNS
+# SimNIC
 
 Domain names for the SIM95 network. Get `www.coolsite.sim` and point it at
 your machine, the way everybody was doing in 1996.
 
+There is **one** SimNIC, on the central host, **STARTHERE.56k.net** (SIM95
+finds it as plain `STARTHERE` too). It is the registrar, a 1996 InterNIC,
+and the name server every machine on the network asks about names, with no
+setting anywhere. Nobody else runs one.
+
 Every SIM95 machine has exactly one name on the network, and nothing can give
 it another (see [SIM95-NOTES](../SIM95-NOTES.md)). Its address changes every
-time it starts. So SimDNS doesn't hand out addresses. It keeps names that
-point at **machine names**, with CNAME records:
+time it starts. So SimNIC doesn't hand out addresses. It points names at
+**machine names**, with CNAME records:
 
 ```
 www.coolsite.sim.   300   IN   CNAME   alpha
@@ -14,66 +19,102 @@ www.coolsite.sim.   300   IN   CNAME   alpha
 
 and whoever asks then finds ALPHA the ordinary SIM95 way.
 
-It comes in five parts:
+## Who installs what
 
-| Part | File | What it is |
-|------|------|------------|
-| The name server | `C:\PROGRAMS\NAMED.SPK` | BIND's `named`, more or less: answers questions about the zones in `C:\DNS` on port 53. |
-| The resolver | `C:\PROGRAMS\RESOLVE.SPK` | A library that asks the name server set in `C:\SYSTEM\RESOLV.INI`. Simxplorer and DIG have it built in. |
-| DIG | `C:\PROGRAMS\DIG.SPK` | Ask a name server about a name, from the Terminal or the Sim Shell. |
-| The web server | `C:\PROGRAMS\HTTPD.SPK` | The stock one, plus virtual hosts: many sites on one machine, by name or by path. |
-| SimNIC | `C:\WEB` (or `C:\WEB\DNS`) | The registrar, a 1996 InterNIC: sign up, register `coolsite.sim`, edit its records, Host it here. |
+| Where | What | Why |
+|-------|------|-----|
+| STARTHERE.56k.net, once | **SimNIC** (this): `NAMED.SPK` and the registrar at `/nic/` | The network's one registrar and name server. |
+| Every machine with a web site | **[simweb](../simweb/)**, from any Vapor store | Its web server serves sites by name; Personal Web Manager says which pages each name gets. |
+| Everybody else | nothing | Simxplorer, Vapor, Frostbird, ColdMail, the Sim Shell and AskSim all ask STARTHERE already. |
 
-## Installing
+A site at a name needs **two things, in two places**:
 
-Paste [`INSTALL.SPK`](INSTALL.SPK) into SPARK on the machine that will be the
-name server, save it as `C:\MYFILES\INSTALL.SPK` and press **F5**. It:
+1. **Here, at SimNIC:** the name points to your machine.
+2. **On your machine, in Personal Web Manager:** the name gets your pages
+   (or one of your apps).
+
+## Getting a name, step by step
+
+ALPHA has the pages; BRAVO is somebody browsing.
+
+1. **Register at SimNIC.** Open `http://starthere.56k.net/nic/`, **sign up**,
+   search for `coolsite`, and press **Register coolsite.sim**. (It's free,
+   unless STARTHERE has SimPal: see below.)
+2. **Point the domain at your machine.** The domain's page starts with one
+   box: *coolsite.sim points to machine:* `alpha`, **Save**. SimNIC points
+   `coolsite.sim` and `www.coolsite.sim` at ALPHA. The next domain you
+   register starts with the same machine filled in.
+3. **Add the site on ALPHA.** Install [simweb](../simweb/) from Vapor, open
+   **Personal Web Manager**, **Web Sites, Add...**: `coolsite.sim`, *also
+   www.*, *My own pages*. Your pages go in `C:\WEB\SITES\COOLSITE`; there is
+   an *Under construction* page there to start with. Its DNS column says
+   *✓ points here* once step 2 is done.
+4. **Browse.** On BRAVO, Simxplorer opens `http://coolsite.sim/`: the status
+   bar says *Looking up coolsite.sim...*, then *Connecting to alpha...*.
+   Voyager doesn't know names, but the same site is at
+   `http://alpha/coolsite.sim/` for anybody.
+
+**Advanced DNS**, below the box, is for everything else: more names under
+your domain (`book CNAME alpha`, or `* CNAME alpha` for all of them), mail
+(`@ MX 10 alpha`, to get mail at your domain with [ColdMail](../coldmail/)),
+`TXT` lines, and `A` records (addresses change when a machine restarts, so
+prefer CNAME). Up to 40 records a domain. **WHOIS** says who has a name and
+which machine it points to.
+
+## Installing (on STARTHERE.56k.net)
+
+Paste [`INSTALL.SPK`](INSTALL.SPK) into SPARK on STARTHERE.56k.net, save it
+as `C:\MYFILES\INSTALL.SPK` and press **F5**. It isn't in any Vapor store:
+it is run once, by hand, on the one machine. On any other machine it warns
+*SimNIC is meant to run only on the central host* and asks before going on
+(for testing, say). It:
 
 * writes `C:\DNS\NAMED.CNF` (no zones yet), starts `NAMED.SPK`, and adds
   `C:\SYSTEM\STARTUP\NAMED.RUN` so it starts with the machine;
-* makes SimNIC the home page (the stock `INDEX.HTM` moves to `WELCOME.HTM`),
-  or puts it in `/dns/` on a [SimHost](../simhost/) machine;
-* keeps the stock web server as `C:\PROGRAMS\HTTPD.ORG`, writes the new
-  `HTTPD.SPK`, and restarts the web server (if it was running; if the web
-  server is switched off in Settings it stays off);
-* writes `C:\WEB\VHOSTS.TXT` and `C:\WEB\SITES` for hosted sites, and
-  `C:\SYSTEM\RESOLV.INI` saying this machine is its own name server.
+* puts the registrar in `C:\WEB\NIC`: `http://starthere.56k.net/nic/`, the
+  address every Personal Web Manager gives. On a [SimHost](../simhost/)
+  machine the front page lists it. The home page and the web server are left
+  alone: the stock one serves `/nic/` fine.
 
 Accounts and domains (`C:\NICDATA`) and zones (`C:\DNS`) are left alone, so
-running it again upgrades SimDNS. It's on Vapor's shelves too. **Uninstall**
-there removes it, and within a second the web server notices
-`NAMED.SPK` has gone and puts the stock `HTTPD.ORG` back. (The web server
-itself is left out of the installer's file list, so no Vapor can ever delete
-it.)
+running it again upgrades SimNIC.
 
-## Two machines: setting it up
+To move the network's central host somewhere else, change `CENTRAL` in
+`tools/simxplorer-source.mjs` and rebuild the installers: it is the default
+name server in the resolver every program carries, and the address SimNIC's
+installer and Personal Web Manager give.
 
-ALPHA will be the name server and host the site; BRAVO is somebody browsing.
+## SimNIC, the registrar
 
-1. **On ALPHA**, install SimDNS as above. Open `http://alpha/` (SimNIC).
-2. **Sign up**, search for `coolsite`, and press **Register coolsite.sim**.
-3. On the domain's page press **Host it here**. ALPHA now has a folder for the
-   site (`C:\WEB\SITES\COOLSITE`, with a "Coming soon!" page), the web
-   server serves it for `coolsite.sim` and `www.coolsite.sim`, and both names
-   are CNAMEs to `alpha`. Put your pages in that folder.
-4. **On BRAVO**, tell it where the name server is, either way:
-   * Simxplorer: **View, Options**, *Name server:* `alpha`, OK; or
-   * the Terminal: `DIG SET alpha` (DIG needs SimDNS installed, or copy
-     `C:\PROGRAMS\DIG.SPK` over); or
-   * write `C:\SYSTEM\RESOLV.INI` yourself: `nameserver=alpha`.
+A parody of InterNIC's 1996 Registration Services, at `/nic/`:
 
-   That one file is all a machine needs to look names up. Every program on
-   BRAVO that uses the resolver reads it.
-5. **On BRAVO**, open `http://www.coolsite.sim/` in Simxplorer. The status bar
-   says *Looking up www.coolsite.sim...*, then *Connecting to alpha...*.
-6. Voyager doesn't know name servers, but the same site is at
-   `http://alpha/www.coolsite.sim/` for anybody.
+* **Contacts** (accounts) with salted, hashed passwords, a `simnic` cookie,
+  and form tokens on everything that changes something, as SimBook does.
+* **Search:** `coolsite` is looked up under `.sim`, `.com`, `.net` and `.org`.
+* **Register:** free, unless this machine has SimPal (`C:\PALDATA`,
+  `C:\PROGRAMS\PALCHECK.SPK`, and a SimPal account called `simnic` for the
+  money). Then it's **§70.00 for two years**, like 1996: the name is held for
+  15 minutes while you pay at SimPal, and `paid.asp` checks the receipt with
+  `PALCHECK.SPK` before the name is yours. Ten domains per contact.
+* **Points to machine:** CNAMEs for the domain and its `www` (an empty box
+  points it nowhere). **Advanced DNS:** CNAME, MX, TXT and A records.
+  SimNIC writes `C:\DNS\<DOMAIN>.<TLD>` and its line in `NAMED.CNF`. The name
+  server has the change within 3 seconds.
+* **Hosting is not SimNIC's job.** It never touches `C:\WEB\VHOSTS.TXT` or
+  makes site folders: that is Personal Web Manager's, on each web server.
 
-A third machine with its own SimDNS can answer for a part of your domain
-(`east NS charlie` in your records), or pass every question it can't answer
-to yours (`forwarders alpha` in its `NAMED.CNF`).
+```
+C:\NICDATA\USERS\<user>.TXT     a contact (and machine=, the last machine pointed at)
+C:\NICDATA\SESSIONS\<id>.TXT    a sign-in and its form token
+C:\NICDATA\DOMAINS.TXT          domain|owner|registered|expires|zone file|active (or unpaid)
+C:\NICDATA\ORDERS\<order>.TXT   a registration being paid for
+C:\DNS\NAMED.CNF, C:\DNS\*.*    the zones
+```
 
 ## Zone files
+
+SimNIC writes these for every domain it registers; on STARTHERE they can be
+written by hand too (with Notes), and `NAMED.SPK` reads them all the same.
 
 `C:\DNS\NAMED.CNF` lists the zones, BIND 4 `named.boot` style:
 
@@ -149,168 +190,26 @@ fourth word, `NORECURSE`, means "your own zones only": that is how one SimDNS
 asks another, so two that forward to each other can't pass a question round
 forever.
 
-## The resolver: RESOLVE.SPK and RESOLV.INI
-
-```
-nameserver=alpha
-search=coolsite.sim        (optional: then "www" means www.coolsite.sim)
-```
-
-`RESOLVE.SPK` is a library. Programs have it joined on the end (the builder
-does this for Simxplorer and DIG), and every name in it starts with `Rs`. It
-answers *where do I connect for this name?*:
-
-* A name the name server knows comes back as the machine (or address) at the
-  end of its CNAMEs. Answers are kept for their TTL.
-* Plain machine names (`alpha`), addresses, and names the name server says
-  NXDOMAIN to go to SIM95's own lookup, as they always did.
-* If the name server refuses, or doesn't answer within 2 seconds, it is left
-  alone for 30 seconds, and every name goes to SIM95. Nothing hangs.
-
-To use it in your own program (it must ask from a timer tick, because of the
-kernel bug in [SIM95-NOTES](../SIM95-NOTES.md)):
-
-```
-' in a timer tick, in a TRY with an empty CATCH:
-IF RsBusy() THEN RETURN                ' an answer is on its way
-IF RsWants(host) THEN
-    addr = NET.Resolve(RsNameServer())
-    IF addr = "" THEN
-        RsGiveUp("no such machine")     ' names go to SIM95 for a while
-    ELSE
-        RsAsk(host, addr)               ' a Connect: the last thing
-        RETURN
-    END IF
-END IF
-conn = sock.Connect(RsTarget(host), 80) ' alpha, for www.coolsite.sim
-```
-
-## DIG
-
-```
-DIG www.coolsite.sim               the CNAMEs, and where the machine is
-DIG coolsite.sim MX                (A CNAME MX TXT NS SOA ANY)
-DIG www.coolsite.sim ANY @bravo    ask BRAVO's name server instead
-DIG SET alpha                      make ALPHA this machine's name server
-DIG SET NONE                       machine names only
-```
-
-```
-; <<>> DiG 2.1 for SIM95 (SimDNS) <<>> shop.coolsite.sim A
-;; ->>HEADER<<- status: NOERROR, answers: 2
-
-;; QUESTION SECTION:
-;shop.coolsite.sim.              IN  A
-
-;; ANSWER SECTION:
-shop.coolsite.sim.       300    IN  CNAME  www.coolsite.sim
-www.coolsite.sim.        300    IN  CNAME  alpha
-
-;; alpha is a SIM95 machine name: 65.16.0.3 (asked SIM95, not SimDNS)
-
-;; Query time: 56 msec
-;; SERVER: alpha (65.16.0.3) port 53
-```
-
-## The web server: one machine, many sites
-
-`C:\WEB\VHOSTS.TXT`, one site a line (folders must be in `C:\WEB`):
-
-```
-www.coolsite.sim|C:\WEB\SITES\COOLSITE
-coolsite.sim|C:\WEB\SITES\COOLSITE
-*.dab.sim|C:\WEB\SITES\DAB
-book.dab.sim|C:\WEB\BOOK
-```
-
-A site is reached two ways:
-
-* **By name** (Simxplorer with a name server): the request's `Host:` says
-  `www.coolsite.sim`, and `/page.htm` is that folder's `PAGE.HTM`.
-* **By path** (Voyager, or anybody): `http://alpha/www.coolsite.sim/page.htm`
-  is the same file, and `/www.coolsite.sim` gets its slash added.
-
-Anything else, including the machine's own name, an address, and names not
-listed, is `C:\WEB` exactly as before: ASP pages, `INDEX.ASP` when there's no
-`INDEX.HTM`, POSTs, content types, the log window. It is the stock
-`HTTPD.SPK` with sites added.
-
-**What a server page in a site sees:** `SERVER.ScriptName` is its file on
-disk, and imports are next to it, as always. `REQUEST.Path` is the path
-*inside the site* (`/page.asp`) both ways, so relative links work both ways.
-`REQUEST.Host` is what the browser asked for: `www.coolsite.sim` by name,
-`alpha` by path. Two headers say the rest:
-
-| Header | By name | By path |
-|--------|---------|---------|
-| `X-Site` | `www.coolsite.sim` | `www.coolsite.sim` |
-| `X-Base-Path` | `/` | `/www.coolsite.sim/` |
-
-so a page's own address is `"http://" + REQUEST.Host + REQUEST.Header("X-Base-Path") + "page.asp"`.
-A `RESPONSE.Redirect("/x.asp")` is put back inside the site by path. Links
-starting with `/` can't be, so **in a site, use relative links**. That is what
-every web app here already does, for SimHost's folders.
-
-## SimNIC
-
-`/` (or `/dns/`), a parody of InterNIC's 1996 Registration Services:
-
-* **Contacts** (accounts) with salted, hashed passwords, a `simnic` cookie,
-  and form tokens on everything that changes something, as SimBook does.
-* **Search:** `coolsite` is looked up under `.sim`, `.com`, `.net` and `.org`.
-  **WHOIS** says who has a name.
-* **Register:** free, unless this machine has SimPal (`C:\PALDATA`,
-  `C:\PROGRAMS\PALCHECK.SPK`, and a SimPal account called `simnic` for the
-  money). Then it's **§70.00 for two years**, like 1996: the name is held for
-  15 minutes while you pay at SimPal, and `paid.asp` checks the receipt with
-  `PALCHECK.SPK` before the name is yours. Ten domains per contact.
-* **Records:** a form with CNAME already chosen and this machine's name
-  already filled in. Also A, MX, TXT and NS. Up to 40 records a domain.
-  SimNIC writes `C:\DNS\<DOMAIN>.<TLD>` and its line in `NAMED.CNF`. The name
-  server has the change within 3 seconds.
-* **Host it here:** a folder in `C:\WEB\SITES`, lines in `VHOSTS.TXT` for the
-  domain and its `www`, and CNAMEs to this machine. Both addresses are shown.
-* **On a SimHost machine:** *Point these names at the apps* gives every app
-  a name in your domain: `book.dab.sim` is SimBook (`C:\WEB\BOOK`),
-  `mail.dab.sim` ColdMail, and so on. Simxplorer users then get each app as a
-  separate site, with its own cookies.
-
-```
-C:\NICDATA\USERS\<user>.TXT     a contact
-C:\NICDATA\SESSIONS\<id>.TXT    a sign-in and its form token
-C:\NICDATA\DOMAINS.TXT          domain|owner|registered|expires|zone file|active (or unpaid)
-C:\NICDATA\ORDERS\<order>.TXT   a registration being paid for
-C:\DNS\NAMED.CNF, C:\DNS\*.*    the zones
-C:\WEB\VHOSTS.TXT, C:\WEB\SITES the hosted sites
-```
-
 ## Limits
 
 * One forwarder, one hop: a question passed on is never passed on again.
 * A CNAME whose target is in another server's zone is handed to SIM95 as a
   machine name; to point at a name elsewhere, point at its machine.
-* Voyager can only use path addresses. Two programs on one machine looking
-  up the same machine name at the same moment still meet the SIM95 bug in
-  [SIM95-NOTES](../SIM95-NOTES.md); the resolver itself only connects to
-  addresses.
+* If STARTHERE is down, names don't work anywhere (programs notice within 2
+  seconds and go on with machine names); machine names always work.
 * Move In (SimHost) doesn't bring `C:\DNS` or `C:\NICDATA` over.
 
-Tests: `node tools/aspsim/simdns.test.mjs`. They cover:
+Tests: `node tools/aspsim/simnic.test.mjs`. They cover:
 
 * zones: CNAMEs to machines and chains of them, A, MX, TXT, NS, SOA, ANY,
-  wildcards, NXDOMAIN, loops and bad lines;
-* loading again when files change, forwarding, NS hand-offs and NORECURSE;
-* answers too big for a message;
-* DIG, and the resolver's cache and what it does when the name server is
-  down;
-* Simxplorer on BRAVO opening `www.coolsite.sim` on ALPHA through DNSBOX's
-  name server: relative links, a picture, an XMLHttpRequest and a cookie;
-* path mode through the real web server;
-* every app (SimBook, ColdMail, AskSim's crawler, SimPal, SimTube, SimStats,
-  Vapor) through the new web server on a SimHost machine;
-* SimNIC: signing up, registering, records, Host it here, CSRF, SimPal
-  payment, and SimBook at `book.dab.sim`;
-* uninstalling, which brings the stock web server back.
+  wildcards, NXDOMAIN, loops and bad lines; loading again when files change,
+  forwarding, NS hand-offs and NORECURSE; answers too big for a message;
+* the installer: the warning anywhere but STARTHERE.56k.net, and on it,
+  NAMED running, `/nic/`, and the web server and home page left alone;
+* SimNIC: signing up, registering, the *points to machine* field (and the
+  machine remembered), Advanced DNS, WHOIS, CSRF and other people's domains,
+  the limits, SimPal payment, and no vhosts or site folders written, ever;
+* SimNIC on a SimHost machine, on the front page at `/nic/`.
 
-`SIM95_HTTPD=simdns/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs` runs any
-other suite with this web server in place of the stock one.
+The resolver, `DIG` and the web server are [simweb](../simweb/)'s, with their
+own tests.

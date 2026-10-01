@@ -156,3 +156,13 @@ variables, aliases and scripts through the headless core and through the GUI
 window; ssh between two machines (a bad password refused, a remote command, an
 interactive session); scp both ways; and sim-get against a Vapor store
 (install, list, upgrade, remove), checking the library line matches Vapor's.
+
+## Domain names
+
+`ssh`, `scp` and `sim-get store <domain>` take names like `shell.fun.sim`:
+before the job connects, the shell asks the central name server
+(STARTHERE.56k.net, see [simweb](../simweb/)) which machine that is, in ticks
+of its own, and `sim-get` sends `Host:` with the store's name. `host name
+[type] [@server]` (or `nslookup`) asks the name server and prints what DIG
+prints. The builder joins the resolver onto `SIMSH.SPK` (not `SSHD.SPK`,
+which never connects anywhere).
