@@ -19,7 +19,7 @@ rec = LoadUser(viewer)
 <td valign="top">
 <%= Notice(REQUEST.Query("why")) %>
 <%= BoxTop("What are you doing right now?") %>
-<form action="post.asp" method="post">
+<form action="post.asp" method="post"><%= TokenField() %>
 <input type="hidden" name="to" value="<%= viewer %>">
 <input type="hidden" name="back" value="home">
 <p><%= LimitedBox("text", "", 3, 50, MAXPOST) %><br>

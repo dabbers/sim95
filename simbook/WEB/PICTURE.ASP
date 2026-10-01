@@ -8,6 +8,7 @@ VAR pic AS String
 VAR problem AS String
 RequireLogin()
 IF REQUEST.Method = "POST" THEN
+    RequireToken()
     IF REQUEST.Form("remove") <> "" THEN
         IF HasPicture(viewer) THEN FS.Delete(PICDIR + "\" + viewer + ".PIC")
         RESPONSE.Redirect("profile.asp?u=" + viewer)
@@ -23,7 +24,7 @@ END IF
 <td valign="top">
 <%= Notice(problem) %>
 <%= BoxTop("Upload a Picture") %>
-<form action="picture.asp" method="post">
+<form action="picture.asp" method="post"><%= TokenField() %>
 <p><input type="file" name="pic" size="30"> <input type="submit" value="Upload"></p>
 </form>
 <p><font size="2">A picture is a .PIC file of up to 100 by 100. Sketch saves bigger ones
@@ -38,7 +39,7 @@ Sketch picture first:</font></p>
 <form><textarea rows="12" cols="70" readonly><%= H(ReadOr(SERVER.MapPath("/shrink.spk"), "")) %></textarea></form>
 <% IF HasPicture(viewer) THEN %>
 <%= BoxTop("Remove My Picture") %>
-<form action="picture.asp" method="post">
+<form action="picture.asp" method="post"><%= TokenField() %>
 <input type="hidden" name="remove" value="1">
 <p><input type="submit" value="Remove My Picture"></p>
 </form>

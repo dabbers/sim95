@@ -10,6 +10,7 @@ RequireLogin()
 rec = LoadUser(viewer)
 
 IF REQUEST.Method = "POST" THEN
+    RequireToken()
     IF REQUEST.Form("name").Trim() = "" THEN
         problem = "Your name cannot be empty."
     ELSE
@@ -38,7 +39,7 @@ END IF
 <% END IF %>
 <%= Notice(problem) %>
 <%= BoxTop("Edit My Profile") %>
-<form action="edit.asp" method="post">
+<form action="edit.asp" method="post"><%= TokenField() %>
 <table cellpadding="4">
 <tr><td><font size="2">Name:</font></td><td><input name="name" size="30" maxlength="<%= MAXNAME %>" value="<%= H(Field(rec, "name")) %>"></td></tr>
 <tr><td><font size="2">Sex:</font></td><td><select name="sex"><%= Opt("", Field(rec, "sex")) %><%= Opt("Female", Field(rec, "sex")) %><%= Opt("Male", Field(rec, "sex")) %></select></td></tr>

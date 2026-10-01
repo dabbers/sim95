@@ -69,6 +69,19 @@ profile fields and posts are capped, and the feed, Wall and directory stop
 early. The tests fill everything with the worst content allowed (`<`, which
 grows to `&lt;`), and the biggest page comes to about 40K.
 
+## Forged requests (CSRF)
+
+Voyager sends your SimBook cookie with every request to the server, including
+one made by a form or link on somebody else's page. So the cookie alone can't
+show that you meant to post, vote, unfriend or log out. Every session also has
+a random 16-digit form token, kept on its second line in
+`C:\BOOKDATA\SESSIONS`. Every SimBook form carries it as a hidden field `t`,
+and every action link (thumbs, logout) as `&t=`. Every page that changes
+something calls `RequireToken()` and sends anything without the right token
+home untouched. Another site can't read SimBook's pages, so it can't learn the
+token. Voyager sends no `Referer` header, so checking where a request came
+from is not an option.
+
 ## Storage
 
 There is no database and nothing is kept in memory. Every request reads the
@@ -81,7 +94,7 @@ C:\BOOKDATA\FRIENDS\<user>.TXT  |ann|bob|cat|
 C:\BOOKDATA\WALLS\<user>.TXT    posts on that user's Wall, one per line
 C:\BOOKDATA\POSTS.TXT           every post, append-only (the feed reads this)
 C:\BOOKDATA\PEOPLE.TXT          user|name directory
-C:\BOOKDATA\SESSIONS\<id>.TXT   sign-in cookie -> user
+C:\BOOKDATA\SESSIONS\<id>.TXT   sign-in cookie -> user, form token
 C:\BOOKDATA\NEXTID.TXT          post counter
 C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|
 C:\BOOKDATA\REPLIES\<post>.TXT  date|author|name|text, one reply per line
@@ -96,8 +109,9 @@ User names are 3–8 letters or digits, because they double as 8.3 file names.
   passwords off the disk in plain text, and that is about all.
 * There is no locking. Two requests at the same moment could race on a file.
   HTTPD handles one request at a time, so this is mostly theoretical.
-* There is no CSRF protection, no post deletion, and no friend requests.
-  Thumbs are plain links, so a page elsewhere could vote on your behalf.
+* There is no post deletion and there are no friend requests.
+* Login and registration have no form token, so another site could sign you
+  in to an account of its choosing.
 
 ## Developing
 

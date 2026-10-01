@@ -24,7 +24,7 @@ friend = IsFriend(viewer, who)
 <% IF mine THEN %>
 <p><font size="2"><a href="edit.asp">Edit My Profile</a><br><a href="picture.asp">Change My Picture</a></font></p>
 <% ELSE %>
-<form action="friend.asp" method="post">
+<form action="friend.asp" method="post"><%= TokenField() %>
 <input type="hidden" name="u" value="<%= who %>">
 <% IF friend THEN %>
 <p><font size="2"><%= H(Field(rec, "name")) %> is your friend.</font><br>
@@ -62,7 +62,7 @@ friend = IsFriend(viewer, who)
 </table>
 <%= BoxTop("The Wall") %>
 <% IF mine OR friend THEN %>
-<form action="post.asp" method="post">
+<form action="post.asp" method="post"><%= TokenField() %>
 <input type="hidden" name="to" value="<%= who %>">
 <p><%= LimitedBox("text", "", 3, 50, MAXPOST) %><br>
 <input type="submit" id="go" value="<% IF mine THEN %>Share<% ELSE %>Write on the Wall<% END IF %>"></p>

@@ -11,7 +11,7 @@
 '   C:\BOOKDATA\WALLS\<user>.TXT    every post on that user's wall, oldest first
 '   C:\BOOKDATA\POSTS.TXT           every post on every wall: the feed reads this
 '   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory
-'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to
+'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to, and its form token
 '   C:\BOOKDATA\NEXTID.TXT          the last post number handed out
 '   C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|  thumbs up and down on one post
 '   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post: date|author|author name|text
@@ -44,6 +44,7 @@ CONST PAGEROOM = 20000        ' how much feed, Wall or replies one page may carr
 ' posts are capped, and the feed, Wall and directory stop well before that.
 
 VAR viewer AS String          ' who is signed in; "" for nobody
+VAR formToken AS String       ' their session's form token; see RequireToken
 
 ' ---------------------------------------------------------------- the disk
 
@@ -236,37 +237,59 @@ END FUNCTION
 
 ' ---------------------------------------------------------------- sessions
 
+' A session file holds two lines: who is signed in, and that session's form
+' token. The cookie names the file.
+'
+' The form token stops another site from acting in your name. Voyager sends
+' your SimBook cookie with any request to this server, including one made by
+' a form or link on somebody else's page, so the cookie alone proves nothing.
+' Every form and action link on SimBook carries the token as a field called t,
+' and every page that changes something checks it with RequireToken. Another
+' site cannot read SimBook's pages, so it cannot know the token. Voyager sends
+' no Referer header, so checking where a request came from is not an option.
+
 SUB SignIn (u AS String)
     VAR token AS String
     EnsureDisk()
     token = NewToken()
-    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u)
+    FS.Write(DATADIR + "\SESSIONS\" + token + ".TXT", u + Chr(10) + NewToken() + NewToken())
     RESPONSE.SetCookie(COOKIE, token)
 END SUB
 
-SUB SignOut ()
+FUNCTION SessionPath () AS String
     VAR token AS String
     token = REQUEST.Cookie(COOKIE)
-    IF token <> "" AND token.Length <= 8 THEN
-        IF OnlyFrom(token, "0123456789ABCDEF") AND FS.Exists(DATADIR + "\SESSIONS\" + token + ".TXT") THEN
-            FS.Delete(DATADIR + "\SESSIONS\" + token + ".TXT")
-        END IF
+    IF token = "" OR token.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(token, "0123456789ABCDEF") THEN RETURN ""
+    RETURN DATADIR + "\SESSIONS\" + token + ".TXT"
+END FUNCTION
+
+SUB SignOut ()
+    VAR path AS String
+    path = SessionPath()
+    IF path <> "" THEN
+        IF FS.Exists(path) THEN FS.Delete(path)
     END IF
     RESPONSE.SetCookie(COOKIE, "")
 END SUB
 
-' Who the cookie says is signed in, or "".
+' Who the cookie says is signed in, or "". Also sets formToken.
 FUNCTION CurrentUser () AS String
-    VAR token AS String
     VAR path AS String
+    VAR lines AS Array OF String
     VAR u AS String
-    token = REQUEST.Cookie(COOKIE)
-    IF token = "" OR token.Length > 8 THEN RETURN ""
-    IF NOT OnlyFrom(token, "0123456789ABCDEF") THEN RETURN ""
-    path = DATADIR + "\SESSIONS\" + token + ".TXT"
+    path = SessionPath()
+    IF path = "" THEN RETURN ""
     IF NOT FS.Exists(path) THEN RETURN ""
-    u = FS.Read(path).Trim()
+    lines = FS.Read(path).Lines()
+    u = lines[0].Trim()
     IF NOT UserExists(u) THEN RETURN ""
+    ' A session from before form tokens existed gets one now
+    IF lines.Count < 2 OR lines[lines.Count - 1].Trim().Length < 16 THEN
+        FS.Write(path, u + Chr(10) + NewToken() + NewToken())
+        lines = FS.Read(path).Lines()
+    END IF
+    formToken = lines[1].Trim()
     RETURN u
 END FUNCTION
 
@@ -275,6 +298,25 @@ SUB RequireLogin ()
     viewer = CurrentUser()
     IF viewer = "" THEN RESPONSE.Redirect("index.asp")
 END SUB
+
+' The second line of every page that changes something: the request must carry
+' this session's token, in the form (POST) or the link (GET). Anything else is
+' sent home, untouched.
+SUB RequireToken ()
+    VAR sent AS String
+    sent = REQUEST.Form("t")
+    IF sent = "" THEN sent = REQUEST.Query("t")
+    IF sent = "" OR sent <> formToken THEN RESPONSE.Redirect("home.asp?why=" + UrlEnc("That did not come from a SimBook page, so nothing was changed."))
+END SUB
+
+' The token as a hidden form field, and as a link parameter.
+FUNCTION TokenField () AS String
+    RETURN "<input type=""hidden"" name=""t"" value=""" + formToken + """>"
+END FUNCTION
+
+FUNCTION TokenArg () AS String
+    RETURN "t=" + formToken
+END FUNCTION
 
 ' ---------------------------------------------------------------- friends
 
@@ -453,8 +495,8 @@ FUNCTION ActionsHtml (id AS String, line AS String, back AS String) AS String
     IF NOT CanTalk(viewer, line) THEN
         RETURN "<font size=""1"" color=""#808080"">" + up + " &middot; " + down + " &middot; <a href=""view.asp?id=" + id + """>" + Str(n) + " replies</a></font>"
     END IF
-    RETURN "<font size=""1""><a href=""vote.asp?id=" + id + "&v=up&b=" + back + """>" + up + "</a> &middot; " _
-         + "<a href=""vote.asp?id=" + id + "&v=down&b=" + back + """>" + down + "</a> &middot; " _
+    RETURN "<font size=""1""><a href=""vote.asp?id=" + id + "&v=up&b=" + back + "&" + TokenArg() + """>" + up + "</a> &middot; " _
+         + "<a href=""vote.asp?id=" + id + "&v=down&b=" + back + "&" + TokenArg() + """>" + down + "</a> &middot; " _
          + "<a href=""view.asp?id=" + id + """>reply</a></font>"
 END FUNCTION
 
@@ -534,7 +576,7 @@ FUNCTION Top (title AS String) AS String
               + "<a href=""profile.asp?u=" + viewer + """><font color=""#FFFFFF"">profile</font></a> | " _
               + "<a href=""people.asp""><font color=""#FFFFFF"">people</font></a> | " _
               + "<a href=""edit.asp""><font color=""#FFFFFF"">edit</font></a> | " _
-              + "<a href=""logout.asp""><font color=""#FFFFFF"">logout</font></a>"
+              + "<a href=""logout.asp?" + TokenArg() + """><font color=""#FFFFFF"">logout</font></a>"
     ELSE
         s = s + "<a href=""index.asp""><font color=""#FFFFFF"">login</font></a> | <a href=""index.asp""><font color=""#FFFFFF"">register</font></a>"
     END IF

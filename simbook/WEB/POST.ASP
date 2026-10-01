@@ -5,6 +5,7 @@ VAR wall AS String
 VAR problem AS String
 VAR back AS String
 RequireLogin()
+RequireToken()
 IF REQUEST.Method <> "POST" THEN RESPONSE.Redirect("home.asp")
 wall = CleanName(REQUEST.Form("to"))
 problem = AddPost(viewer, wall, REQUEST.Form("text"))

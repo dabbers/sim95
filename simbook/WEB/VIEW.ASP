@@ -17,7 +17,7 @@ IF line = "" THEN RESPONSE.Redirect("home.asp")
 </table>
 <% IF CanTalk(viewer, line) THEN %>
 <%= BoxTop("Reply") %>
-<form action="reply.asp" method="post">
+<form action="reply.asp" method="post"><%= TokenField() %>
 <input type="hidden" name="id" value="<%= id %>">
 <p><%= LimitedBox("text", "", 3, 50, MAXREPLY) %><br>
 <input type="submit" id="go" value="Reply"></p>

@@ -3,6 +3,7 @@
 ' FRIEND.ASP - add or remove a friend. Friendship goes both ways at once.
 VAR who AS String
 RequireLogin()
+RequireToken()
 IF REQUEST.Method <> "POST" THEN RESPONSE.Redirect("home.asp")
 who = CleanName(REQUEST.Form("u"))
 IF NOT UserExists(who) THEN RESPONSE.Redirect("people.asp")

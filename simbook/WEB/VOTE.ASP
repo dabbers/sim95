@@ -6,6 +6,7 @@ VAR id AS String
 VAR line AS String
 VAR back AS String
 RequireLogin()
+RequireToken()
 id = REQUEST.Query("id")
 line = FindPost(id)
 IF line <> "" AND CanTalk(viewer, line) THEN

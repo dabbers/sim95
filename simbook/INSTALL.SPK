@@ -72,7 +72,7 @@ SUB File0 ()
     t = t + "'   C:\BOOKDATA\WALLS\<user>.TXT    every post on that user's wall, oldest first" + NL
     t = t + "'   C:\BOOKDATA\POSTS.TXT           every post on every wall: the feed reads this" + NL
     t = t + "'   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory" + NL
-    t = t + "'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to" + NL
+    t = t + "'   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to, and its form token" + NL
     t = t + "'   C:\BOOKDATA\NEXTID.TXT          the last post number handed out" + NL
     t = t + "'   C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|  thumbs up and down on one post" + NL
     t = t + "'   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post: date|author|author name|text" + NL
@@ -105,6 +105,7 @@ SUB File0 ()
     t = t + "' posts are capped, and the feed, Wall and directory stop well before that." + NL
     t = t + "" + NL
     t = t + "VAR viewer AS String          ' who is signed in; """" for nobody" + NL
+    t = t + "VAR formToken AS String       ' their session's form token; see RequireToken" + NL
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- the disk" + NL
     t = t + "" + NL
@@ -297,37 +298,59 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- sessions" + NL
     t = t + "" + NL
+    t = t + "' A session file holds two lines: who is signed in, and that session's form" + NL
+    t = t + "' token. The cookie names the file." + NL
+    t = t + "'" + NL
+    t = t + "' The form token stops another site from acting in your name. Voyager sends" + NL
+    t = t + "' your SimBook cookie with any request to this server, including one made by" + NL
+    t = t + "' a form or link on somebody else's page, so the cookie alone proves nothing." + NL
+    t = t + "' Every form and action link on SimBook carries the token as a field called t," + NL
+    t = t + "' and every page that changes something checks it with RequireToken. Another" + NL
+    t = t + "' site cannot read SimBook's pages, so it cannot know the token. Voyager sends" + NL
+    t = t + "' no Referer header, so checking where a request came from is not an option." + NL
+    t = t + "" + NL
     t = t + "SUB SignIn (u AS String)" + NL
     t = t + "    VAR token AS String" + NL
     t = t + "    EnsureDisk()" + NL
     t = t + "    token = NewToken()" + NL
-    t = t + "    FS.Write(DATADIR + ""\SESSIONS\"" + token + "".TXT"", u)" + NL
+    t = t + "    FS.Write(DATADIR + ""\SESSIONS\"" + token + "".TXT"", u + Chr(10) + NewToken() + NewToken())" + NL
     t = t + "    RESPONSE.SetCookie(COOKIE, token)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "SUB SignOut ()" + NL
+    t = t + "FUNCTION SessionPath () AS String" + NL
     t = t + "    VAR token AS String" + NL
     t = t + "    token = REQUEST.Cookie(COOKIE)" + NL
-    t = t + "    IF token <> """" AND token.Length <= 8 THEN" + NL
-    t = t + "        IF OnlyFrom(token, ""0123456789ABCDEF"") AND FS.Exists(DATADIR + ""\SESSIONS\"" + token + "".TXT"") THEN" + NL
-    t = t + "            FS.Delete(DATADIR + ""\SESSIONS\"" + token + "".TXT"")" + NL
-    t = t + "        END IF" + NL
+    t = t + "    IF token = """" OR token.Length > 8 THEN RETURN """"" + NL
+    t = t + "    IF NOT OnlyFrom(token, ""0123456789ABCDEF"") THEN RETURN """"" + NL
+    t = t + "    RETURN DATADIR + ""\SESSIONS\"" + token + "".TXT""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB SignOut ()" + NL
+    t = t + "    VAR path AS String" + NL
+    t = t + "    path = SessionPath()" + NL
+    t = t + "    IF path <> """" THEN" + NL
+    t = t + "        IF FS.Exists(path) THEN FS.Delete(path)" + NL
     t = t + "    END IF" + NL
     t = t + "    RESPONSE.SetCookie(COOKIE, """")" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "' Who the cookie says is signed in, or """"." + NL
+    t = t + "' Who the cookie says is signed in, or """". Also sets formToken." + NL
     t = t + "FUNCTION CurrentUser () AS String" + NL
-    t = t + "    VAR token AS String" + NL
     t = t + "    VAR path AS String" + NL
+    t = t + "    VAR lines AS Array OF String" + NL
     t = t + "    VAR u AS String" + NL
-    t = t + "    token = REQUEST.Cookie(COOKIE)" + NL
-    t = t + "    IF token = """" OR token.Length > 8 THEN RETURN """"" + NL
-    t = t + "    IF NOT OnlyFrom(token, ""0123456789ABCDEF"") THEN RETURN """"" + NL
-    t = t + "    path = DATADIR + ""\SESSIONS\"" + token + "".TXT""" + NL
+    t = t + "    path = SessionPath()" + NL
+    t = t + "    IF path = """" THEN RETURN """"" + NL
     t = t + "    IF NOT FS.Exists(path) THEN RETURN """"" + NL
-    t = t + "    u = FS.Read(path).Trim()" + NL
+    t = t + "    lines = FS.Read(path).Lines()" + NL
+    t = t + "    u = lines[0].Trim()" + NL
     t = t + "    IF NOT UserExists(u) THEN RETURN """"" + NL
+    t = t + "    ' A session from before form tokens existed gets one now" + NL
+    t = t + "    IF lines.Count < 2 OR lines[lines.Count - 1].Trim().Length < 16 THEN" + NL
+    t = t + "        FS.Write(path, u + Chr(10) + NewToken() + NewToken())" + NL
+    t = t + "        lines = FS.Read(path).Lines()" + NL
+    t = t + "    END IF" + NL
+    t = t + "    formToken = lines[1].Trim()" + NL
     t = t + "    RETURN u" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
@@ -336,6 +359,25 @@ SUB File0 ()
     t = t + "    viewer = CurrentUser()" + NL
     t = t + "    IF viewer = """" THEN RESPONSE.Redirect(""index.asp"")" + NL
     t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' The second line of every page that changes something: the request must carry" + NL
+    t = t + "' this session's token, in the form (POST) or the link (GET). Anything else is" + NL
+    t = t + "' sent home, untouched." + NL
+    t = t + "SUB RequireToken ()" + NL
+    t = t + "    VAR sent AS String" + NL
+    t = t + "    sent = REQUEST.Form(""t"")" + NL
+    t = t + "    IF sent = """" THEN sent = REQUEST.Query(""t"")" + NL
+    t = t + "    IF sent = """" OR sent <> formToken THEN RESPONSE.Redirect(""home.asp?why="" + UrlEnc(""That did not come from a SimBook page, so nothing was changed.""))" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' The token as a hidden form field, and as a link parameter." + NL
+    t = t + "FUNCTION TokenField () AS String" + NL
+    t = t + "    RETURN ""<input type=""""hidden"""" name=""""t"""" value="""""" + formToken + """""">""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION TokenArg () AS String" + NL
+    t = t + "    RETURN ""t="" + formToken" + NL
+    t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- friends" + NL
     t = t + "" + NL
@@ -514,8 +556,8 @@ SUB File0 ()
     t = t + "    IF NOT CanTalk(viewer, line) THEN" + NL
     t = t + "        RETURN ""<font size=""""1"""" color=""""#808080"""">"" + up + "" &middot; "" + down + "" &middot; <a href=""""view.asp?id="" + id + """""">"" + Str(n) + "" replies</a></font>""" + NL
     t = t + "    END IF" + NL
-    t = t + "    RETURN ""<font size=""""1""""><a href=""""vote.asp?id="" + id + ""&v=up&b="" + back + """""">"" + up + ""</a> &middot; "" _" + NL
-    t = t + "         + ""<a href=""""vote.asp?id="" + id + ""&v=down&b="" + back + """""">"" + down + ""</a> &middot; "" _" + NL
+    t = t + "    RETURN ""<font size=""""1""""><a href=""""vote.asp?id="" + id + ""&v=up&b="" + back + ""&"" + TokenArg() + """""">"" + up + ""</a> &middot; "" _" + NL
+    t = t + "         + ""<a href=""""vote.asp?id="" + id + ""&v=down&b="" + back + ""&"" + TokenArg() + """""">"" + down + ""</a> &middot; "" _" + NL
     t = t + "         + ""<a href=""""view.asp?id="" + id + """""">reply</a></font>""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
@@ -595,7 +637,7 @@ SUB File0 ()
     t = t + "              + ""<a href=""""profile.asp?u="" + viewer + """"""><font color=""""#FFFFFF"""">profile</font></a> | "" _" + NL
     t = t + "              + ""<a href=""""people.asp""""><font color=""""#FFFFFF"""">people</font></a> | "" _" + NL
     t = t + "              + ""<a href=""""edit.asp""""><font color=""""#FFFFFF"""">edit</font></a> | "" _" + NL
-    t = t + "              + ""<a href=""""logout.asp""""><font color=""""#FFFFFF"""">logout</font></a>""" + NL
+    t = t + "              + ""<a href=""""logout.asp?"" + TokenArg() + """"""><font color=""""#FFFFFF"""">logout</font></a>""" + NL
     t = t + "    ELSE" + NL
     t = t + "        s = s + ""<a href=""""index.asp""""><font color=""""#FFFFFF"""">login</font></a> | <a href=""""index.asp""""><font color=""""#FFFFFF"""">register</font></a>""" + NL
     t = t + "    END IF" + NL
@@ -679,6 +721,7 @@ SUB File1 ()
     t = t + "rec = LoadUser(viewer)" + NL
     t = t + "" + NL
     t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
+    t = t + "    RequireToken()" + NL
     t = t + "    IF REQUEST.Form(""name"").Trim() = """" THEN" + NL
     t = t + "        problem = ""Your name cannot be empty.""" + NL
     t = t + "    ELSE" + NL
@@ -707,7 +750,7 @@ SUB File1 ()
     t = t + "<% END IF %>" + NL
     t = t + "<%= Notice(problem) %>" + NL
     t = t + "<%= BoxTop(""Edit My Profile"") %>" + NL
-    t = t + "<form action=""edit.asp"" method=""post"">" + NL
+    t = t + "<form action=""edit.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<table cellpadding=""4"">" + NL
     t = t + "<tr><td><font size=""2"">Name:</font></td><td><input name=""name"" size=""30"" maxlength=""<%= MAXNAME %>"" value=""<%= H(Field(rec, ""name"")) %>""></td></tr>" + NL
     t = t + "<tr><td><font size=""2"">Sex:</font></td><td><select name=""sex""><%= Opt("""", Field(rec, ""sex"")) %><%= Opt(""Female"", Field(rec, ""sex"")) %><%= Opt(""Male"", Field(rec, ""sex"")) %></select></td></tr>" + NL
@@ -734,6 +777,7 @@ SUB File2 ()
     t = t + "' FRIEND.ASP - add or remove a friend. Friendship goes both ways at once." + NL
     t = t + "VAR who AS String" + NL
     t = t + "RequireLogin()" + NL
+    t = t + "RequireToken()" + NL
     t = t + "IF REQUEST.Method <> ""POST"" THEN RESPONSE.Redirect(""home.asp"")" + NL
     t = t + "who = CleanName(REQUEST.Form(""u""))" + NL
     t = t + "IF NOT UserExists(who) THEN RESPONSE.Redirect(""people.asp"")" + NL
@@ -770,7 +814,7 @@ SUB File3 ()
     t = t + "<td valign=""top"">" + NL
     t = t + "<%= Notice(REQUEST.Query(""why"")) %>" + NL
     t = t + "<%= BoxTop(""What are you doing right now?"") %>" + NL
-    t = t + "<form action=""post.asp"" method=""post"">" + NL
+    t = t + "<form action=""post.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""to"" value=""<%= viewer %>"">" + NL
     t = t + "<input type=""hidden"" name=""back"" value=""home"">" + NL
     t = t + "<p><%= LimitedBox(""text"", """", 3, 50, MAXPOST) %><br>" + NL
@@ -886,7 +930,10 @@ SUB File7 ()
     t = ""
     t = t + "<%@ import file=""BOOK.SPK"" %>" + NL
     t = t + "<%" + NL
-    t = t + "' LOGOUT.ASP - forgets the session on disk and in Voyager." + NL
+    t = t + "' LOGOUT.ASP?t=token - forgets the session on disk and in Voyager. The token" + NL
+    t = t + "' stops another site from signing you out." + NL
+    t = t + "RequireLogin()" + NL
+    t = t + "RequireToken()" + NL
     t = t + "SignOut()" + NL
     t = t + "RESPONSE.Redirect(""index.asp?e=bye"")" + NL
     t = t + "%>" + NL
@@ -998,6 +1045,7 @@ SUB File10 ()
     t = t + "VAR problem AS String" + NL
     t = t + "RequireLogin()" + NL
     t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
+    t = t + "    RequireToken()" + NL
     t = t + "    IF REQUEST.Form(""remove"") <> """" THEN" + NL
     t = t + "        IF HasPicture(viewer) THEN FS.Delete(PICDIR + ""\"" + viewer + "".PIC"")" + NL
     t = t + "        RESPONSE.Redirect(""profile.asp?u="" + viewer)" + NL
@@ -1013,7 +1061,7 @@ SUB File10 ()
     t = t + "<td valign=""top"">" + NL
     t = t + "<%= Notice(problem) %>" + NL
     t = t + "<%= BoxTop(""Upload a Picture"") %>" + NL
-    t = t + "<form action=""picture.asp"" method=""post"">" + NL
+    t = t + "<form action=""picture.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<p><input type=""file"" name=""pic"" size=""30""> <input type=""submit"" value=""Upload""></p>" + NL
     t = t + "</form>" + NL
     t = t + "<p><font size=""2"">A picture is a .PIC file of up to 100 by 100. Sketch saves bigger ones" + NL
@@ -1028,7 +1076,7 @@ SUB File10 ()
     t = t + "<form><textarea rows=""12"" cols=""70"" readonly><%= H(ReadOr(SERVER.MapPath(""/shrink.spk""), """")) %></textarea></form>" + NL
     t = t + "<% IF HasPicture(viewer) THEN %>" + NL
     t = t + "<%= BoxTop(""Remove My Picture"") %>" + NL
-    t = t + "<form action=""picture.asp"" method=""post"">" + NL
+    t = t + "<form action=""picture.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""remove"" value=""1"">" + NL
     t = t + "<p><input type=""submit"" value=""Remove My Picture""></p>" + NL
     t = t + "</form>" + NL
@@ -1048,6 +1096,7 @@ SUB File11 ()
     t = t + "VAR problem AS String" + NL
     t = t + "VAR back AS String" + NL
     t = t + "RequireLogin()" + NL
+    t = t + "RequireToken()" + NL
     t = t + "IF REQUEST.Method <> ""POST"" THEN RESPONSE.Redirect(""home.asp"")" + NL
     t = t + "wall = CleanName(REQUEST.Form(""to""))" + NL
     t = t + "problem = AddPost(viewer, wall, REQUEST.Form(""text""))" + NL
@@ -1091,7 +1140,7 @@ SUB File12 ()
     t = t + "<% IF mine THEN %>" + NL
     t = t + "<p><font size=""2""><a href=""edit.asp"">Edit My Profile</a><br><a href=""picture.asp"">Change My Picture</a></font></p>" + NL
     t = t + "<% ELSE %>" + NL
-    t = t + "<form action=""friend.asp"" method=""post"">" + NL
+    t = t + "<form action=""friend.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""u"" value=""<%= who %>"">" + NL
     t = t + "<% IF friend THEN %>" + NL
     t = t + "<p><font size=""2""><%= H(Field(rec, ""name"")) %> is your friend.</font><br>" + NL
@@ -1129,7 +1178,7 @@ SUB File12 ()
     t = t + "</table>" + NL
     t = t + "<%= BoxTop(""The Wall"") %>" + NL
     t = t + "<% IF mine OR friend THEN %>" + NL
-    t = t + "<form action=""post.asp"" method=""post"">" + NL
+    t = t + "<form action=""post.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""to"" value=""<%= who %>"">" + NL
     t = t + "<p><%= LimitedBox(""text"", """", 3, 50, MAXPOST) %><br>" + NL
     t = t + "<input type=""submit"" id=""go"" value=""<% IF mine THEN %>Share<% ELSE %>Write on the Wall<% END IF %>""></p>" + NL
@@ -1155,6 +1204,7 @@ SUB File13 ()
     t = t + "VAR id AS String" + NL
     t = t + "VAR problem AS String" + NL
     t = t + "RequireLogin()" + NL
+    t = t + "RequireToken()" + NL
     t = t + "IF REQUEST.Method <> ""POST"" THEN RESPONSE.Redirect(""home.asp"")" + NL
     t = t + "id = REQUEST.Form(""id"")" + NL
     t = t + "problem = AddReply(viewer, id, REQUEST.Form(""text""))" + NL
@@ -1303,7 +1353,7 @@ SUB File15 ()
     t = t + "</table>" + NL
     t = t + "<% IF CanTalk(viewer, line) THEN %>" + NL
     t = t + "<%= BoxTop(""Reply"") %>" + NL
-    t = t + "<form action=""reply.asp"" method=""post"">" + NL
+    t = t + "<form action=""reply.asp"" method=""post""><%= TokenField() %>" + NL
     t = t + "<input type=""hidden"" name=""id"" value=""<%= id %>"">" + NL
     t = t + "<p><%= LimitedBox(""text"", """", 3, 50, MAXREPLY) %><br>" + NL
     t = t + "<input type=""submit"" id=""go"" value=""Reply""></p>" + NL
@@ -1327,6 +1377,7 @@ SUB File16 ()
     t = t + "VAR line AS String" + NL
     t = t + "VAR back AS String" + NL
     t = t + "RequireLogin()" + NL
+    t = t + "RequireToken()" + NL
     t = t + "id = REQUEST.Query(""id"")" + NL
     t = t + "line = FindPost(id)" + NL
     t = t + "IF line <> """" AND CanTalk(viewer, line) THEN" + NL

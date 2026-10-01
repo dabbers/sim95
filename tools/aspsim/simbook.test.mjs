@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
-import { machine, browser, page, MESSAGE_LIMIT } from "./sim.mjs";
+import { machine, browser as rawBrowser, page, MESSAGE_LIMIT } from "./sim.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let failures = 0;
@@ -19,6 +19,21 @@ const ok = (r) => {
 };
 
 // Install the way a person would: by running INSTALL.SPK on the machine.
+// A visitor using SimBook's own pages: their forms and action links carry the
+// session's form token, so this browser adds it the way those pages would.
+// rawBrowser is somebody else's page aiming a request at SimBook: no token.
+function browser(m) {
+  const b = rawBrowser(m);
+  const { post, get } = b;
+  b.token = async () => {
+    const r = await m.request("GET", "/picture.asp", { cookies: b.cookies() });
+    return (/name="t" value="([0-9A-F]+)"/.exec(r.body) || [])[1] ?? "";
+  };
+  b.post = async (url, form) => post(url, form && !("t" in form) ? { ...form, t: await b.token() } : form);
+  b.get = async (url) => (/^\/(vote|logout)\.asp/.test(url) && !/[?&]t=/.test(url) ? get(url + (url.includes("?") ? "&" : "?") + "t=" + (await b.token())) : get(url));
+  return b;
+}
+
 async function fresh() {
   const m = await machine("TESTBOX");
   await m.runScript(fs.readFileSync(path.join(root, "simbook/INSTALL.SPK"), "utf8"));
@@ -300,6 +315,60 @@ await test("text boxes count down as you type and grey out the button when over"
     assert.equal(p.el("text_n").Text, "0 characters left", url);
     assert.equal(p.el("go").Enabled, true, url);
   }
+});
+
+await test("pages hand out the form token in forms and action links", async () => {
+  const t = await ann.token();
+  assert.match(t, /^[0-9A-F]{16}$/);
+  const home = ok(await ann.get("/home.asp")).body;
+  assert.ok(home.includes(`<input type="hidden" name="t" value="${t}">`));
+  assert.ok(home.includes(`logout.asp?t=${t}`));
+  assert.match(home, new RegExp(`vote.asp\\?id=\\d+&v=up&b=home&t=${t}`));
+  const t2 = await bob.token();
+  assert.notEqual(t, t2, "every session has its own token");
+});
+
+await test("requests from another site's page change nothing", async () => {
+  // Bob's cookie goes along, as Voyager sends it with any request to this server
+  const cookies = bob.cookies();
+  const id = postId("thumb me");
+  const before = m.disk.snapshot();
+  const forged = [
+    ["POST", "/post.asp", { to: "ann", text: "forged wall post" }],
+    ["POST", "/reply.asp", { id, text: "forged reply" }],
+    ["POST", "/friend.asp", { u: "ann", do: "remove" }],
+    ["POST", "/edit.asp", { name: "Pwned" }],
+    ["POST", "/picture.asp", { remove: "1" }],
+    ["GET", `/vote.asp?id=${id}&v=down&b=home`],
+    ["GET", "/logout.asp"],
+  ];
+  for (const wrongToken of ["", "0123456789ABCDEF", await ann.token()]) {
+    for (const [method, url, form] of forged) {
+      const body = form ? new URLSearchParams({ ...form, t: wrongToken }).toString() : "";
+      const sep = url.includes("?") ? "&" : "?";
+      const r = await m.request(method, method === "GET" ? url + sep + "t=" + wrongToken : url, { body, cookies });
+      assert.equal(r.status, "302 Found", `${url} with token "${wrongToken}"`);
+      assert.ok(r.headers.includes("Location: home.asp?why=That+did+not+come+from+a+SimBook+page%2C+so+nothing+was+changed."), url + " " + r.headers.join(" | "));
+    }
+  }
+  assert.deepEqual(m.disk.snapshot().files, before.files, "nothing on disk changed");
+  const r = ok(await bob.get("/home.asp"));
+  assert.equal(r.url, "/home.asp", "bob is still signed in");
+});
+
+await test("the same request with the token goes through", async () => {
+  const r = ok(await bob.post("/post.asp", { to: "ann", text: "real wall post" }));
+  assert.match(r.body, /real wall post/);
+});
+
+await test("sessions saved before form tokens get one", async () => {
+  m.write("C:\\BOOKDATA\\SESSIONS\\ABCDEF12.TXT", "cat");
+  const r = await m.request("GET", "/home.asp", { cookies: "simbook=ABCDEF12" });
+  assert.equal(r.status, "200 OK");
+  const lines = m.read("C:\\BOOKDATA\\SESSIONS\\ABCDEF12.TXT").split("\n");
+  assert.equal(lines[0], "cat");
+  assert.match(lines[1], /^[0-9A-F]{16}$/);
+  assert.ok(r.body.includes(`value="${lines[1]}"`));
 });
 
 await test("people directory lists and searches members", async () => {
