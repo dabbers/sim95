@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Network } from "./network.mjs";
+import { withResolver } from "../simxplorer-source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -17,9 +18,9 @@ async function test(name, fn) {
 }
 
 const installer = (app) => fs.readFileSync(path.join(root, app, "INSTALL.SPK"), "utf8");
-const SIMSH = fs.readFileSync(path.join(root, "simsh/src/CORE.SPK"), "utf8") + "\n" +
+const SIMSH = withResolver(fs.readFileSync(path.join(root, "simsh/src/CORE.SPK"), "utf8") + "\n" +
   fs.readFileSync(path.join(root, "simsh/src/NETJOB.SPK"), "utf8") + "\n" +
-  fs.readFileSync(path.join(root, "simsh/src/WINDOW.SPK"), "utf8");
+  fs.readFileSync(path.join(root, "simsh/src/WINDOW.SPK"), "utf8"));
 
 const net = new Network();
 const wait = (fn, what, ms = 20000) => net.until(fn, ms, what);

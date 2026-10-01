@@ -11,7 +11,7 @@
 '
 ' ssh speaks to SSHD.SPK on port 22 (see SSHD.SPK for the protocol); scp to
 ' the Files service on port 139 (FILESVC.SPK); sim-get to a Vapor store on
-' port 80, exactly as VAPOR.SPK does; host (dig, nslookup) to a SimDNS name
+' port 80, exactly as VAPOR.SPK does; host (nslookup) to a SimDNS name
 ' server on port 53, printing what DIG.SPK prints.
 '
 ' Domain names: the builder joins the SimDNS resolver (simweb/src/RESOLVE.SPK,
@@ -709,9 +709,8 @@ SUB HostJob ()
         RETURN
     END IF
     IF server = "" THEN server = RsNameServer()
-    RsConfig()
     IF server = "" THEN
-        JobSay(";; No name server is set. Say which machine runs SimDNS:  DIG SET machine")
+        JobSay(";; SimDNS is off (nameserver=none in C:\SYSTEM\RESOLV.INI). DIG SET DEFAULT turns it on.")
         JobEnd(1)
         RETURN
     END IF

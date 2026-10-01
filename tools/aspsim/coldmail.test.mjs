@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { browser as rawBrowser, page, MESSAGE_LIMIT } from "./sim.mjs";
 import { Network } from "./network.mjs";
+import { withResolver } from "../simxplorer-source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let failures = 0;
@@ -255,7 +256,7 @@ await test("GETMAIL.SPK copies ColdMail onto another machine, which can then mai
   const said = charlie.output(pid);
   assert.match(said, /ColdMail is installed \(14 files\) and your mail server is running/, said + JSON.stringify(charlie.ui.dialogs));
   for (const f of fs.readdirSync(path.join(root, "coldmail/WEB"))) assert.equal(charlie.read("C:\\WEB\\" + f.toUpperCase()), fs.readFileSync(path.join(root, "coldmail/WEB", f), "utf8"), f);
-  assert.equal(charlie.read("C:\\PROGRAMS\\MAILD.SPK"), fs.readFileSync(path.join(root, "coldmail/PROGRAMS/MAILD.SPK"), "utf8"));
+  assert.equal(charlie.read("C:\\PROGRAMS\\MAILD.SPK"), withResolver(fs.readFileSync(path.join(root, "coldmail/PROGRAMS/MAILD.SPK"), "utf8")), "with the SimDNS resolver joined on");
   assert.equal(charlie.read("C:\\SYSTEM\\STARTUP\\MAIL.RUN"), "C:\\PROGRAMS\\MAILD.SPK");
   await net.until(() => maild(charlie), 10000, "charlie's mail server");
   const dee = await join(charlie, "dee", "Dee Charlie");

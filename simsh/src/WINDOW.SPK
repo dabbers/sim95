@@ -349,6 +349,8 @@ SUB StepQueue ()
 END SUB
 
 SUB AskPassword ()
+    ' asked once: a tick that came while it was being typed must not clear it
+    IF passMode THEN RETURN
     passMode = TRUE
     promptLbl.Text = JobTarget() + "'s password:"
     Layout()

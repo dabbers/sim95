@@ -30,6 +30,17 @@
 ' 512 statements. So each fetch starts in a timer tick of its own, pages arrive
 ' through onMessage and onClose instead of Receive, and the whole tick sits in
 ' a TRY with an empty CATCH and nothing after it, so a spoiled tick just ends.
+'
+' Domain names (SimDNS). The builder joins the resolver (simweb/src/RESOLVE.SPK,
+' the Rs... names) on the end. A link to http://www.coolsite.sim/ is followed
+' like any other: the name is asked about first, in a tick of its own (the
+' question is a Connect, so it is the last thing that tick does), the page is
+' fetched from the machine the name server named with Host: www.coolsite.sim,
+' and it is kept under http://www.coolsite.sim/. That site's own robots.txt
+' is minded. The same site by path (http://alpha/www.coolsite.sim/, for
+' Voyager) is the same pages, so when the name leads to that machine the path
+' address is crawled under the name instead, and never twice. With no name
+' server, or one that doesn't answer, names are machine names as always.
 
 CONST SKIPDIRS = "/docs/"            ' folders never crawled, "|" between them
 CONST DATA = "C:\ASKDATA"
@@ -254,6 +265,36 @@ FUNCTION Resolve (link AS String, base AS String) AS String
     RETURN Normal("http://" + HostOf(base) + dir + l)
 END FUNCTION
 
+' The site a path address is for: www.coolsite.sim for
+' http://alpha/www.coolsite.sim/page.htm (a first folder with a dot in its
+' name, the way simweb's web server serves sites to Voyager), else "".
+FUNCTION SiteByPath (url AS String) AS String
+    VAR p AS String
+    VAR seg AS String
+    VAR i AS Integer
+    p = PathOf(url)
+    IF p.Contains("?") THEN p = p.Substring(0, p.IndexOf("?"))
+    IF p.Length < 2 THEN RETURN ""
+    p = p.Substring(1, p.Length - 1)
+    IF NOT p.Contains("/") THEN RETURN ""
+    seg = p.Substring(0, p.IndexOf("/"))
+    IF NOT seg.Contains(".") OR seg.StartsWith(".") OR seg.EndsWith(".") OR seg.Contains("..") THEN RETURN ""
+    FOR i = 0 TO seg.Length - 1
+        IF NOT "abcdefghijklmnopqrstuvwxyz0123456789-.".Contains(seg.CharAt(i)) THEN RETURN ""
+    NEXT
+    ' (only on a machine's own address, not inside another site by name)
+    IF RsKnown(HostOf(url)) THEN RETURN ""
+    RETURN seg
+END FUNCTION
+
+' Are these the same SIM95 machine? (BOB and BOB.DIALUP.ZONE are.)
+FUNCTION SameMachine (a AS String, b AS String) AS Bool
+    a = a.Lower()
+    b = b.Lower()
+    IF a.EndsWith(".") THEN a = a.Substring(0, a.Length - 1)
+    RETURN a = b OR a.Split(".")[0] = b.Split(".")[0]
+END FUNCTION
+
 ' Folders every machine has the same copy of (the SIM95 manuals): not worth
 ' indexing over and over.
 FUNCTION Skipped (url AS String) AS Bool
@@ -288,7 +329,8 @@ SUB StartFetch (url AS String)
     fError = ""
     phase = "wait"
     TRY
-        conn = web.Connect(HostOf(url), PortOf(url))
+        ' (to the machine SimDNS named; Host: says the name, for a site by name)
+        conn = web.Connect(RsTarget(HostOf(url)), PortOf(url))
         conn.Tag = Str(fNumber)
         conn.Send("GET " + PathOf(url) + " HTTP/1.0" + NL + "Host: " + HostOf(url) + NL + "User-Agent: AskSim/1.0 (http://" + NET.HostName.Lower() + "/)")
     CATCH err
@@ -593,8 +635,23 @@ END SUB
 SUB NextPage ()
     VAR url AS String
     VAR ok AS String
+    VAR seg AS String
     WHILE queue.Count > 0 AND fetched < MAXPAGES
         url = queue[0]
+        ' a domain name: asked about first (a Connect, so the tick ends)
+        IF RsNext(HostOf(url)) THEN RETURN
+        ' a site by path whose name leads to this machine: kept by name
+        seg = SiteByPath(url)
+        IF seg <> "" THEN
+            IF RsNext(seg) THEN RETURN
+            IF RsKnown(seg) AND SameMachine(RsTarget(seg), HostOf(url)) THEN
+                queue.RemoveAt(0)
+                ' (an earlier crawl's copy under the path address is dropped)
+                IF docUrls.IndexOf(url) >= 0 THEN SetDoc(url, DocId(url) + "|" + url + "|||new|")
+                Enqueue(Normal("http://" + seg + PathOf(url).Substring(seg.Length + 1, PathOf(url).Length - seg.Length - 1)))
+                CONTINUE
+            END IF
+        END IF
         ok = Allowed(url)
         IF ok = "" THEN
             fRobots = TRUE
