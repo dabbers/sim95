@@ -5,6 +5,8 @@ A series of programs for the sim95 playground
   written in SPARK ActiveSparkPages.
 * [`coldmail/`](coldmail/) – ColdMail, a mail server and webmail that send
   real mail between SIM95 machines.
+* [`frostbird/`](frostbird/) – Frostbird, a desktop mail program for ColdMail
+  (folders, letters, Get Mail, Write, Reply, Forward).
 * [`asksim/`](asksim/) – AskSim, an Ask Jeeves-style search engine with a
   real crawler that goes round every machine's web pages.
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
@@ -23,4 +25,5 @@ the app's `INSTALL.SPK` into SPARK and press F5. Simxplorer installs as
 a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
-jscript, simxplorer). Rebuild the installers with `node tools/build-installer.mjs`.
+jscript, simxplorer,
+frostbird). Rebuild the installers with `node tools/build-installer.mjs`.

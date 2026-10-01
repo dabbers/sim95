@@ -26,6 +26,15 @@ Addresses are `name@machine`, using the machine's full name or just its
 computer name: `bob@a3f9c2e1.dialup.zone` or `bob@a3f9c2e1`. A name with no
 machine means this one.
 
+## Mail programs: port 110
+
+The server also listens on port 110 for mail programs such as
+[Frostbird](../frostbird/). It speaks a small POP with one command and one
+answer per message: `USER`, `PASS`, `LIST [SENT]`, `RETR n`, `DELE n`,
+`SEND` and `QUIT`. Passwords are the webmail's, letters read there are read
+here, and `SEND` spools a letter exactly as the webmail does. Upgrade
+ColdMail on a machine (run its installer again) to switch this on.
+
 ## Hosting your own: GETMAIL.SPK
 
 The front page (`/`) offers **Host ColdMail on your machine**

@@ -112,6 +112,21 @@ const apps = {
     done: `Print("Simxplorer is running. Next time, start C:\\PROGRAMS\\SIMXPLOR.SPK from Files.")`,
     code: () => "",
   },
+  frostbird: {
+    title: "Frostbird",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
+' Frostbird, a mail program for ColdMail, to C:\\PROGRAMS\\FROSTBRD.SPK and
+' starts it. Any machine can have it: it collects your mail from the ColdMail
+' server named in your address (ann@alpha: the machine ALPHA), which needs
+' ColdMail's newer MAILD.SPK (the one that listens on port 110 too). Letters
+' are kept in C:\\FROST. Simxplorer's Mail button opens it.`,
+    copy: [["frostbird/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
+    first: [],
+    last: [`SYS.Start("C:\\PROGRAMS\\FROSTBRD.SPK", "")`],
+    done: `Print("Frostbird is running. Next time, start C:\\PROGRAMS\\FROSTBRD.SPK from Files.")`,
+    code: () => "",
+  },
   eliza: {
     title: "ELIZA-95",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95

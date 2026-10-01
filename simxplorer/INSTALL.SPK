@@ -3836,7 +3836,15 @@ SUB File0 ()
     t = t + "    END IF" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
+    t = t + "CONST MAILPROGRAM = ""C:\PROGRAMS\FROSTBRD.SPK""" + NL
+    t = t + "" + NL
+    t = t + "' The Mail button opens the mail program if this machine has one (Frostbird)," + NL
+    t = t + "' or else the webmail set in Options." + NL
     t = t + "SUB Mail_Click ()" + NL
+    t = t + "    IF FS.Exists(MAILPROGRAM) THEN" + NL
+    t = t + "        SYS.Start(MAILPROGRAM, """")" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
     t = t + "    IF optMail = """" THEN" + NL
     t = t + "        Go(""about:mail"")" + NL
     t = t + "    ELSE" + NL
@@ -4838,6 +4846,10 @@ SUB File0 ()
     t = t + "    END IF" + NL
     t = t + "    IF href.StartsWith(""#"") THEN RETURN" + NL
     t = t + "    IF href.Lower().StartsWith(""mailto:"") THEN" + NL
+    t = t + "        IF FS.Exists(MAILPROGRAM) THEN" + NL
+    t = t + "            SYS.Start(MAILPROGRAM, ""mailto:"" + href.Substring(7, href.Length - 7).Split(""?"")[0])" + NL
+    t = t + "            RETURN" + NL
+    t = t + "        END IF" + NL
     t = t + "        IF optMail <> """" THEN Go(Typed(optMail) + ""compose.asp?to="" + UrlEnc(href.Substring(7, href.Length - 7)))" + NL
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL

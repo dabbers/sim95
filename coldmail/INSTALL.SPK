@@ -1048,6 +1048,18 @@ SUB File12 ()
     t = t + "' as  n|date|from|to|subject|size|flags  - flags holds N while a letter is unread." + NL
     t = t + "' The webmail (C:\WEB\MAIL.SPK) reads and writes the same files." + NL
     t = t + "'" + NL
+    t = t + "' 3. Collect. Mail programs (Frostbird) connect to port 110 and speak a small" + NL
+    t = t + "'    POP, one command and one answer per message, to read and send mail:" + NL
+    t = t + "'          S: +OK ALPHA ColdMail POP ready" + NL
+    t = t + "'          C: USER ann                  S: +OK" + NL
+    t = t + "'          C: PASS secret               S: +OK 3 letters  (or -ERR)" + NL
+    t = t + "'          C: LIST [INBOX|SENT]         S: +OK + one line per letter, as in INBOX.TXT" + NL
+    t = t + "'          C: RETR 7                    S: +OK + the letter (and it is no longer unread)" + NL
+    t = t + "'          C: DELE 7                    S: +OK" + NL
+    t = t + "'          C: SEND + line break + To:/Subject: lines, a blank line, the text" + NL
+    t = t + "'                                       S: +OK sent  (spooled like the webmail's)" + NL
+    t = t + "'          C: QUIT                      S: +OK Bye" + NL
+    t = t + "'" + NL
     t = t + "' C:\MAILDATA\MAILD.INI can set  retry=<seconds between tries>  and  tries=<count>." + NL
     t = t + "'" + NL
     t = t + "' One SIM95 quirk shapes the sending loop: a failed wait (a Connect nobody" + NL
@@ -1062,10 +1074,14 @@ SUB File12 ()
     t = t + "" + NL
     t = t + "CONST DATA = ""C:\MAILDATA""" + NL
     t = t + "CONST PORT = 25" + NL
+    t = t + "CONST POPPORT = 110" + NL
+    t = t + "CONST MAXBODY = 8000" + NL
+    t = t + "CONST MAXTO = 10" + NL
     t = t + "" + NL
     t = t + "VAR win AS GUI_Window" + NL
     t = t + "VAR log AS GUI_ListBox" + NL
     t = t + "VAR sock AS NET_Socket" + NL
+    t = t + "VAR pop AS NET_Socket" + NL
     t = t + "VAR timer AS GUI_Timer" + NL
     t = t + "VAR busy AS Bool" + NL
     t = t + "VAR busySince AS Integer      ' a tick cut short by a spoiled handler leaves busy set; this lets go" + NL
@@ -1095,6 +1111,12 @@ SUB File12 ()
     t = t + "    sock.onError = Sock_OnError" + NL
     t = t + "    sock.Listen(PORT)" + NL
     t = t + "    Note(""Listening on port "" + Str(PORT) + "" as "" + NET.HostName)" + NL
+    t = t + "    pop = NET_Socket.New()" + NL
+    t = t + "    pop.onConnect = Pop_OnConnect" + NL
+    t = t + "    pop.onMessage = Pop_OnMessage" + NL
+    t = t + "    pop.onError = Sock_OnError" + NL
+    t = t + "    pop.Listen(POPPORT)" + NL
+    t = t + "    Note(""Mail programs collect on port "" + Str(POPPORT))" + NL
     t = t + "" + NL
     t = t + "    timer = GUI_Timer.New(win)" + NL
     t = t + "    timer.Interval = 2000" + NL
@@ -1320,6 +1342,208 @@ SUB File12 ()
     t = t + "    END IF" + NL
     t = t + "    conn.Tag = state.Join(""|"")" + NL
     t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' ---------------------------------------------------------------- collecting (port 110)" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION Unesc (s AS String) AS String" + NL
+    t = t + "    RETURN s.Replace(""%0A"", Chr(10)).Replace(""%7C"", ""|"").Replace(""%25"", ""%"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION ReadOr (path AS String, fallback AS String) AS String" + NL
+    t = t + "    IF FS.Exists(path) THEN RETURN FS.Read(path)" + NL
+    t = t + "    RETURN fallback" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' An account's setting (the webmail writes them: name, salt, pass)." + NL
+    t = t + "FUNCTION Field (u AS String, key AS String) AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    FOR EACH line IN ReadOr(DATA + ""\USERS\"" + u + "".TXT"", """").Lines()" + NL
+    t = t + "        IF line.StartsWith(key + ""="") THEN RETURN Unesc(line.Substring(key.Length + 1, line.Length - key.Length - 1))" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The webmail's password hash, the same to the letter." + NL
+    t = t + "FUNCTION Hash (salt AS String, pw AS String) AS String" + NL
+    t = t + "    VAR a AS Integer = 7" + NL
+    t = t + "    VAR b AS Integer = 31337" + NL
+    t = t + "    VAR i AS Integer" + NL
+    t = t + "    VAR c AS Integer" + NL
+    t = t + "    VAR s AS String" + NL
+    t = t + "    s = salt + "":"" + pw + "":"" + salt" + NL
+    t = t + "    FOR i = 0 TO s.Length - 1" + NL
+    t = t + "        c = Asc(s.CharAt(i))" + NL
+    t = t + "        a = (a * 131 + c) MOD 2147483629" + NL
+    t = t + "        b = (b * 257 + c + a) MOD 2147483587" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN Hex(a) + ""-"" + Hex(b)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION Password (u AS String, pw AS String) AS Bool" + NL
+    t = t + "    IF NOT HasMailbox(u) THEN RETURN FALSE" + NL
+    t = t + "    RETURN Hash(Field(u, ""salt""), pw) = Field(u, ""pass"")" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The index line of letter n in a user's folders, or """"." + NL
+    t = t + "FUNCTION IndexLine (u AS String, n AS String, folder AS String) AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    FOR EACH line IN ReadOr(DATA + ""\BOX\"" + u + ""\"" + folder, """").Lines()" + NL
+    t = t + "        IF line.Split(""|"")[0] = n THEN RETURN line" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB SwapIndex (u AS String, folder AS String, line AS String, other AS String)" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    text = Chr(10) + ReadOr(DATA + ""\BOX\"" + u + ""\"" + folder, """")" + NL
+    t = t + "    IF other = """" THEN" + NL
+    t = t + "        text = text.Replace(Chr(10) + line + Chr(10), Chr(10))" + NL
+    t = t + "    ELSE" + NL
+    t = t + "        text = text.Replace(Chr(10) + line + Chr(10), Chr(10) + other + Chr(10))" + NL
+    t = t + "    END IF" + NL
+    t = t + "    FS.Write(DATA + ""\BOX\"" + u + ""\"" + folder, text.Substring(1, text.Length - 1))" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Each connection's state lives in its Tag: user|signed-in (1 or 0)" + NL
+    t = t + "SUB Pop_OnConnect (conn AS NET_Connection)" + NL
+    t = t + "    conn.Accept()" + NL
+    t = t + "    conn.Tag = ""|0""" + NL
+    t = t + "    Reply(conn, ""+OK "" + NET.HostName + "" ColdMail POP ready"")" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB Pop_OnMessage (conn AS NET_Connection, message AS String)" + NL
+    t = t + "    VAR u AS String" + NL
+    t = t + "    VAR cmd AS String" + NL
+    t = t + "    VAR arg AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    VAR folder AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    VAR answer AS String" + NL
+    t = t + "    u = conn.Tag.Split(""|"")[0]" + NL
+    t = t + "    cmd = message.Lines()[0].Trim()" + NL
+    t = t + "    arg = """"" + NL
+    t = t + "    IF cmd.Contains("" "") THEN arg = cmd.Substring(cmd.IndexOf("" "") + 1, cmd.Length - cmd.IndexOf("" "") - 1).Trim()" + NL
+    t = t + "    IF cmd.Contains("" "") THEN cmd = cmd.Substring(0, cmd.IndexOf("" ""))" + NL
+    t = t + "    cmd = cmd.Upper()" + NL
+    t = t + "    IF cmd = ""QUIT"" THEN" + NL
+    t = t + "        Reply(conn, ""+OK Bye"")" + NL
+    t = t + "        conn.Close()" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    IF cmd = ""USER"" THEN" + NL
+    t = t + "        conn.Tag = UserPart(Bare(arg)) + ""|0""" + NL
+    t = t + "        Reply(conn, ""+OK say PASS"")" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    IF cmd = ""PASS"" THEN" + NL
+    t = t + "        IF Password(u, arg) THEN" + NL
+    t = t + "            conn.Tag = u + ""|1""" + NL
+    t = t + "            n = 0" + NL
+    t = t + "            FOR EACH line IN ReadOr(DATA + ""\BOX\"" + u + ""\INBOX.TXT"", """").Lines()" + NL
+    t = t + "                IF line <> """" THEN n = n + 1" + NL
+    t = t + "            NEXT" + NL
+    t = t + "            Note(""Mail program signed in as "" + u + "" from "" + conn.FromAddress)" + NL
+    t = t + "            Reply(conn, ""+OK "" + Str(n) + "" letters"")" + NL
+    t = t + "        ELSE" + NL
+    t = t + "            Reply(conn, ""-ERR That name and password do not match."")" + NL
+    t = t + "        END IF" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    IF NOT conn.Tag.EndsWith(""|1"") THEN" + NL
+    t = t + "        Reply(conn, ""-ERR USER and PASS first"")" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    SELECT CASE cmd" + NL
+    t = t + "        CASE ""STAT"", ""LIST""" + NL
+    t = t + "            folder = ""INBOX.TXT""" + NL
+    t = t + "            IF arg.Upper() = ""SENT"" THEN folder = ""SENT.TXT""" + NL
+    t = t + "            Reply(conn, ""+OK"" + Chr(10) + ReadOr(DATA + ""\BOX\"" + u + ""\"" + folder, """").Trim())" + NL
+    t = t + "        CASE ""RETR""" + NL
+    t = t + "            n = Int(Val(arg))" + NL
+    t = t + "            IF NOT FS.Exists(DATA + ""\BOX\"" + u + ""\"" + Str(n) + "".MSG"") THEN" + NL
+    t = t + "                Reply(conn, ""-ERR No letter "" + arg)" + NL
+    t = t + "            ELSE" + NL
+    t = t + "                ' read now: the N flag goes, as when it is opened in the webmail" + NL
+    t = t + "                line = IndexLine(u, Str(n), ""INBOX.TXT"")" + NL
+    t = t + "                IF line <> """" AND line.EndsWith(""|N"") THEN SwapIndex(u, ""INBOX.TXT"", line, line.Substring(0, line.Length - 1))" + NL
+    t = t + "                Reply(conn, ""+OK"" + Chr(10) + FS.Read(DATA + ""\BOX\"" + u + ""\"" + Str(n) + "".MSG""))" + NL
+    t = t + "            END IF" + NL
+    t = t + "        CASE ""DELE""" + NL
+    t = t + "            n = Int(Val(arg))" + NL
+    t = t + "            FOR EACH folder IN [""INBOX.TXT"", ""SENT.TXT""]" + NL
+    t = t + "                line = IndexLine(u, Str(n), folder)" + NL
+    t = t + "                IF line <> """" THEN SwapIndex(u, folder, line, """")" + NL
+    t = t + "            NEXT" + NL
+    t = t + "            IF FS.Exists(DATA + ""\BOX\"" + u + ""\"" + Str(n) + "".MSG"") THEN FS.Delete(DATA + ""\BOX\"" + u + ""\"" + Str(n) + "".MSG"")" + NL
+    t = t + "            Reply(conn, ""+OK deleted"")" + NL
+    t = t + "        CASE ""SEND""" + NL
+    t = t + "            answer = SendFrom(u, message)" + NL
+    t = t + "            IF answer = """" THEN" + NL
+    t = t + "                Reply(conn, ""+OK sent"")" + NL
+    t = t + "            ELSE" + NL
+    t = t + "                Reply(conn, ""-ERR "" + answer)" + NL
+    t = t + "            END IF" + NL
+    t = t + "        CASE ""NOOP""" + NL
+    t = t + "            Reply(conn, ""+OK"")" + NL
+    t = t + "        CASE ELSE" + NL
+    t = t + "            Reply(conn, ""-ERR I know USER, PASS, LIST, RETR, DELE, SEND, NOOP and QUIT"")" + NL
+    t = t + "    END SELECT" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' A letter from a mail program: ""SEND"", then To: and Subject: lines, a blank" + NL
+    t = t + "' line and the text. It is spooled, and kept in Sent, just as the webmail does." + NL
+    t = t + "FUNCTION SendFrom (u AS String, message AS String) AS String" + NL
+    t = t + "    VAR head AS String" + NL
+    t = t + "    VAR text AS String" + NL
+    t = t + "    VAR toList AS String" + NL
+    t = t + "    VAR subject AS String" + NL
+    t = t + "    VAR a AS String" + NL
+    t = t + "    VAR rcpts AS Array OF String" + NL
+    t = t + "    VAR letter AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    VAR dir AS String" + NL
+    t = t + "    message = message.Replace(Chr(13), """")" + NL
+    t = t + "    IF message.Contains(Chr(10)) THEN message = message.Substring(message.IndexOf(Chr(10)) + 1, message.Length - message.IndexOf(Chr(10)) - 1)" + NL
+    t = t + "    IF message.Contains(Chr(10) + Chr(10)) THEN" + NL
+    t = t + "        head = message.Substring(0, message.IndexOf(Chr(10) + Chr(10)) + 1)" + NL
+    t = t + "        text = message.Substring(message.IndexOf(Chr(10) + Chr(10)) + 2, message.Length - message.IndexOf(Chr(10) + Chr(10)) - 2)" + NL
+    t = t + "    ELSE" + NL
+    t = t + "        head = message + Chr(10)" + NL
+    t = t + "    END IF" + NL
+    t = t + "    toList = Header(head + Chr(10), ""To"")" + NL
+    t = t + "    subject = Header(head + Chr(10), ""Subject"")" + NL
+    t = t + "    IF text.Length > MAXBODY THEN RETURN ""Keep letters under "" + Str(MAXBODY) + "" characters.""" + NL
+    t = t + "    FOR EACH a IN toList.Replace("";"", "","").Split("","")" + NL
+    t = t + "        a = Bare(a)" + NL
+    t = t + "        IF a = """" THEN CONTINUE" + NL
+    t = t + "        IF NOT a.Contains(""@"") THEN a = a + ""@"" + NET.HostName.Lower()" + NL
+    t = t + "        IF NOT ValidUser(UserPart(a)) OR HostPart(a) = """" THEN RETURN ""'"" + a + ""' is not an address. Addresses look like ann@alpha.""" + NL
+    t = t + "        IF NOT rcpts.Contains(a) THEN rcpts.Add(a)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    IF rcpts.Count = 0 THEN RETURN ""Who is it to?""" + NL
+    t = t + "    IF rcpts.Count > MAXTO THEN RETURN ""Send it to "" + Str(MAXTO) + "" people at most.""" + NL
+    t = t + "    IF subject = """" THEN subject = ""(no subject)""" + NL
+    t = t + "    IF subject.Length > 100 THEN subject = subject.Substring(0, 100)" + NL
+    t = t + "    letter = ""From: "" + Field(u, ""name"") + "" <"" + u + ""@"" + NET.HostName.Lower() + "">"" + Chr(10) _" + NL
+    t = t + "           + ""To: "" + rcpts.Join("", "") + Chr(10) _" + NL
+    t = t + "           + ""Subject: "" + subject + Chr(10) _" + NL
+    t = t + "           + ""Date: "" + TIME.Date + "" "" + TIME.Clock + Chr(10) _" + NL
+    t = t + "           + ""X-Mailer: Frostbird 1.0 (SIM95)"" + Chr(10) + Chr(10) + text" + NL
+    t = t + "    FOR EACH a IN rcpts" + NL
+    t = t + "        n = Int(Val(ReadOr(DATA + ""\SPOOLID.TXT"", ""0""))) + 1" + NL
+    t = t + "        FS.Write(DATA + ""\SPOOLID.TXT"", Str(n))" + NL
+    t = t + "        FS.Write(DATA + ""\SPOOL\"" + Str(n) + "".MSG"", ""X-Sender: "" + u + ""@"" + NET.HostName.Lower() + Chr(10) + ""X-Recipient: "" + a + Chr(10) + ""X-Tries: 0"" + Chr(10) + ""X-Next: 0"" + Chr(10) + Chr(10) + letter)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    ' a copy in Sent" + NL
+    t = t + "    dir = DATA + ""\BOX\"" + u" + NL
+    t = t + "    n = 1" + NL
+    t = t + "    IF FS.Exists(dir + ""\NEXT.TXT"") THEN n = Int(Val(FS.Read(dir + ""\NEXT.TXT""))) + 1" + NL
+    t = t + "    FS.Write(dir + ""\NEXT.TXT"", Str(n))" + NL
+    t = t + "    FS.Write(dir + ""\"" + Str(n) + "".MSG"", letter)" + NL
+    t = t + "    FS.Append(dir + ""\SENT.TXT"", Str(n) + ""|"" + TIME.Date + "" "" + TIME.Clock.Substring(0, 5) + ""|"" + Esc(Header(letter, ""From"")) + ""|"" + Esc(Header(letter, ""To"")) + ""|"" + Esc(subject) + ""|"" + Str(letter.Length) + ""|"" + Chr(10))" + NL
+    t = t + "    Note(u + "" sent mail from a mail program to "" + rcpts.Join("", ""))" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' ---------------------------------------------------------------- sending" + NL
     t = t + "" + NL

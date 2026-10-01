@@ -586,7 +586,15 @@ SUB Search_Click ()
     END IF
 END SUB
 
+CONST MAILPROGRAM = "C:\PROGRAMS\FROSTBRD.SPK"
+
+' The Mail button opens the mail program if this machine has one (Frostbird),
+' or else the webmail set in Options.
 SUB Mail_Click ()
+    IF FS.Exists(MAILPROGRAM) THEN
+        SYS.Start(MAILPROGRAM, "")
+        RETURN
+    END IF
     IF optMail = "" THEN
         Go("about:mail")
     ELSE
@@ -1588,6 +1596,10 @@ SUB FollowLink (href AS String)
     END IF
     IF href.StartsWith("#") THEN RETURN
     IF href.Lower().StartsWith("mailto:") THEN
+        IF FS.Exists(MAILPROGRAM) THEN
+            SYS.Start(MAILPROGRAM, "mailto:" + href.Substring(7, href.Length - 7).Split("?")[0])
+            RETURN
+        END IF
         IF optMail <> "" THEN Go(Typed(optMail) + "compose.asp?to=" + UrlEnc(href.Substring(7, href.Length - 7)))
         RETURN
     END IF
