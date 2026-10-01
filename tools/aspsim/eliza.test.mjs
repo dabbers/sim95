@@ -87,6 +87,21 @@ await test("what is X? comes from AskSim's index when it is here, and is made up
   assert.equal(await chat(you, "What is chess?"), 'According to "All About Chess" (http://bravo/chess.htm): Chess is a game for two players. I found that with AskSim, so this time I am not making it up. Probably.');
 });
 
+await test("what is X? comes from WikiSim first when its articles are here", async () => {
+  m.mkdir("C:\\WIKIDATA");
+  m.write("C:\\WIKIDATA\\INDEX.TXT", "1|Chess|C|1\n2|Doom (1993 video game)|D|1\n3|Modem|M|2\n");
+  m.write("C:\\WIKIDATA\\VOL01.TXT", "1|Chess|Chess is a {2|game}. It is played by two players on a board.\\Later paragraph.\n2|Doom (1993 video game)|Doom is a first-person shooter game by id Software. It was released for {3|MS-DOS} computers.\n");
+  m.write("C:\\WIKIDATA\\VOL02.TXT", "3|Modem|A modem is a device that turns digital data into sound for a telephone line, and back again. It is short for modulator-demodulator.\n");
+  assert.equal(await chat(you, "What is chess?"), "According to WikiSim (1996 edition): Chess is a game. It is played by two players on a board. The whole article is at http://alpha/article.asp?a=1");
+  assert.equal(await chat(you, "what is doom"), "According to WikiSim (1996 edition): Doom is a first-person shooter game by id Software. It was released for MS-DOS computers. The whole article is at http://alpha/article.asp?a=2");
+  assert.equal(await chat(you, "tell me about modems"), "According to WikiSim (1996 edition): A modem is a device that turns digital data into sound for a telephone line, and back again. The whole article is at http://alpha/article.asp?a=3");
+  // not in WikiSim: AskSim again
+  m.write("C:\\ASKDATA\\IDX\\K.TXT", "knight|4:2\n");
+  assert.match(await chat(you, "What is a knight?"), /^According to "All About Chess"/);
+  for (const f of ["INDEX.TXT", "VOL01.TXT", "VOL02.TXT"]) m.remove("C:\\WIKIDATA\\" + f);
+  m.remove("C:\\WIKIDATA");
+});
+
 await test("a hot temperature hallucinates; regenerate and new chat work", async () => {
   const cold = await chat(you, "blah blah", "0");
   const hot = await chat(you, "blah blah", "1.5");

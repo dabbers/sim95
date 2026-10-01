@@ -13,6 +13,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | ColdMail | `http://HOST/mail/`  | `C:\WEB\MAIL`  |
 | AskSim   | `http://HOST/ask/`   | `C:\WEB\ASK`   |
 | GeoSimies | `http://HOST/geo/` | `C:\WEB\GEO`  |
+| WikiSim  | `http://HOST/wiki/`  | `C:\WEB\WIKI`  |
 | ELIZA-95 | `http://HOST/eliza/` | `C:\WEB\ELIZA` |
 | SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
 | SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
@@ -21,7 +22,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 
 `http://HOST/` becomes a front page that lists them. Each web app's installer leaves an `APP.INF` (name, blurb, colour) in its folder, and the front page lists every folder that has one, so apps added later show up without reinstalling SimHost. Each app keeps its data
 where it always has (`C:\BOOKDATA`, `C:\MAILDATA`, `C:\ASKDATA`,
-`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`, `C:\TUBEDATA`, `C:\STATDATA`), and each has its own cookie, so they don't get in each other's
+`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`, `C:\TUBEDATA`, `C:\STATDATA`, `C:\WIKIDATA`), and each has its own cookie, so they don't get in each other's
 way. The mail server and the crawler run side by side. With SimStats in
 `/stats/`, the front page counts its own visitors: SimStats' installer makes a
 site for the machine itself, and the front page carries its tag.

@@ -10,8 +10,9 @@
 ' and real, working SPARK when asked for a program it knows.
 '
 ' Two things are a bit real:
-'   * Knowledge. If AskSim is installed on this machine, "what is X?" is
-'     answered from AskSim's index of the network, with the page it came from.
+'   * Knowledge. If WikiSim is installed on this machine, "what is X?" is
+'     answered from its article on X. If AskSim is, from AskSim's index of the
+'     network, with the page it came from.
 '   * Hallucination. The temperature setting blends in a Markov chain built
 '     from the bot's own corpus: at 0 it is predictable, at 1.5 it rambles.
 '
@@ -542,11 +543,54 @@ FUNCTION Question (s AS String) AS String
     IF topic = "" THEN RETURN ""
     topic = topic.Replace(" ?", "").Replace("a ", "").Replace("an ", "").Replace("the ", "").Trim()
     IF topic = "" THEN RETURN ""
-    found = Retrieve(topic)
+    found = WikiSim(topic)
+    IF found = "" THEN found = Retrieve(topic)
     IF found <> "" THEN RETURN found
     RETURN Pick(["Great question! " + topic.Substring(0, 1).Upper() + topic.Substring(1, topic.Length - 1) + " is a widely respected concept, first described in 1987 by Dr. Simon Bitwise of the University of Sim (Bitwise et al., 1987, p. 404). It is used by millions of people every day, mostly by accident.", _
                  "As a Language Model of Certain Size, I'm happy to explain " + topic + ". In short, " + topic + " is a kind of " + Pick(["paradigm", "protocol", "synergy", "modem setting"]) + " that became popular in the early 1990s. [citation needed]", _
                  "I'm not certain, but I am very confident: " + topic + " was invented in 1983, the same year as the floppy disk, and for the same reasons."])
+END FUNCTION
+
+' WikiSim: when this machine has WikiSim's articles (C:\WIKIDATA), an article
+' titled topic ("doom" finds "Doom (1993 video game)" too) gives the answer:
+' its first sentence, or two when the first is short, and its address.
+FUNCTION WikiSim (topic AS String) AS String
+    VAR idx AS String
+    VAR at AS Integer
+    VAR id AS String
+    VAR line AS String
+    VAR vol AS String
+    VAR text AS String
+    VAR piece AS String
+    VAR plain AS String
+    VAR cut AS Integer
+    VAR web AS String
+    IF NOT FS.Exists("C:\WIKIDATA\INDEX.TXT") OR topic.Length < 2 THEN RETURN ""
+    idx = Chr(10) + FS.Read("C:\WIKIDATA\INDEX.TXT").Lower()
+    at = idx.IndexOf("|" + topic + "|")
+    IF at < 0 THEN at = idx.IndexOf("|" + topic + " (")
+    IF at < 0 AND topic.EndsWith("s") THEN at = idx.IndexOf("|" + topic.Substring(0, topic.Length - 1) + "|")
+    IF at < 0 THEN RETURN ""
+    id = idx.Substring(0, at).Split(Chr(10))[idx.Substring(0, at).Split(Chr(10)).Count - 1]
+    IF id.Contains("|") THEN RETURN ""
+    vol = FindLine(idx, id).Split("|")[3]
+    IF vol.Length < 2 THEN vol = "0" + vol
+    line = FindLine(ReadOr("C:\WIKIDATA\VOL" + vol + ".TXT", ""), id)
+    IF line.Split("|").Count < 3 THEN RETURN ""
+    text = line.Substring(id.Length + line.Split("|")[1].Length + 2, line.Length - id.Length - line.Split("|")[1].Length - 2)
+    ' the first paragraph, with the {id|words} link marks taken out
+    IF text.Contains("\") THEN text = text.Substring(0, text.IndexOf("\"))
+    FOR EACH piece IN text.Split("{")
+        IF piece.Contains("|") AND piece.Contains("}") THEN piece = piece.Substring(piece.IndexOf("|") + 1, piece.Length - piece.IndexOf("|") - 1)
+        plain = plain + piece.Replace("}", "")
+    NEXT
+    plain = plain.Trim() + " "
+    cut = plain.IndexOf(". ")
+    IF cut > 0 AND cut < 80 AND plain.Substring(cut + 2, plain.Length - cut - 2).Contains(". ") THEN cut = cut + 2 + plain.Substring(cut + 2, plain.Length - cut - 2).IndexOf(". ")
+    IF cut > 0 THEN plain = plain.Substring(0, cut + 1)
+    web = "/"
+    IF FS.Exists("C:\WEB\WIKI\WIKI.SPK") THEN web = "/wiki/"
+    RETURN "According to WikiSim (1996 edition):" + Chr(10) + Chr(10) + "    " + plain.Trim() + Chr(10) + Chr(10) + "The whole article is at http://" + NET.HostName.Lower() + web + "article.asp?a=" + id
 END FUNCTION
 
 ' Retrieval: look the topic up in AskSim's index on this machine (C:\ASKDATA),

@@ -1,0 +1,32 @@
+WikiSim's articles (wikisim/DATA/*.TXT, and the copies of them that
+INSTALL.SPK writes to C:\WIKIDATA)
+======================================================================
+
+The articles are from Wikipedia, the free encyclopedia
+(https://en.wikipedia.org/), written by Wikipedia's contributors. Each
+one is named after the Wikipedia article it came from, and its full text,
+history and list of authors are at https://en.wikipedia.org/wiki/<title>.
+
+They are used, and shared, under the Creative Commons
+Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0):
+https://creativecommons.org/licenses/by-sa/4.0/
+
+The text has been modified. tools/make-wikisim.mjs took the introduction
+of each article and:
+
+  * removed every sentence that mentions a year after 1996, says "as of
+    20xx", or names something from after 1996 (the list is in the
+    script), and left out articles about things from after 1996;
+  * removed pronunciation guides and empty brackets, and tidied spacing;
+  * changed "is currently" to "is at present" and "is the current" to
+    "is the present";
+  * shortened each article to its first few sentences;
+  * added links between WikiSim's own articles, and "See also" lists.
+
+These modified articles are likewise licensed under CC BY-SA 4.0. You may
+copy, change and share them for any purpose, as long as you credit
+Wikipedia, say what you changed, and share the result under the same
+licence.
+
+The WikiSim program itself (wikisim/WEB, the installer and the scripts)
+is part of sim95 and is not covered by this file.

@@ -1,0 +1,619 @@
+1|Abraham|A|1
+2|Abraham Lincoln|A|1
+3|Abstract art|A|1
+4|Achaemenid Empire|A|1
+5|Adam Smith|A|1
+6|Adi Shankara|A|1
+7|Adolescence|A|1
+8|Adolf Hitler|A|1
+9|Adult|A|1
+10|Aesthetics|A|1
+11|Africa|A|1
+12|African traditional religions|A|1
+13|Afterlife|A|1
+14|Age of Discovery|A|1
+15|Age of Enlightenment|A|1
+16|Agriculture|A|1
+17|Akbar|A|1
+18|Al-Khwarizmi|A|1
+19|Alan Turing|A|1
+20|Albert Einstein|A|1
+21|Alcoholic beverage|A|1
+22|Alexander the Great|A|1
+23|Algeria|A|1
+24|Ali|A|1
+25|Allergy|A|1
+26|Alphabet|A|1
+27|Amazon rainforest|A|1
+28|Amazon River|A|1
+29|American Revolution|A|1
+30|Anarchism|A|1
+31|Ancient Egypt|A|1
+32|Ancient Greece|A|1
+33|Ancient history|A|1
+34|Ancient Rome|A|1
+35|Andean civilizations|A|1
+36|Andes|A|1
+37|Anger|A|1
+38|Animation|A|1
+39|Antarctica|A|1
+40|Anthropology|A|1
+41|Antoine Lavoisier|A|1
+42|Arabic|A|1
+43|Arabic numerals|A|1
+44|Archaeology|A|1
+45|Archimedes|A|1
+46|Architecture|A|1
+47|Arctic|A|1
+48|Arctic Ocean|A|1
+49|Argentina|A|1
+50|Aristotle|A|1
+51|Art|A|1
+52|Arthritis|A|1
+53|Ashoka|A|1
+54|Asia|A|1
+55|Association football|A|1
+56|Asthma|A|1
+57|Atheism|A|1
+58|Atlantic Ocean|A|2
+59|Atlantic slave trade|A|2
+60|Augustus|A|2
+61|Australia|A|2
+62|Authoritarianism|A|2
+63|Autism|A|2
+64|Avicenna|A|2
+65|Aztecs|A|2
+66|Bangkok|B|2
+67|Bangladesh|B|2
+68|Bank|B|2
+69|Bean|B|2
+70|Beauty|B|2
+71|Beijing|B|2
+72|Belief|B|2
+73|Bengali language|B|2
+74|Bhagavad Gita|B|2
+75|Bible|B|2
+76|Black Death|B|2
+77|Board game|B|2
+78|Brazil|B|2
+79|Bread|B|2
+80|British Empire|B|2
+81|Broadcasting|B|2
+82|Bronze Age|B|2
+83|Buddhism|B|2
+84|Business|B|2
+85|Byzantine Empire|B|2
+86|Cairo|C|2
+87|Calligraphy|C|2
+88|Canada|C|2
+89|Cancer|C|2
+90|Capitalism|C|2
+91|Card game|C|2
+92|Cardiovascular disease|C|2
+93|Caribbean|C|2
+94|Carl Friedrich Gauss|C|2
+95|Caspian Sea|C|2
+96|Catherine the Great|C|2
+97|Catholic Church|C|2
+98|Central America|C|2
+99|Cereal|C|2
+100|Charlemagne|C|2
+101|Charles Darwin|C|2
+102|Charlie Chaplin|C|2
+103|Cheese|C|2
+104|Child|C|2
+105|China|C|2
+106|Chinese folk religion|C|2
+107|Chinese language|C|2
+108|Christianity|C|2
+109|Christopher Columbus|C|2
+110|Cicero|C|2
+111|City|C|2
+112|Civilization|C|2
+113|Classical antiquity|C|2
+114|Classical music|C|2
+115|Cleopatra|C|2
+116|Clothing|C|3
+117|Coffee|C|3
+118|Cognition|C|3
+119|Cold War|C|3
+120|Colombia|C|3
+121|Colonialism|C|3
+122|Comics|C|3
+123|Common cold|C|3
+124|Communication|C|3
+125|Communism|C|3
+126|Community|C|3
+127|Confucianism|C|3
+128|Confucius|C|3
+129|Consciousness|C|3
+130|Conservatism|C|3
+131|Constitution|C|3
+132|Construction|C|3
+133|Continent|C|3
+134|Cooking|C|3
+135|Corporation|C|3
+136|Country|C|3
+137|Crime|C|3
+138|Crusades|C|3
+139|Culture|C|3
+140|Cyrus the Great|C|3
+141|Dance|D|3
+142|Dante Alighieri|D|3
+143|Decolonization|D|3
+144|Deity|D|3
+145|Delhi|D|3
+146|Dementia|D|3
+147|Democracy|D|3
+148|Democratic Republic of the Congo|D|3
+149|Dentistry|D|3
+150|Desert|D|3
+151|Design|D|3
+152|Diabetes|D|3
+153|Dictatorship|D|3
+154|Diplomacy|D|3
+155|Disability|D|3
+156|Discrimination|D|3
+157|Disease|D|3
+158|Dmitri Mendeleev|D|3
+159|Drawing|D|3
+160|Dream|D|3
+161|Drink|D|3
+162|Drinking water|D|3
+163|Early modern period|E|3
+164|East Asia|E|3
+165|Eastern Orthodox Church|E|3
+166|Eastern philosophy|E|3
+167|Economics|E|3
+168|Economy|E|3
+169|Education|E|3
+170|Egypt|E|3
+171|Elizabeth I|E|3
+172|Emotion|E|3
+173|English language|E|3
+174|Entertainment|E|3
+175|Epistemology|E|4
+176|Ethics|E|4
+177|Ethiopia|E|4
+178|Ethnicity|E|4
+179|Euclid|E|4
+180|Europe|E|4
+181|European Union|E|4
+182|Family|F|4
+183|Famine|F|4
+184|Fascism|F|4
+185|Fashion|F|4
+186|Fear|F|4
+187|Feminism|F|4
+188|Festival|F|4
+189|Fiction|F|4
+190|Film|F|4
+191|Finance|F|4
+192|Fishing|F|4
+193|Florence Nightingale|F|4
+194|Folk music|F|4
+195|Folklore|F|4
+196|Food|F|4
+197|Forest|F|4
+198|France|F|4
+199|Free will|F|4
+200|French language|F|4
+201|French Revolution|F|4
+202|Friendship|F|4
+203|Fruit|F|4
+204|Furniture|F|4
+205|Galileo Galilei|G|4
+206|Gambling|G|4
+207|Game|G|4
+208|Ganges|G|4
+209|Gastroenteritis|G|4
+210|Gender|G|4
+211|Genghis Khan|G|4
+212|Genocide|G|4
+213|Geography|G|4
+214|George Washington|G|4
+215|German language|G|4
+216|Germany|G|4
+217|Globalization|G|4
+218|God|G|4
+219|Good and evil|G|4
+220|Goods|G|4
+221|Government|G|4
+222|Grammar|G|4
+223|Grassland|G|4
+224|Great Depression|G|4
+225|Greek language|G|4
+226|Greek mythology|G|4
+227|Gupta Empire|G|4
+228|Hammurabi|H|4
+229|Han dynasty|H|4
+230|Happiness|H|4
+231|Henry Ford|H|4
+232|Himalayas|H|4
+233|Hinduism|H|5
+234|Hindustani language|H|5
+235|Hippocrates|H|5
+236|History|H|5
+237|History of Africa|H|5
+238|History of agriculture|H|5
+239|History of architecture|H|5
+240|History of art|H|5
+241|History of Asia|H|5
+242|History of Europe|H|5
+243|History of literature|H|5
+244|History of mathematics|H|5
+245|History of medicine|H|5
+246|History of music|H|5
+247|History of North America|H|5
+248|History of philosophy|H|5
+249|History of religion|H|5
+250|History of science|H|5
+251|History of South America|H|5
+252|History of technology|H|5
+253|HIV/AIDS|H|5
+254|Hokusai|H|5
+255|Holy Roman Empire|H|5
+256|Home|H|5
+257|Homer|H|5
+258|Homicide|H|5
+259|Human behavior|H|5
+260|Human history|H|5
+261|Human migration|H|5
+262|Human rights|H|5
+263|Human settlement|H|5
+264|Human sexuality|H|5
+265|Humour|H|5
+266|Hunting|H|5
+267|Ibn Khaldun|I|5
+268|Ideology|I|5
+269|Imagination|I|5
+270|Immanuel Kant|I|5
+271|Imperialism|I|5
+272|Inca Empire|I|5
+273|India|I|5
+274|Indian Ocean|I|5
+275|Indigenous peoples|I|5
+276|Indonesia|I|5
+277|Indus Valley Civilisation|I|5
+278|Industrial Revolution|I|5
+279|Infant|I|5
+280|Infection|I|5
+281|Influenza|I|5
+282|Information|I|5
+283|Information Age|I|5
+284|Injury|I|5
+285|Insurance|I|5
+286|Intellectual disability|I|5
+287|Intelligence|I|5
+288|International Red Cross and Red Crescent Movement|I|5
+289|Iran|I|6
+290|Iron Age|I|6
+291|Isaac Newton|I|6
+292|Islam|I|6
+293|Islamic Golden Age|I|6
+294|Island|I|6
+295|Israel|I|6
+296|Istanbul|I|6
+297|Italy|I|6
+298|Jainism|J|6
+299|Jakarta|J|6
+300|James Clerk Maxwell|J|6
+301|Japan|J|6
+302|Japanese language|J|6
+303|Java|J|6
+304|Jazz|J|6
+305|Jerusalem|J|6
+306|Jesus|J|6
+307|Jewellery|J|6
+308|Johann Sebastian Bach|J|6
+309|Johannes Gutenberg|J|6
+310|John Locke|J|6
+311|Joseph Stalin|J|6
+312|Journalism|J|6
+313|Judaism|J|6
+314|Julius Caesar|J|6
+315|Justice|J|6
+316|Karl Marx|K|6
+317|Kenya|K|6
+318|Knowledge|K|6
+319|Kurt Gödel|K|6
+320|Lagos|L|6
+321|Lake|L|6
+322|Land|L|6
+323|Language|L|6
+324|Laozi|L|6
+325|Latin|L|6
+326|Law|L|6
+327|Learning|L|6
+328|Leo Tolstoy|L|6
+329|Leonardo da Vinci|L|6
+330|Leonhard Euler|L|6
+331|Li Bai|L|6
+332|Liberalism|L|6
+333|Liberty|L|6
+334|Library|L|6
+335|Linguistics|L|6
+336|Literacy|L|6
+337|Literature|L|6
+338|Logic|L|6
+339|Logogram|L|6
+340|London|L|6
+341|Louis Armstrong|L|6
+342|Louis Pasteur|L|6
+343|Love|L|6
+344|Ludwig van Beethoven|L|6
+345|Macroeconomics|M|6
+346|Mahatma Gandhi|M|6
+347|Mahayana|M|7
+348|Maize|M|7
+349|Malaria|M|7
+350|Malay language|M|7
+351|Malaysia|M|7
+352|Mali Empire|M|7
+353|Man|M|7
+354|Management|M|7
+355|Mansa Musa|M|7
+356|Manufacturing|M|7
+357|Mao Zedong|M|7
+358|Marie Curie|M|7
+359|Marketing|M|7
+360|Marriage|M|7
+361|Martial arts|M|7
+362|Martin Luther|M|7
+363|Mary Wollstonecraft|M|7
+364|Mass media|M|7
+365|Maya civilization|M|7
+366|Meat|M|7
+367|Mecca|M|7
+368|Medicine|M|7
+369|Meditation|M|7
+370|Mediterranean Sea|M|7
+371|Memory|M|7
+372|Mental disorder|M|7
+373|Mesoamerica|M|7
+374|Mesopotamia|M|7
+375|Metaphysics|M|7
+376|Mexico|M|7
+377|Mexico City|M|7
+378|Michael Faraday|M|7
+379|Michael Jackson|M|7
+380|Michelangelo|M|7
+381|Microeconomics|M|7
+382|Middle Ages|M|7
+383|Middle East|M|7
+384|Miguel de Cervantes|M|7
+385|Military|M|7
+386|Military history|M|7
+387|Milk|M|7
+388|Mind|M|7
+389|Mining|M|7
+390|Mississippi River|M|7
+391|Modern era|M|7
+392|Modernism|M|7
+393|Monarchy|M|7
+394|Money|M|7
+395|Mongol Empire|M|7
+396|Morality|M|7
+397|Morocco|M|7
+398|Moscow|M|7
+399|Moses|M|7
+400|Mountain|M|7
+401|Mughal Empire|M|7
+402|Muhammad|M|7
+403|Mumbai|M|7
+404|Murasaki Shikibu|M|7
+405|Museum|M|7
+406|Music|M|8
+407|Musical instrument|M|8
+408|Myanmar|M|8
+409|Myocardial infarction|M|8
+410|Myth|M|8
+411|Napoleon|N|8
+412|Narrative|N|8
+413|Nation|N|8
+414|Nationalism|N|8
+415|Nelson Mandela|N|8
+416|Neolithic Revolution|N|8
+417|New religious movement|N|8
+418|New York City|N|8
+419|Niccolò Machiavelli|N|8
+420|Nicolaus Copernicus|N|8
+421|Nigeria|N|8
+422|Nile|N|8
+423|Non-fiction|N|8
+424|North America|N|8
+425|Novel|N|8
+426|Ocean|O|8
+427|Oceania|O|8
+428|Old age|O|8
+429|Ontology|O|8
+430|Oral tradition|O|8
+431|Orchestra|O|8
+432|Ottoman Empire|O|8
+433|Pablo Picasso|P|8
+434|Pacific Ocean|P|8
+435|Painting|P|8
+436|Pakistan|P|8
+437|Parenting|P|8
+438|Paris|P|8
+439|Peace|P|8
+440|Perception|P|8
+441|Performing arts|P|8
+442|Personal name|P|8
+443|Personality|P|8
+444|Philippines|P|8
+445|Philosophy|P|8
+446|Phoenicia|P|8
+447|Photography|P|8
+448|Physical disability|P|8
+449|Plato|P|8
+450|Play (activity)|P|8
+451|Pneumonia|P|8
+452|Poetry|P|8
+453|Poland|P|8
+454|Police|P|8
+455|Political party|P|8
+456|Political science|P|8
+457|Politics|P|8
+458|Pollution|P|8
+459|Polynesia|P|8
+460|Pop music|P|8
+461|Popular culture|P|8
+462|Portuguese language|P|8
+463|Post-classical history|P|8
+464|Potato|P|8
+465|Pottery|P|8
+466|Poverty|P|8
+467|Power (political science)|P|8
+468|Prayer|P|9
+469|Pre-Columbian era|P|9
+470|Prehistory|P|9
+471|Privacy|P|9
+472|Property|P|9
+473|Protestantism|P|9
+474|Psychology|P|9
+475|Publishing|P|9
+476|Qin Shi Huang|Q|9
+477|Quran|Q|9
+478|Rabindranath Tagore|R|9
+479|Racism|R|9
+480|Ramesses II|R|9
+481|Realism (arts)|R|9
+482|Reality|R|9
+483|Reason|R|9
+484|Reformation|R|9
+485|Religion|R|9
+486|Rembrandt|R|9
+487|Renaissance|R|9
+488|René Descartes|R|9
+489|Retail|R|9
+490|Rhythm|R|9
+491|Rice|R|9
+492|Ritual|R|9
+493|River|R|9
+494|Rock music|R|9
+495|Rocky Mountains|R|9
+496|Romanticism|R|9
+497|Rome|R|9
+498|Rumi|R|9
+499|Russia|R|9
+500|Russian language|R|9
+501|Sadness|S|9
+502|Sahara|S|9
+503|Salt|S|9
+504|Sanskrit|S|9
+505|São Paulo|S|9
+506|Saudi Arabia|S|9
+507|School|S|9
+508|Scientific Revolution|S|9
+509|Scramble for Africa|S|9
+510|Sculpture|S|9
+511|Sea|S|9
+512|Secularism|S|9
+513|Service (economics)|S|9
+514|Sexism|S|9
+515|Sexual intercourse|S|9
+516|Sexual orientation|S|9
+517|Sexually transmitted infection|S|9
+518|Shamanism|S|9
+519|Shen Kuo|S|9
+520|Shia Islam|S|9
+521|Shinto|S|9
+522|Short story|S|9
+523|Sigmund Freud|S|9
+524|Sikhism|S|9
+525|Silk Road|S|9
+526|Simón Bolívar|S|9
+527|Singapore|S|10
+528|Singing|S|10
+529|Slavery|S|10
+530|Smallpox|S|10
+531|Social class|S|10
+532|Social equality|S|10
+533|Social science|S|10
+534|Socialism|S|10
+535|Society|S|10
+536|Sociology|S|10
+537|Socrates|S|10
+538|Soul|S|10
+539|South Africa|S|10
+540|South America|S|10
+541|South Asia|S|10
+542|South Korea|S|10
+543|Southeast Asia|S|10
+544|Soviet Union|S|10
+545|Spain|S|10
+546|Spanish Empire|S|10
+547|Spanish language|S|10
+548|Speech|S|10
+549|Spice|S|10
+550|Spirituality|S|10
+551|Sport|S|10
+552|Sport of athletics|S|10
+553|State (polity)|S|10
+554|Stone Age|S|10
+555|Stroke|S|10
+556|Sub-Saharan Africa|S|10
+557|Sugar|S|10
+558|Suleiman the Magnificent|S|10
+559|Sumer|S|10
+560|Sunni Islam|S|10
+561|Swahili|S|10
+562|Swimming|S|10
+563|Tang dynasty|T|10
+564|Tanzania|T|10
+565|Taoism|T|10
+566|Tax|T|10
+567|Tea|T|10
+568|Terrorism|T|10
+569|Thailand|T|10
+570|The arts|T|10
+571|The Beatles|T|10
+572|The Buddha|T|10
+573|Theatre|T|10
+574|Theft|T|10
+575|Theology|T|10
+576|Theravada|T|10
+577|Thomas Edison|T|10
+578|Thought|T|10
+579|Timur|T|10
+580|Tokyo|T|10
+581|Tourism|T|10
+582|Town|T|10
+583|Toy|T|10
+584|Trade|T|10
+585|Trade union|T|11
+586|Truth|T|11
+587|Tuberculosis|T|11
+588|Turkey|T|11
+589|United Kingdom|U|11
+590|United Nations|U|11
+591|United States|U|11
+592|University|U|11
+593|Urbanization|U|11
+594|Vedas|V|11
+595|Vegetable|V|11
+596|Video game|V|11
+597|Vietnam|V|11
+598|Viking Age|V|11
+599|Village|V|11
+600|Vincent van Gogh|V|11
+601|Violence|V|11
+602|Virgil|V|11
+603|Visual arts|V|11
+604|Walt Disney|W|11
+605|War|W|11
+606|Welfare spending|W|11
+607|Western philosophy|W|11
+608|Wheat|W|11
+609|William Shakespeare|W|11
+610|Wolfgang Amadeus Mozart|W|11
+611|Woman|W|11
+612|Word|W|11
+613|Work (human activity)|W|11
+614|World War I|W|11
+615|World War II|W|11
+616|Writing|W|11
+617|Writing system|W|11
+618|Yangtze|Y|11
+619|Zoroastrianism|Z|11

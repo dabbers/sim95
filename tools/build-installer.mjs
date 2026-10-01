@@ -129,6 +129,7 @@ const portal = {
   ELIZA: ["A chatbot with Language-Model-of-Certain-Size manners.", "#2F6F4F"],
   PAL: ["Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.", "#003087"],
   TUBE: ["Movies: watch them, put yours up, give them stars. They play in SimPlayer.", "#CC0000"],
+  WIKI: ["The encyclopedia: hundreds of articles from Wikipedia, as of 1996.", "#000040"],
   STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
 };
 const appInf = (app) => {
@@ -429,6 +430,35 @@ END SUB
     done: `Print("The Sim Shell is open, and sshd is listening on port 22. Next time, start C:\\PROGRAMS\\SIMSH.SPK from Files.")`,
     code: () => startService + read("simsh/src/SIMSHRC.SPK"),
   },
+  wikisim: {
+    folder: "WIKI",
+    vapor: { folder: "WIKI", id: "WIKISIM", name: "WikiSim", kind: "web", category: "Reference", run: "/", tasks: "", startup: "", about: "An encyclopedia as of 1996: hundreds of articles from Wikipedia, with search, A to Z, a random article and an article of the day. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "WikiSim",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. WikiSim becomes
+' this machine's home page: its pages go into C:\\WEB (the stock INDEX.HTM moves
+' to WELCOME.HTM), and the articles into C:\\WIKIDATA. The articles are
+' Wikipedia's (CC BY-SA 4.0), cut back to 1996 and edited; see LICENSE.HTM.
+' Nothing is ever written to C:\\WIKIDATA but by this, so running it again
+' just puts a fresh copy there. Then open http://YOURNAME/ in Voyager.`,
+    copy: [["wikisim/WEB", "C:\\WEB"]],
+    // the articles, made by tools/make-wikisim.mjs
+    generated: fs.readdirSync(path.join(root, "wikisim/DATA")).sort().map((f) => ({ dest: "C:\\WIKIDATA\\" + f.toUpperCase(), text: () => read("wikisim/DATA/" + f) })),
+    dirs: [],
+    first: ["MoveHomePage()", "WikiDirs()"],
+    last: [],
+    url: "/",
+    code: () => moveHomePage + `
+' Where the articles live, outside C:\\WEB. An older copy goes first, so no
+' volume is left over from it.
+SUB WikiDirs ()
+    VAR f AS String
+    IF NOT FS.Exists("C:\\WIKIDATA") THEN FS.MakeDir("C:\\WIKIDATA")
+    FOR EACH f IN FS.List("C:\\WIKIDATA")
+        IF NOT f.EndsWith("\\") THEN FS.Delete("C:\\WIKIDATA\\" + f)
+    NEXT
+END SUB
+`,
+  },
   eliza: {
     folder: "ELIZA",
     vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with Language-Model-of-Certain-Size manners, games, jokes and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
@@ -454,7 +484,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", simpal: "PAL.SPK", simtube: "TUBE.SPK", simstats: "STATS.SPK", wikisim: "WIKI.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);

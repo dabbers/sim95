@@ -1,0 +1,215 @@
+' WIKI.SPK - WikiSim, the encyclopedia on a disk, as of 1996.
+' Every page pulls this in with <%@ import file="WIKI.SPK" %>.
+'
+' The articles are Wikipedia's (CC BY-SA 4.0), cut back to what was known in
+' 1996 and shortened by tools/make-wikisim.mjs. They live outside C:\WEB, so
+' the web server never hands the raw files out, and nothing is ever written:
+'
+'   C:\WIKIDATA\INDEX.TXT     id|title|letter|volume, one per article, A to Z
+'   C:\WIKIDATA\VOLnn.TXT     id|title|text, about 30K of articles to a file
+'   C:\WIKIDATA\LINKS.TXT     id|id id id  (the article's "See also")
+'   C:\WIKIDATA\DYK.TXT       id|a sentence, for "Did you know?"
+'
+' In the text, a line break is \ and a link to another article is {id|words}.
+' Ids follow the titles A to Z, so the article before and after are id-1 and
+' id+1. A server page that runs too long is stopped, so every lookup here is
+' an IndexOf on a whole file rather than a loop over its lines.
+
+CONST DATADIR = "C:\WIKIDATA"
+CONST PERPAGE = 150           ' titles on one page of a letter
+CONST MAXHITS = 40            ' search results shown
+
+VAR indexText AS String       ' INDEX.TXT with a line break in front, read once
+VAR indexLower AS String      ' the same, lower case, for finding titles
+VAR articleCount AS Integer
+
+' ---------------------------------------------------------------- odds and ends
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+' The line of text that starts with key|, or "". text starts with a line break.
+FUNCTION LineOf (text AS String, key AS String) AS String
+    VAR at AS Integer
+    VAR rest AS String
+    at = text.IndexOf(Chr(10) + key + "|")
+    IF at < 0 THEN RETURN ""
+    rest = text.Substring(at + 1, text.Length - at - 1)
+    IF rest.Contains(Chr(10)) THEN rest = rest.Substring(0, rest.IndexOf(Chr(10)))
+    RETURN rest
+END FUNCTION
+
+SUB LoadIndex ()
+    IF indexText <> "" THEN RETURN
+    indexText = Chr(10) + ReadOr(DATADIR + "\INDEX.TXT", "").Replace(Chr(13), "")
+    indexLower = indexText.Lower()
+    articleCount = indexText.Split(Chr(10)).Count - 2
+    IF articleCount < 0 THEN articleCount = 0
+END SUB
+
+' INDEX.TXT's line for an article id ("" when there is none)
+FUNCTION IndexLine (id AS Integer) AS String
+    LoadIndex()
+    RETURN LineOf(indexText, Str(id))
+END FUNCTION
+
+FUNCTION TitleOf (id AS Integer) AS String
+    VAR line AS String
+    line = IndexLine(id)
+    IF line = "" THEN RETURN ""
+    RETURN line.Split("|")[1]
+END FUNCTION
+
+' An article's id from its id or its title (any case); 0 when there is none.
+' "doom" finds "Doom (1993 video game)" too.
+FUNCTION FindArticle (a AS String) AS Integer
+    VAR at AS Integer
+    VAR head AS String
+    LoadIndex()
+    a = a.Trim()
+    IF a = "" THEN RETURN 0
+    IF Str(Int(Val(a))) = a THEN
+        IF IndexLine(Int(Val(a))) <> "" THEN RETURN Int(Val(a))
+        RETURN 0
+    END IF
+    at = indexLower.IndexOf("|" + a.Lower() + "|")
+    IF at < 0 THEN at = indexLower.IndexOf("|" + a.Lower() + " (")
+    IF at < 0 THEN RETURN 0
+    ' what is between the line break and the title is the id
+    head = indexLower.Substring(0, at)
+    head = head.Split(Chr(10))[head.Split(Chr(10)).Count - 1]
+    IF head.Contains("|") THEN RETURN 0
+    RETURN Int(Val(head))
+END FUNCTION
+
+' The volume line of an article: id|title|text
+FUNCTION ArticleLine (id AS Integer) AS String
+    VAR line AS String
+    VAR vol AS String
+    line = IndexLine(id)
+    IF line = "" THEN RETURN ""
+    vol = line.Split("|")[3]
+    IF vol.Length < 2 THEN vol = "0" + vol
+    RETURN LineOf(Chr(10) + ReadOr(DATADIR + "\VOL" + vol + ".TXT", ""), Str(id))
+END FUNCTION
+
+' The text part of a volume line.
+FUNCTION TextOf (line AS String) AS String
+    VAR skip AS Integer
+    skip = line.Split("|")[0].Length + line.Split("|")[1].Length + 2
+    RETURN line.Substring(skip, line.Length - skip)
+END FUNCTION
+
+' The text as HTML: paragraphs, and {id|words} as links to those articles.
+FUNCTION TextHtml (text AS String) AS String
+    VAR out AS String
+    VAR piece AS String
+    VAR first AS Bool
+    text = H(text)
+    first = TRUE
+    FOR EACH piece IN text.Split("{")
+        IF first THEN
+            out = piece
+            first = FALSE
+        ELSEIF piece.Contains("|") AND piece.Contains("}") THEN
+            out = out + "<a href=""article.asp?a=" + piece.Split("|")[0] + """>" + piece.Substring(piece.IndexOf("|") + 1, piece.IndexOf("}") - piece.IndexOf("|") - 1) + "</a>" + piece.Substring(piece.IndexOf("}") + 1, piece.Length - piece.IndexOf("}") - 1)
+        ELSE
+            out = out + "{" + piece
+        END IF
+    NEXT
+    RETURN "<p>" + out.Replace("\", "</p>" + Chr(10) + "<p>") + "</p>"
+END FUNCTION
+
+' The text with the link marks taken out.
+FUNCTION PlainText (text AS String) AS String
+    VAR out AS String
+    VAR piece AS String
+    VAR first AS Bool
+    first = TRUE
+    FOR EACH piece IN text.Split("{")
+        IF first THEN
+            out = piece
+            first = FALSE
+        ELSEIF piece.Contains("|") AND piece.Contains("}") THEN
+            out = out + piece.Substring(piece.IndexOf("|") + 1, piece.Length - piece.IndexOf("|") - 1).Replace("}", "")
+        ELSE
+            out = out + "{" + piece
+        END IF
+    NEXT
+    RETURN out.Replace("\", " ")
+END FUNCTION
+
+' The article of the day: the same one all day, a different one tomorrow.
+FUNCTION DaySeed () AS Integer
+    VAR d AS String
+    d = TIME.Date
+    RETURN Int(Val(d.Substring(0, 4))) * 372 + Int(Val(d.Substring(5, 2))) * 31 + Int(Val(d.Substring(8, 2)))
+END FUNCTION
+
+FUNCTION DayArticle () AS Integer
+    LoadIndex()
+    IF articleCount = 0 THEN RETURN 0
+    RETURN (DaySeed() * 7919) MOD articleCount + 1
+END FUNCTION
+
+FUNCTION RandomArticle () AS Integer
+    LoadIndex()
+    IF articleCount = 0 THEN RETURN 0
+    RETURN Rnd(articleCount) + 1
+END FUNCTION
+
+' Today's "Did you know?" line: id|sentence
+FUNCTION DidYouKnow () AS String
+    VAR lines AS Array OF String
+    lines = ReadOr(DATADIR + "\DYK.TXT", "").Replace(Chr(13), "").Trim().Split(Chr(10))
+    IF lines.Count = 0 THEN RETURN ""
+    RETURN lines[(DaySeed() * 31) MOD lines.Count]
+END FUNCTION
+
+' ---------------------------------------------------------------- the look
+
+' The top of every page: the WikiSim banner, the search box, and the letters.
+FUNCTION Top (title AS String) AS String
+    VAR out AS String
+    out = "<html><head><title>" + H(title) + " - WikiSim 96</title>" + Chr(10) _
+        + "<meta name=""description"" content=""WikiSim 96, the encyclopedia on your computer: hundreds of articles, as of 1996."">" + Chr(10) _
+        + "</head>" + Chr(10) + "<body bgcolor=""#FFFFF0"" link=""#000080"" vlink=""#600060"">" + Chr(10) _
+        + "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" bgcolor=""#000040""><tr>" _
+        + "<td><a href=""index.asp""><font face=""Times New Roman"" color=""#FFD700"" size=""6""><b>W</b></font><font face=""Times New Roman"" color=""#FFFFFF"" size=""5""><b>iki</b></font><font face=""Times New Roman"" color=""#FFD700"" size=""6""><b>S</b></font><font face=""Times New Roman"" color=""#FFFFFF"" size=""5""><b>im</b></font></a>" _
+        + "<font color=""#C0C0FF"" size=""2""> &nbsp;Encyclopedia 96 &middot; Multimedia Edition</font></td>" _
+        + "<td align=""right""><form action=""search.asp"" method=""get""><font color=""#FFFFFF"" size=""2"">Find: </font><input name=""q"" size=""18""> <input type=""submit"" value=""Go""></form></td>" _
+        + "</tr></table>" + Chr(10) + Letters() + Chr(10)
+    RETURN out
+END FUNCTION
+
+FUNCTION Letters () AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR L AS String
+    out = "<table width=""100%"" cellpadding=""2"" cellspacing=""0"" bgcolor=""#C0C0C0""><tr><td align=""center""><font size=""2"">"
+    FOR i = 0 TO 25
+        L = Chr(65 + i)
+        out = out + "<a href=""letter.asp?l=" + L + """><b>" + L + "</b></a> "
+    NEXT
+    out = out + "<a href=""letter.asp?l=0""><b>#</b></a> &nbsp;|&nbsp; <a href=""random.asp"">Random</a> &nbsp;|&nbsp; <a href=""index.asp"">Contents</a></font></td></tr></table>"
+    RETURN out
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">WikiSim 96 &middot; text from Wikipedia, the free encyclopedia, as of 1996 and edited, under <a href=""license.htm"">CC BY-SA 4.0</a> &middot; <a href=""wikisim.htm"">About WikiSim</a></font></center>" + Chr(10) + "</body></html>"
+END FUNCTION
+
+FUNCTION NoData () AS String
+    RETURN "<p><b>The WikiSim disk is not in the drive.</b> WikiSim keeps its articles in " + DATADIR + ", and this machine has none. Run WikiSim's INSTALL.SPK again to put them back.</p>"
+END FUNCTION
+
+' A titled box, for the front page.
+FUNCTION Box (title AS String, color AS String, body AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""6"" cellspacing=""0"" border=""1""><tr><td bgcolor=""" + color + """><font color=""#FFFFFF""><b>" + title + "</b></font></td></tr><tr><td bgcolor=""#FFFFFF"">" + body + "</td></tr></table>"
+END FUNCTION

@@ -1,0 +1,1 @@
+Hong Kong: first sentence: /(?<![\p{L}\p{N}_-])special administrative region(?![\p{L}\p{N}_-])/iu

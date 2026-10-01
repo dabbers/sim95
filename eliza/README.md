@@ -75,9 +75,12 @@ tests use for exact answers.
 
 **Two bits that are real.**
 
-* **Retrieval.** "What is chess?" On a machine with AskSim, it looks the word
+* **Retrieval.** "What is chess?" On a machine with [WikiSim](../wikisim/)
+  (`C:\WIKIDATA`), it finds the article with that title and answers with its
+  first sentence or two: "According to WikiSim (1996 edition): ...", and the
+  article's address. Otherwise, on a machine with AskSim, it looks the word
   up in AskSim's index, finds the page that uses it most, and quotes the
-  sentence, with the page's title and address. Without AskSim, it invents a
+  sentence, with the page's title and address. Without either, it invents a
   1987 paper by Dr. Simon Bitwise.
 * **Temperature.** At 0 its replies are predictable. At 0.7 it varies its
   phrasing. At 1.5 it appends a sentence from a two-word Markov chain trained
