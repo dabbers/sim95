@@ -47,6 +47,44 @@ SUB MoveHomePage ()
 END SUB
 `;
 
+// The Vapor store's games. Each is cut into parts of at most PART characters
+// (a whole line at a time), so every part fits in one network message.
+const vaporGames = [
+  { id: "SIMDOOM", name: "SimDOOM", genre: "Shooter", about: "Rip and tear through E1M1 in glorious 16 colours. A real raycast 3D view, imps that chase you, a pistol, health and ammo, a face that watches you, and achievements. Type IDDQD at your own risk." },
+  { id: "SNAKE", name: "Snake 95", genre: "Arcade", about: "Eat the dots. Grow longer. Don't eat yourself. The game that sold a million phones, now on SIM95." },
+  { id: "HL3", name: "Half-Life 3", genre: "Shooter", soon: true, about: "The long-awaited conclusion. Coming soon." },
+];
+const PART = 15000;
+function cut(text) {
+  const parts = [];
+  let cur = "";
+  const lines = text.replace(/\r/g, "").split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  for (const line of lines) {
+    if (cur.length + line.length + 1 > PART && cur) { parts.push(cur); cur = ""; }
+    cur += line + "\n";
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+function vaporStore() {
+  const files = [];
+  const catalog = [];
+  const esc = (s) => s.replace(/%/g, "%25").replace(/\|/g, "%7C");
+  for (const g of vaporGames) {
+    if (g.soon) { catalog.push([g.id, g.name, 0, 0, "soon", g.genre, esc(g.about)].join("|")); continue; }
+    const text = read(`vapor/GAMES/${g.id}.SPK`);
+    const parts = cut(text);
+    parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\${g.id}\\${i + 1}.TXT`, text: () => p }));
+    catalog.push([g.id, g.name, parts.length, text.length, "ok", g.genre, esc(g.about)].join("|"));
+  }
+  const client = cut(read("vapor/PROGRAMS/VAPOR.SPK"));
+  client.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\CLIENT\\${i + 1}.TXT`, text: () => p }));
+  files.push({ dest: "C:\\WEB\\VAPOR\\CLIENT.TXT", text: () => String(client.length) });
+  files.push({ dest: "C:\\WEB\\VAPOR\\CATALOG.TXT", text: () => catalog.join("\n") + "\n" });
+  return files;
+}
+
 const apps = {
   simbook: {
     title: "SimBook",
@@ -140,6 +178,22 @@ const apps = {
     last: [`StartService("CLIPPY", "C:\\PROGRAMS\\CLIPPY.SPK", "CLIPPY.RUN")`],
     done: `Print("It looks like you've installed Clippy! Would you like help?")`,
     code: () => startService,
+  },
+  vapor: {
+    title: "Vapor",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It makes this
+' machine a Vapor games store: the store's files go in C:\\WEB\\VAPOR (the web
+' server hands them out at http://YOURNAME/vapor/), with every game cut into
+' parts that fit a network message. It also puts the Vapor program in
+' C:\\PROGRAMS\\VAPOR.SPK and starts it. Other machines get Vapor from the
+' store's page, and download games from it. Your home page is not touched.`,
+    copy: [["vapor/WEB", "C:\\WEB\\VAPOR"], ["vapor/PROGRAMS", "C:\\PROGRAMS"]],
+    generated: vaporStore(),
+    dirs: ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\CLIENT", ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)],
+    first: [],
+    last: [`SYS.Start("C:\\PROGRAMS\\VAPOR.SPK", "")`],
+    done: `Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")`,
+    code: () => "",
   },
   eliza: {
     title: "ELIZA-95",

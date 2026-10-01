@@ -9,6 +9,8 @@ A series of programs for the sim95 playground
   (folders, letters, Get Mail, Write, Reply, Forward).
 * [`clippy/`](clippy/) – Clippy, an assistant who watches what you do and
   offers to help ("It looks like you're writing a letter...").
+* [`vapor/`](vapor/) – Vapor, a games store and library (downloads, play
+  time, achievements), with SimDOOM (a raycast 3D shooter) and Snake 95.
 * [`asksim/`](asksim/) – AskSim, an Ask Jeeves-style search engine with a
   real crawler that goes round every machine's web pages.
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
@@ -28,4 +30,4 @@ a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird, clippy). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy, vapor). Rebuild the installers with `node tools/build-installer.mjs`.
