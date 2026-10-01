@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lit = (s) => '"' + s.replace(/"/g, '""') + '"';
@@ -67,26 +68,48 @@ function cut(text) {
   if (cur) parts.push(cur);
   return parts;
 }
+// Every installer, game and the Vapor program itself starts with a header line
+// that says what it is, so a Vapor store can publish it (Vapor's Publish Apps
+// reads the same line):
+//   ' VAPOR|id=SIMXPLOR|name=Simxplorer|kind=program|version=1a2b3c4d|...
+// kind is program, service, web, game or client (Vapor itself). version is a
+// hash of the rest of the file, so every change makes a new version.
+const version = (text) => crypto.createHash("sha1").update(text).digest("hex").slice(0, 8);
+function header(meta) {
+  const clean = (v) => String(v ?? "").replace(/[|\r\n]/g, " ");
+  return "' VAPOR|" + ["id", "name", "kind", "version", "category", "run", "files", "tasks", "startup", "about"].map((k) => k + "=" + clean(meta[k])).join("|");
+}
+// A catalog line for a file with a header:
+//   id|name|parts|bytes|status|category|about|kind|version|run|files|tasks|startup
+function catalogLine(text, parts) {
+  const m = Object.fromEntries(text.split("\n")[0].slice("' VAPOR|".length).split("|").map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
+  return [m.id, m.name, parts, text.length, "ok", m.category, m.about, m.kind, m.version, m.run, m.files, m.tasks, m.startup].join("|");
+}
+const withHeader = (meta, body) => header({ ...meta, version: version(body) }) + "\n" + body;
+const vaporClient = () => withHeader({ id: "VAPOR", name: "Vapor", kind: "client", category: "Vapor", run: "C:\\PROGRAMS\\VAPOR.SPK", files: "C:\\PROGRAMS\\VAPOR.SPK", tasks: "VAPOR", about: "The Vapor program itself." }, read("vapor/PROGRAMS/VAPOR.SPK"));
+const gameText = (g) => withHeader({ id: g.id, name: g.name, kind: "game", category: g.genre, run: `C:\\GAMES\\${g.id}\\${g.id}.SPK`, files: `C:\\GAMES\\${g.id}\\${g.id}.SPK`, tasks: g.id, about: g.about }, read(`vapor/GAMES/${g.id}.SPK`));
 function vaporStore() {
   const files = [];
   const catalog = [];
-  const esc = (s) => s.replace(/%/g, "%25").replace(/\|/g, "%7C");
   for (const g of vaporGames) {
-    if (g.soon) { catalog.push([g.id, g.name, 0, 0, "soon", g.genre, esc(g.about)].join("|")); continue; }
-    const text = read(`vapor/GAMES/${g.id}.SPK`);
+    if (g.soon) { catalog.push([g.id, g.name, 0, 0, "soon", g.genre, g.about, "game", "", "", "", "", ""].join("|")); continue; }
+    const text = gameText(g);
     const parts = cut(text);
     parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\${g.id}\\${i + 1}.TXT`, text: () => p }));
-    catalog.push([g.id, g.name, parts.length, text.length, "ok", g.genre, esc(g.about)].join("|"));
+    catalog.push(catalogLine(text, parts.length));
   }
-  const client = cut(read("vapor/PROGRAMS/VAPOR.SPK"));
-  client.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\CLIENT\\${i + 1}.TXT`, text: () => p }));
-  files.push({ dest: "C:\\WEB\\VAPOR\\CLIENT.TXT", text: () => String(client.length) });
+  const client = vaporClient();
+  const parts = cut(client);
+  parts.forEach((p, i) => files.push({ dest: `C:\\WEB\\VAPOR\\VAPOR\\${i + 1}.TXT`, text: () => p }));
+  catalog.push(catalogLine(client, parts.length));
   files.push({ dest: "C:\\WEB\\VAPOR\\CATALOG.TXT", text: () => catalog.join("\n") + "\n" });
+  files.push({ dest: "C:\\PROGRAMS\\VAPOR.SPK", text: () => client });
   return files;
 }
 
 const apps = {
   simbook: {
+    vapor: { id: "SIMBOOK", name: "SimBook", kind: "web", category: "Social", run: "/", tasks: "", startup: "", about: "The social network for the SIM95 network: profiles, friends, a news feed, walls, photos and pokes. Becomes this machine's home page." },
     title: "SimBook",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimBook becomes
 ' this machine's home page: its pages go into C:\\WEB, and the stock INDEX.HTM is
@@ -101,6 +124,7 @@ const apps = {
     code: () => moveHomePage + "\n" + read("simbook/MIGRATE.SPK"),
   },
   coldmail: {
+    vapor: { id: "COLDMAIL", name: "ColdMail", kind: "web", category: "Internet", run: "/", tasks: "MAILD", startup: "MAIL.RUN", about: "Free webmail and a real mail server: send letters to anybody on any machine. Becomes this machine's home page." },
     title: "ColdMail",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
 ' webmail in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
@@ -119,6 +143,7 @@ const apps = {
     code: () => startService + moveHomePage,
   },
   asksim: {
+    vapor: { id: "ASKSIM", name: "AskSim", kind: "web", category: "Internet", run: "/", tasks: "CRAWLER", startup: "ASKSIM.RUN", about: "A search engine with a real crawler that goes round every machine on the network. Becomes this machine's home page." },
     title: "AskSim",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts the
 ' search pages in C:\\WEB as this machine's home page (the stock INDEX.HTM moves
@@ -134,6 +159,7 @@ const apps = {
     code: () => startService + moveHomePage,
   },
   simxplorer: {
+    vapor: { id: "SIMXPLOR", name: "Simxplorer", kind: "program", category: "Internet", run: "C:\\PROGRAMS\\SIMXPLOR.SPK", tasks: "SIMXPLOR", startup: "", about: "A web browser with JavaScript, favorites, history, find on page and AutoSearch." },
     title: "Simxplorer",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
 ' Simxplorer to C:\\PROGRAMS\\SIMXPLOR.SPK: the browser window and its
@@ -151,6 +177,7 @@ const apps = {
     code: () => "",
   },
   frostbird: {
+    vapor: { id: "FROSTBRD", name: "Frostbird", kind: "program", category: "Internet", run: "C:\\PROGRAMS\\FROSTBRD.SPK", tasks: "FROSTBRD", startup: "", about: "A desktop mail program for ColdMail: Get Mail, Write, Reply, Forward." },
     title: "Frostbird",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
 ' Frostbird, a mail program for ColdMail, to C:\\PROGRAMS\\FROSTBRD.SPK and
@@ -166,6 +193,7 @@ const apps = {
     code: () => "",
   },
   clippy: {
+    vapor: { id: "CLIPPY", name: "Clippy", kind: "service", category: "Productivity", run: "C:\\PROGRAMS\\CLIPPY.SPK", tasks: "CLIPPY", startup: "CLIPPY.RUN", about: "Your SIM95 assistant. It looks like you're reading a description! Would you like help?" },
     title: "Clippy",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
 ' Clippy, your SIM95 assistant, to C:\\PROGRAMS\\CLIPPY.SPK, starts him, and
@@ -187,15 +215,16 @@ const apps = {
 ' parts that fit a network message. It also puts the Vapor program in
 ' C:\\PROGRAMS\\VAPOR.SPK and starts it. Other machines get Vapor from the
 ' store's page, and download games from it. Your home page is not touched.`,
-    copy: [["vapor/WEB", "C:\\WEB\\VAPOR"], ["vapor/PROGRAMS", "C:\\PROGRAMS"]],
+    copy: [["vapor/WEB", "C:\\WEB\\VAPOR"]],
     generated: vaporStore(),
-    dirs: ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\CLIENT", ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)],
+    dirs: ["C:\\WEB\\VAPOR", "C:\\WEB\\VAPOR\\VAPOR", ...vaporGames.filter((g) => !g.soon).map((g) => "C:\\WEB\\VAPOR\\" + g.id)],
     first: [],
     last: [`SYS.Start("C:\\PROGRAMS\\VAPOR.SPK", "")`],
     done: `Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")`,
     code: () => "",
   },
   eliza: {
+    vapor: { id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page." },
     title: "ELIZA-95",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It puts ELIZA-95
 ' in C:\\WEB as this machine's home page (the stock INDEX.HTM moves to
@@ -250,6 +279,8 @@ END SUB
     out += `END SUB\n`;
   });
   out += app.code();
+  // the header Vapor reads, so this installer can be published in a Vapor store
+  if (app.vapor) out = withHeader({ ...app.vapor, files: files.map((f) => f.dest).join(";") }, out);
   fs.writeFileSync(path.join(root, key, "INSTALL.SPK"), out);
   console.log(`${key}/INSTALL.SPK: ${files.length} files, ${out.length} bytes`);
 }

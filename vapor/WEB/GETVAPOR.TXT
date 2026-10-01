@@ -1,0 +1,78 @@
+' GETVAPOR.SPK - copies Vapor from the store on %HOST% and starts it.
+' Save it as C:\MYFILES\GETVAPOR.SPK, open it in SPARK and press F5.
+CONST FROM = "%HOST%"
+VAR web AS NET_Socket
+VAR parts AS Array OF String
+VAR done AS Bool
+
+SUB Main ()
+    ' a failed Connect spoils the handler it happens in, so all of it sits in a TRY
+    TRY
+        Install()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Install ()
+    VAR line AS String
+    VAR count AS Integer
+    VAR i AS Integer
+    VAR text AS String
+    VAR piece AS String
+    web = NET_Socket.New()
+    web.onMessage = Web_OnMessage
+    web.onClose = Web_OnClose
+    Print("Fetching Vapor from " + FROM + "...")
+    FOR EACH line IN Fetch("/vapor/catalog.txt").Lines()
+        IF line.StartsWith("VAPOR|") THEN count = Int(Val(line.Split("|")[2]))
+    NEXT
+    IF count = 0 THEN
+        Print("There is no Vapor in the store on " + FROM + ".")
+        RETURN
+    END IF
+    FOR i = 1 TO count
+        piece = Fetch("/vapor/vapor/" + Str(i) + ".txt")
+        IF piece = "" THEN RETURN
+        text = text + piece
+        Print("  part " + Str(i) + " of " + Str(count))
+    NEXT
+    FS.Write("C:\PROGRAMS\VAPOR.SPK", text)
+    IF NOT FS.Exists("C:\GAMES") THEN FS.MakeDir("C:\GAMES")
+    FS.Write("C:\GAMES\VAPOR.INI", "store=http://" + FROM + "/vapor/" + Chr(10))
+    Print("Vapor is installed in C:\PROGRAMS\VAPOR.SPK. Starting it...")
+    SYS.Run("C:\PROGRAMS\VAPOR.SPK")
+END SUB
+
+' One file over the web, read through the socket's events (see SIM95-NOTES.md).
+FUNCTION Fetch (path AS String) AS String
+    VAR conn AS NET_Connection
+    VAR raw AS String
+    VAR since AS Integer
+    parts.Clear()
+    done = FALSE
+    TRY
+        conn = web.Connect(FROM, 80)
+    CATCH err
+        Print("Could not reach " + FROM + ": " + err)
+        RETURN ""
+    END TRY
+    conn.Send("GET " + path + " HTTP/1.0" + Chr(10) + "Host: " + FROM)
+    since = SYS.Ticks
+    WHILE NOT done AND SYS.Ticks - since < 10000
+        SYS.Sleep(50)
+    END WHILE
+    raw = parts.Join(Chr(10))
+    IF NOT raw.StartsWith("HTTP/1.0 200") THEN
+        Print("Could not fetch " + path)
+        RETURN ""
+    END IF
+    RETURN raw.Substring(raw.IndexOf(Chr(10) + Chr(10)) + 2, raw.Length - raw.IndexOf(Chr(10) + Chr(10)) - 2)
+END FUNCTION
+
+SUB Web_OnMessage (conn AS NET_Connection, message AS String)
+    parts.Add(message)
+END SUB
+
+SUB Web_OnClose (conn AS NET_Connection)
+    done = TRUE
+END SUB

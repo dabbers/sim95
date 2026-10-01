@@ -838,6 +838,8 @@ SUB Arrived ()
         ShowPage(fUrl, "<html><head><title>" + Esc(fUrl) + "</title></head><body><img src=""" + Esc(fUrl) + """></body></html>", pHist)
     ELSEIF Header("content-type").StartsWith("text/plain") THEN
         ShowPage(fUrl, "<html><body><pre>" + Esc(fBodyText) + "</pre></body></html>", pHist)
+        ' Save As keeps the text itself, not the page made to show it
+        curSource = fBodyText
     ELSE
         ShowPage(fUrl, fBodyText, pHist)
     END IF

@@ -1,23 +1,39 @@
-' VAPOR.SPK - Vapor, the games store and library for SIM95.
+' VAPOR.SPK - Vapor, the store and library for everything on SIM95: games,
+' programs (Simxplorer, Frostbird, Clippy...) and web apps (SimBook, ColdMail,
+' AskSim, ELIZA-95).
 '
 ' A store is a folder on a web server, http://<machine>/vapor/, holding
-' CATALOG.TXT (one game per line: id|name|parts|bytes|status|genre|about) and
-' each game cut into parts small enough for a network message
-' (/vapor/<id>/<n>.txt). Vapor reads the catalog, downloads a game part by part
-' with a progress bar, puts it together in C:\GAMES\<id>\<id>.SPK, and keeps a
-' library: Play starts it, and the time played is counted while it runs. Games
-' that keep C:\GAMES\<id>\ACHIEVE.TXT (name|how|date) get their achievements
-' shown.
+' CATALOG.TXT, one item per line:
+'   id|name|parts|bytes|status|category|about|kind|version|run|files|tasks|startup
+' and each item cut into parts small enough for a network message
+' (/vapor/<id>/<n>.txt). An item is a file that starts with a header line,
+'   ' VAPOR|id=...|name=...|kind=...|version=...|...
+' kind says what to do with it once it is here:
+'   game     it is the game: kept in C:\GAMES\<id>\<id>.SPK and played from there
+'   program  it is an installer: Vapor runs it, then "run" opens the program
+'   service  the same, for something that starts with the machine (Clippy)
+'   web      an installer for a web app, which becomes this machine's home page
+'   client   Vapor itself: a new version replaces this program, which restarts
 '
-' Files: C:\GAMES\VAPOR.INI (store=), C:\GAMES\LIBRARY.TXT
-' (id|name|installed|seconds played|genre|about).
+' The library (C:\GAMES\LIBRARY.TXT) remembers what is installed, which
+' version, and the time played. When the store has a newer version of
+' something, the Library offers Update (or Update All).
+'
+' On a store machine, Publish Apps puts every installer saved in C:\MYFILES
+' that has a header (all the ones tools/build-installer.mjs makes) into the
+' store, replacing older versions: that is how a store's shelves are stocked
+' and updated.
 '
 ' Fetches go one at a time and start in a timer tick of their own, inside a
 ' TRY with an empty CATCH (see SIM95-NOTES.md); pages come in through the
 ' socket's events.
 
 CONST HOME = "C:\GAMES"
+CONST ME = "C:\PROGRAMS\VAPOR.SPK"
+CONST STOREDIR = "C:\WEB\VAPOR"
+CONST BROWSER = "C:\PROGRAMS\SIMXPLOR.SPK"
 CONST PATIENCE = 8000
+CONST PART = 15000
 
 VAR EOL AS String
 VAR win AS GUI_Window
@@ -29,6 +45,7 @@ VAR title AS GUI_Label
 VAR info AS GUI_Label
 VAR about AS GUI_Label
 VAR action AS GUI_Button
+VAR upd AS GUI_Button
 VAR remove AS GUI_Button
 VAR progress AS GUI_ProgressBar
 VAR note AS GUI_Label
@@ -39,12 +56,12 @@ VAR web AS NET_Socket
 VAR store AS String               ' "http://alpha/vapor/"
 VAR tab AS String = "STORE"
 VAR catalog AS Array OF String    ' the store's lines
-VAR listed AS Array OF String     ' the lines behind the list, in order
+VAR listed AS Array OF String     ' the lines behind the list, in order ("" for a heading)
+VAR offeredSelf AS Bool           ' asked once about a newer Vapor
 
 ' one fetch at a time
 VAR fetching AS Bool
 VAR fWhat AS String               ' "catalog" or "part"
-VAR fUrl AS String
 VAR fNumber AS Integer
 VAR fParts AS Array OF String
 VAR fDone AS Bool
@@ -52,7 +69,7 @@ VAR fSince AS Integer
 VAR fError AS String
 VAR wantCatalog AS Bool
 
-' the download going on
+' the download going on, and what is waiting
 VAR dlId AS String                ' "" when none
 VAR dlLine AS String
 VAR dlPart AS Integer
@@ -60,8 +77,11 @@ VAR dlParts AS Integer
 VAR dlText AS String
 VAR dlStart AS Integer
 VAR queue AS Array OF String      ' catalog lines waiting
+VAR setupPid AS Integer           ' an installer Vapor is running
+VAR setupLine AS String
+VAR setupSince AS Integer
 
-' games being played: id and process
+' things running: id and process
 VAR playId AS Array OF String
 VAR playPid AS Array OF Integer
 VAR playSince AS Array OF Integer
@@ -82,12 +102,15 @@ SUB Main ()
     bar.AddItem("&Vapor", "&Library" + Chr(9) + "Ctrl+2")
     bar.AddItem("&Vapor", "&Downloads" + Chr(9) + "Ctrl+3")
     bar.AddSeparator("&Vapor")
-    bar.AddItem("&Vapor", "Change S&tore...")
+    bar.AddItem("&Vapor", "&Update All" + Chr(9) + "Ctrl+U")
     bar.AddItem("&Vapor", "&Refresh" + Chr(9) + "F5")
+    bar.AddItem("&Vapor", "Change S&tore...")
+    bar.AddItem("&Vapor", "&Publish Apps..." + Chr(9) + "Ctrl+P")
     bar.AddSeparator("&Vapor")
     bar.AddItem("&Vapor", "E&xit")
     bar.AddMenu("&Help")
     bar.AddItem("&Help", "&About Vapor")
+    bar.SetEnabled("Publish Apps...", FS.Exists(STOREDIR))
 
     head = GUI_Canvas.New(win)
     head.SetBounds(0, 0, 640, 44)
@@ -110,9 +133,13 @@ SUB Main ()
     action = GUI_Button.New(win)
     action.SetBounds(194, 262, 120, 28)
     action.onClick = Action_Click
+    upd = GUI_Button.New(win)
+    upd.Text = "U&pdate"
+    upd.SetBounds(322, 262, 100, 28)
+    upd.onClick = Update_Click
     remove = GUI_Button.New(win)
     remove.Text = "&Uninstall"
-    remove.SetBounds(322, 262, 100, 28)
+    remove.SetBounds(430, 262, 100, 28)
     remove.onClick = Remove_Click
     progress = GUI_ProgressBar.New(win)
     progress.SetBounds(194, 298, 440, 14)
@@ -146,7 +173,7 @@ SUB LoadSettings ()
         IF line.StartsWith("store=") THEN store = line.Substring(6, line.Length - 6).Trim()
     NEXT
     ' a machine that is a store shops at itself to begin with
-    IF store = "" AND FS.Exists("C:\WEB\VAPOR\CATALOG.TXT") THEN store = "http://" + NET.HostName.Lower() + "/vapor/"
+    IF store = "" AND FS.Exists(STOREDIR + "\CATALOG.TXT") THEN store = "http://" + NET.HostName.Lower() + "/vapor/"
 END SUB
 
 SUB SaveSettings ()
@@ -158,21 +185,77 @@ FUNCTION ReadOr (path AS String, fallback AS String) AS String
     RETURN fallback
 END FUNCTION
 
+' Field i of a | line, or "" when the line is shorter (older lines are).
+FUNCTION Field (line AS String, i AS Integer) AS String
+    VAR p AS Array OF String
+    p = line.Split("|")
+    IF i >= p.Count THEN RETURN ""
+    RETURN p[i]
+END FUNCTION
+
+' key=value from a header line.
+FUNCTION Meta (header AS String, key AS String) AS String
+    VAR part AS String
+    FOR EACH part IN header.Split("|")
+        IF part.StartsWith(key + "=") THEN RETURN part.Substring(key.Length + 1, part.Length - key.Length - 1)
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' The version of this Vapor, from its own header.
+FUNCTION MyVersion () AS String
+    VAR text AS String
+    text = ReadOr(ME, "")
+    IF NOT text.StartsWith("' VAPOR|") THEN RETURN ""
+    RETURN Meta(text.Lines()[0], "version")
+END FUNCTION
+
 ' ================================================================ tabs and lists
+
+FUNCTION KindName (kind AS String) AS String
+    SELECT CASE kind
+        CASE "game"
+            RETURN "Game"
+        CASE "web"
+            RETURN "Web app"
+        CASE "service"
+            RETURN "Program, starts with SIM95"
+    END SELECT
+    RETURN "Program"
+END FUNCTION
 
 SUB ShowTab (t AS String)
     VAR line AS String
+    VAR pass AS Integer
+    VAR heading AS Bool
     tab = t
     games.Clear()
     listed.Clear()
     IF t = "STORE" THEN
-        FOR EACH line IN catalog
-            listed.Add(line)
-            IF Installed(line.Split("|")[0]) THEN
-                games.Add(line.Split("|")[1] + "  (in library)")
-            ELSE
-                games.Add(line.Split("|")[1])
-            END IF
+        ' apps first, then games, each under a heading
+        FOR pass = 0 TO 1
+            heading = FALSE
+            FOR EACH line IN catalog
+                IF Field(line, 7) = "client" THEN CONTINUE
+                IF (Field(line, 7) = "game") <> (pass = 1) THEN CONTINUE
+                IF NOT heading THEN
+                    heading = TRUE
+                    listed.Add("")
+                    IF pass = 0 THEN
+                        games.Add("- APPS -")
+                    ELSE
+                        games.Add("- GAMES -")
+                    END IF
+                END IF
+                listed.Add(line)
+                IF HasUpdate(Field(line, 0)) THEN
+                    games.Add("  " + Field(line, 1) + "  (update)")
+                ELSEIF Installed(Field(line, 0)) THEN
+                    games.Add("  " + Field(line, 1) + "  (installed)")
+                ELSE
+                    games.Add("  " + Field(line, 1))
+                END IF
+            NEXT
         NEXT
         IF catalog.Count = 0 THEN
             IF store = "" THEN
@@ -184,23 +267,32 @@ SUB ShowTab (t AS String)
     ELSEIF t = "LIBRARY" THEN
         FOR EACH line IN Library()
             listed.Add(line)
-            games.Add(line.Split("|")[1])
+            IF HasUpdate(Field(line, 0)) THEN
+                games.Add(Field(line, 1) + "  (update)")
+            ELSE
+                games.Add(Field(line, 1))
+            END IF
         NEXT
         IF listed.Count = 0 THEN win.Status = "Your library is empty. Visit the Store!"
     ELSE
         IF dlId <> "" THEN
             listed.Add(dlLine)
-            games.Add(dlLine.Split("|")[1] + "  " + Str(Percent()) + "%")
+            games.Add(Field(dlLine, 1) + "  " + Str(Percent()) + "%")
+        END IF
+        IF setupLine <> "" THEN
+            listed.Add(setupLine)
+            games.Add(Field(setupLine, 1) + "  (installing)")
         END IF
         FOR EACH line IN queue
             listed.Add(line)
-            games.Add(line.Split("|")[1] + "  (queued)")
+            games.Add(Field(line, 1) + "  (queued)")
         NEXT
     END IF
     head.Tag = ""
     DrawHead()
     IF listed.Count > 0 THEN
         games.Selected = 0
+        IF listed[0] = "" AND listed.Count > 1 THEN games.Selected = 1
     END IF
     ShowGame()
 END SUB
@@ -215,19 +307,33 @@ FUNCTION Library () AS Array OF String
 END FUNCTION
 
 FUNCTION Installed (id AS String) AS Bool
-    VAR line AS String
-    FOR EACH line IN Library()
-        IF line.Split("|")[0] = id THEN RETURN TRUE
-    NEXT
-    RETURN FALSE
+    RETURN LibLine(id) <> ""
 END FUNCTION
 
 FUNCTION LibLine (id AS String) AS String
     VAR line AS String
     FOR EACH line IN Library()
-        IF line.Split("|")[0] = id THEN RETURN line
+        IF Field(line, 0) = id THEN RETURN line
     NEXT
     RETURN ""
+END FUNCTION
+
+FUNCTION StoreLine (id AS String) AS String
+    VAR line AS String
+    FOR EACH line IN catalog
+        IF Field(line, 0) = id THEN RETURN line
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' Is there a newer version in the store than the one installed?
+FUNCTION HasUpdate (id AS String) AS Bool
+    VAR lib AS String
+    VAR shop AS String
+    lib = LibLine(id)
+    shop = StoreLine(id)
+    IF lib = "" OR shop = "" OR Field(shop, 4) <> "ok" THEN RETURN FALSE
+    RETURN Field(lib, 6) <> Field(shop, 8)
 END FUNCTION
 
 FUNCTION Current () AS String
@@ -267,16 +373,27 @@ FUNCTION Played (seconds AS Integer) AS String
     RETURN "Played " + Str(Int(seconds / 360) / 10) + " hours"
 END FUNCTION
 
-' The right-hand side: the banner, the words, the right button.
+FUNCTION Busy (id AS String) AS Bool
+    VAR line AS String
+    IF id = dlId OR id = Field(setupLine, 0) THEN RETURN TRUE
+    FOR EACH line IN queue
+        IF Field(line, 0) = id THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' The right-hand side: the banner, the words, the right buttons.
 SUB ShowGame ()
     VAR line AS String
-    VAR p AS Array OF String
     VAR id AS String
     VAR lib AS String
+    VAR shop AS String
+    VAR kind AS String
     VAR a AS String
     line = Current()
     trophies.Clear()
     banner.Tag = ""
+    upd.Visible = FALSE
     IF line = "" THEN
         title.Text = ""
         info.Text = ""
@@ -286,87 +403,200 @@ SUB ShowGame ()
         DrawBanner("")
         RETURN
     END IF
-    p = line.Split("|")
-    id = p[0]
+    id = Field(line, 0)
     lib = LibLine(id)
-    title.Text = p[1]
+    shop = StoreLine(id)
+    title.Text = Field(line, 1)
     action.Visible = TRUE
+    action.Enabled = TRUE
     remove.Visible = lib <> ""
     IF tab = "LIBRARY" THEN
-        info.Text = Played(Int(Val(lib.Split("|")[3]))) + "  -  installed " + lib.Split("|")[2]
-        IF lib.Split("|").Count >= 6 THEN about.Text = Wrap(Unesc(lib.Split("|")[5]), 66)
-        action.Text = "&Play"
-        IF playId.Contains(id) THEN action.Text = "Running"
-        action.Enabled = NOT playId.Contains(id)
-        FOR EACH a IN ReadOr(HOME + "\" + id + "\ACHIEVE.TXT", "").Lines()
-            IF a.Contains("|") THEN trophies.Add("* " + a.Split("|")[0] + " - " + a.Split("|")[1] + "  (" + a.Split("|")[2] + ")")
-        NEXT
-        IF trophies.Count = 0 THEN trophies.Add("No achievements yet. Go and play!")
+        kind = Field(lib, 7)
+        IF kind = "" THEN kind = "game"
+        IF kind = "game" THEN
+            info.Text = Played(Int(Val(Field(lib, 3)))) + "  -  installed " + Field(lib, 2)
+        ELSE
+            info.Text = KindName(kind) + "  -  installed " + Field(lib, 2)
+        END IF
+        IF Field(lib, 6) <> "" THEN info.Text = info.Text + "  -  build " + Field(lib, 6)
+        about.Text = Wrap(Unesc(Field(lib, 5)), 66)
+        action.Text = OpenWord(kind)
+        IF playId.Contains(id) THEN
+            action.Text = "Running"
+            action.Enabled = FALSE
+        END IF
+        upd.Visible = HasUpdate(id) AND NOT Busy(id)
+        IF kind = "game" THEN
+            FOR EACH a IN ReadOr(HOME + "\" + id + "\ACHIEVE.TXT", "").Lines()
+                IF a.Contains("|") THEN trophies.Add("* " + a.Split("|")[0] + " - " + a.Split("|")[1] + "  (" + a.Split("|")[2] + ")")
+            NEXT
+            IF trophies.Count = 0 THEN trophies.Add("No achievements yet. Go and play!")
+        END IF
+        IF HasUpdate(id) THEN trophies.Add("A newer version is in the store (build " + Field(shop, 8) + ").")
     ELSE
-        info.Text = p[5] + "  -  " + Str(Int(Val(p[3]) / 1024) + 1) + " KB  -  Free"
-        about.Text = Wrap(Unesc(p[6]), 66)
-        IF p[4] = "soon" THEN
-            info.Text = p[5] + "  -  Coming soon"
+        kind = Field(line, 7)
+        IF kind = "" THEN kind = "game"
+        info.Text = Field(line, 5) + "  -  " + KindName(kind) + "  -  " + Str(Int(Val(Field(line, 3)) / 1024) + 1) + " KB  -  Free"
+        about.Text = Wrap(Unesc(Field(line, 6)), 66)
+        IF Field(line, 4) = "soon" THEN
+            info.Text = Field(line, 5) + "  -  Coming soon"
             action.Text = "Coming soon"
             action.Enabled = FALSE
-        ELSEIF lib <> "" THEN
-            action.Text = "&Play"
-            action.Enabled = NOT playId.Contains(id)
-        ELSEIF id = dlId OR queue.Contains(line) THEN
+        ELSEIF Busy(id) THEN
             action.Text = "Downloading..."
             action.Enabled = FALSE
+        ELSEIF HasUpdate(id) THEN
+            action.Text = "U&pdate"
+        ELSEIF lib <> "" THEN
+            action.Text = OpenWord(kind)
+            action.Enabled = NOT playId.Contains(id)
         ELSE
             action.Text = "&Install"
-            action.Enabled = TRUE
         END IF
     END IF
     DrawBanner(id)
 END SUB
 
+FUNCTION OpenWord (kind AS String) AS String
+    IF kind = "game" THEN RETURN "&Play"
+    RETURN "&Open"
+END FUNCTION
+
 SUB Action_Click ()
     VAR line AS String
+    VAR id AS String
     line = Current()
     IF line = "" THEN RETURN
-    IF Installed(line.Split("|")[0]) THEN
-        Play(line.Split("|")[0])
-    ELSEIF tab = "STORE" AND line.Split("|")[4] <> "soon" THEN
-        IF dlId <> line.Split("|")[0] AND NOT queue.Contains(line) THEN queue.Add(line)
-        win.Status = line.Split("|")[1] + " is queued for download."
-        ShowGame()
+    id = Field(line, 0)
+    IF tab = "STORE" AND HasUpdate(id) THEN
+        Want(StoreLine(id))
+    ELSEIF Installed(id) THEN
+        Launch(id)
+    ELSEIF tab = "STORE" AND Field(line, 4) <> "soon" THEN
+        Want(line)
     END IF
 END SUB
 
-SUB Play (id AS String)
-    VAR path AS String
-    path = HOME + "\" + id + "\" + id + ".SPK"
-    IF NOT FS.Exists(path) THEN
-        Say("The game's files are missing. Uninstall it and install it again.", "error")
+SUB Update_Click ()
+    VAR line AS String
+    line = Current()
+    IF line = "" THEN RETURN
+    IF HasUpdate(Field(line, 0)) THEN Want(StoreLine(Field(line, 0)))
+END SUB
+
+' Into the download queue. A web app asks first: it takes the home page.
+SUB Want (line AS String)
+    VAR box AS GUI_MessageBox
+    VAR other AS String
+    VAR l AS String
+    IF Busy(Field(line, 0)) THEN RETURN
+    IF Field(line, 7) = "web" AND NOT Installed(Field(line, 0)) THEN
+        FOR EACH l IN Library()
+            IF Field(l, 7) = "web" THEN other = Field(l, 1)
+        NEXT
+        box = GUI_MessageBox.New(win)
+        box.Title = "Vapor"
+        box.Kind = "confirm"
+        box.Buttons = "yesno"
+        box.Text = Field(line, 1) + " is a web app: it becomes this machine's home page, http://" + NET.HostName.Lower() + "/ (the page there now moves aside to WELCOME.HTM)."
+        IF other <> "" THEN box.Text = box.Text + EOL + EOL + "This machine already has " + other + " there, and a machine has room for one web app: " + Field(line, 1) + " will take its place."
+        box.Text = box.Text + EOL + EOL + "Install it?"
+        IF NOT box.Show() THEN RETURN
+    END IF
+    queue.Add(line)
+    win.Status = Field(line, 1) + " is queued for download."
+    ShowGame()
+END SUB
+
+' Play a game, open a program, or open a web app in the browser.
+SUB Launch (id AS String)
+    VAR lib AS String
+    VAR kind AS String
+    VAR run AS String
+    VAR url AS String
+    lib = LibLine(id)
+    kind = Field(lib, 7)
+    IF kind = "" OR kind = "game" THEN
+        run = HOME + "\" + id + "\" + id + ".SPK"
+    ELSE
+        run = Field(lib, 8)
+    END IF
+    IF kind = "web" THEN
+        url = "http://" + NET.HostName.Lower() + "/"
+        IF FS.Exists(BROWSER) THEN
+            SYS.Start(BROWSER, url)
+        ELSE
+            SYS.Start("C:\SYSTEM\VOYAGER.EXE", url)
+        END IF
+        win.Status = "Opened " + url
+        RETURN
+    END IF
+    IF NOT FS.Exists(run) THEN
+        Say("The files are missing (" + run + "). Uninstall it and install it again.", "error")
         RETURN
     END IF
     IF playId.Contains(id) THEN RETURN
     playId.Add(id)
-    playPid.Add(SYS.Run(path))
+    playPid.Add(SYS.Run(run))
     playSince.Add(SYS.Ticks)
-    win.Status = "Playing " + LibLine(id).Split("|")[1] + "..."
+    IF kind = "game" THEN
+        win.Status = "Playing " + Field(lib, 1) + "..."
+    ELSE
+        win.Status = "Opened " + Field(lib, 1) + "."
+    END IF
     ShowGame()
 END SUB
 
 SUB Remove_Click ()
     VAR line AS String
     VAR id AS String
+    VAR lib AS String
     VAR box AS GUI_MessageBox
-    VAR f AS String
-    VAR out AS Array OF String
-    VAR l AS String
     line = Current()
     IF line = "" THEN RETURN
-    id = line.Split("|")[0]
+    id = Field(line, 0)
+    lib = LibLine(id)
+    IF lib = "" THEN RETURN
     box = GUI_MessageBox.New(win)
     box.Title = "Vapor"
     box.Kind = "confirm"
     box.Buttons = "yesno"
-    box.Text = "Uninstall " + line.Split("|")[1] + "? Its files in " + HOME + "\" + id + " will be deleted (your achievements too)."
+    IF Field(lib, 7) = "" OR Field(lib, 7) = "game" THEN
+        box.Text = "Uninstall " + Field(lib, 1) + "? Its files in " + HOME + "\" + id + " will be deleted (your achievements too)."
+    ELSE
+        box.Text = "Uninstall " + Field(lib, 1) + "? Its program files go; anything it saved (mail, posts, settings) stays."
+    END IF
     IF NOT box.Show() THEN RETURN
+    Uninstall(lib)
+    win.Status = Field(lib, 1) + " was uninstalled."
+    ShowTab(tab)
+END SUB
+
+' Stops it, takes it out of startup, deletes the files it wrote, and its folder here.
+SUB Uninstall (lib AS String)
+    VAR id AS String
+    VAR f AS String
+    VAR task AS String
+    VAR name AS String
+    VAR out AS Array OF String
+    VAR l AS String
+    id = Field(lib, 0)
+    FOR EACH name IN Field(lib, 10).Split(";")
+        IF name = "" THEN CONTINUE
+        FOR EACH task IN SYS.Tasks()
+            IF task.Split("|")[1].Upper() = name.Upper() AND Int(Val(task.Split("|")[0])) <> SYS.Pid THEN SYS.Kill(Int(Val(task.Split("|")[0])))
+        NEXT
+    NEXT
+    FOR EACH name IN Field(lib, 11).Split(";")
+        IF name <> "" AND FS.Exists("C:\SYSTEM\STARTUP\" + name) THEN FS.Delete("C:\SYSTEM\STARTUP\" + name)
+    NEXT
+    FOR EACH f IN Field(lib, 9).Split(";")
+        IF f <> "" AND f.Upper() <> ME THEN
+            IF FS.Exists(f) THEN FS.Delete(f)
+        END IF
+    NEXT
+    ' a web app gives the home page back
+    IF Field(lib, 7) = "web" AND NOT FS.Exists("C:\WEB\INDEX.HTM") AND FS.Exists("C:\WEB\WELCOME.HTM") THEN FS.Rename("C:\WEB\WELCOME.HTM", "C:\WEB\INDEX.HTM")
     IF FS.Exists(HOME + "\" + id) THEN
         FOR EACH f IN FS.List(HOME + "\" + id)
             IF NOT f.EndsWith("\") THEN FS.Delete(HOME + "\" + id + "\" + f)
@@ -374,11 +604,9 @@ SUB Remove_Click ()
         FS.Delete(HOME + "\" + id)
     END IF
     FOR EACH l IN Library()
-        IF l.Split("|")[0] <> id THEN out.Add(l)
+        IF Field(l, 0) <> id THEN out.Add(l)
     NEXT
     SaveLibrary(out)
-    win.Status = line.Split("|")[1] + " was uninstalled."
-    ShowTab(tab)
 END SUB
 
 SUB SaveLibrary (lines AS Array OF String)
@@ -386,6 +614,56 @@ SUB SaveLibrary (lines AS Array OF String)
     IF lines.Count > 0 THEN text = lines.Join(EOL) + EOL
     FS.Write(HOME + "\LIBRARY.TXT", text)
 END SUB
+
+' Into the library, or the line there brought up to date (keeping when it
+' was first installed and the time played).
+SUB Keep (line AS String)
+    VAR out AS Array OF String
+    VAR l AS String
+    VAR first AS String
+    VAR seconds AS String = "0"
+    VAR found AS Bool
+    first = TIME.Date
+    FOR EACH l IN Library()
+        IF Field(l, 0) = Field(line, 0) THEN
+            first = Field(l, 2)
+            seconds = Field(l, 3)
+            found = TRUE
+        END IF
+    NEXT
+    l = Field(line, 0) + "|" + Field(line, 1) + "|" + first + "|" + seconds + "|" + Field(line, 5) + "|" + Field(line, 6) + "|" + Field(line, 8) + "|" + Field(line, 7) + "|" + Field(line, 9) + "|" + Field(line, 10) + "|" + Field(line, 11) + "|" + Field(line, 12)
+    FOR EACH line IN Library()
+        IF Field(line, 0) = Field(l, 0) THEN
+            out.Add(l)
+        ELSE
+            out.Add(line)
+        END IF
+    NEXT
+    IF NOT found THEN out.Add(l)
+    SaveLibrary(out)
+END SUB
+
+SUB UpdateAll ()
+    VAR l AS String
+    VAR n AS Integer
+    FOR EACH l IN Library()
+        IF HasUpdate(Field(l, 0)) AND NOT Busy(Field(l, 0)) THEN
+            queue.Add(StoreLine(Field(l, 0)))
+            n = n + 1
+        END IF
+    NEXT
+    IF n = 0 THEN
+        win.Status = "Everything is up to date."
+    ELSE
+        win.Status = Str(n) + " update" + Plural(n) + " queued."
+    END IF
+    ShowGame()
+END SUB
+
+FUNCTION Plural (n AS Integer) AS String
+    IF n = 1 THEN RETURN ""
+    RETURN "s"
+END FUNCTION
 
 ' ================================================================ the clock: fetches, downloads, play time
 
@@ -396,17 +674,19 @@ SUB Clock_OnTick ()
     END TRY
 END SUB
 
+FUNCTION Alive (pid AS Integer) AS Bool
+    VAR task AS String
+    FOR EACH task IN SYS.Tasks()
+        IF Int(Val(task.Split("|")[0])) = pid THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
 SUB Tick ()
     VAR i AS Integer
-    VAR alive AS Bool
-    VAR task AS String
-    ' games that ended: their time goes in the library
+    ' things that ended: a game's time goes in the library
     FOR i = playId.Count - 1 TO 0 STEP -1
-        alive = FALSE
-        FOR EACH task IN SYS.Tasks()
-            IF Int(Val(task.Split("|")[0])) = playPid[i] THEN alive = TRUE
-        NEXT
-        IF NOT alive THEN
+        IF NOT Alive(playPid[i]) THEN
             AddTime(playId[i], Int((SYS.Ticks - playSince[i]) / 1000))
             playId.RemoveAt(i)
             playPid.RemoveAt(i)
@@ -414,6 +694,21 @@ SUB Tick ()
             ShowGame()
         END IF
     NEXT
+    ' an installer that finished: into the library. (It may not end: a program
+    ' that has printed keeps its console open. So it is done when every file
+    ' it writes is there, or when it ends.)
+    IF setupLine <> "" THEN
+        IF NOT Alive(setupPid) OR (SYS.Ticks - setupSince > 300 AND AllThere(Field(setupLine, 10))) OR SYS.Ticks - setupSince > 60000 THEN
+            Keep(setupLine)
+            win.Status = Field(setupLine, 1) + " is installed."
+            note.Text = Field(setupLine, 1) + " is ready."
+            progress.Value = 0
+            setupLine = ""
+            SYS.Beep(660, 60)
+            ShowTab(tab)
+        END IF
+        RETURN
+    END IF
     IF fetching THEN
         IF fDone OR SYS.Ticks - fSince > PATIENCE THEN Arrived()
         RETURN
@@ -426,8 +721,8 @@ SUB Tick ()
     IF dlId = "" AND queue.Count > 0 THEN
         dlLine = queue[0]
         queue.RemoveAt(0)
-        dlId = dlLine.Split("|")[0]
-        dlParts = Int(Val(dlLine.Split("|")[2]))
+        dlId = Field(dlLine, 0)
+        dlParts = Int(Val(Field(dlLine, 2)))
         dlPart = 0
         dlText = ""
         dlStart = SYS.Ticks
@@ -438,6 +733,15 @@ SUB Tick ()
         StartFetch("part", store + dlId.Lower() + "/" + Str(dlPart) + ".txt")
     END IF
 END SUB
+
+FUNCTION AllThere (files AS String) AS Bool
+    VAR f AS String
+    IF files = "" THEN RETURN FALSE
+    FOR EACH f IN files.Split(";")
+        IF f <> "" AND NOT FS.Exists(f) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
 
 SUB AddTime (id AS String, seconds AS Integer)
     VAR out AS Array OF String
@@ -452,7 +756,6 @@ SUB AddTime (id AS String, seconds AS Integer)
         out.Add(line)
     NEXT
     SaveLibrary(out)
-    win.Status = "Thanks for playing!"
 END SUB
 
 FUNCTION Percent () AS Integer
@@ -466,7 +769,6 @@ SUB StartFetch (what AS String, url AS String)
     VAR path AS String
     fetching = TRUE
     fWhat = what
-    fUrl = url
     fNumber = fNumber + 1
     fParts.Clear()
     fDone = FALSE
@@ -478,7 +780,7 @@ SUB StartFetch (what AS String, url AS String)
     TRY
         conn = web.Connect(host, 80)
         conn.Tag = Str(fNumber)
-        conn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: Vapor/1.0 (SIM95)")
+        conn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: Vapor/2.0 (SIM95)")
     CATCH err
         fError = err
         fDone = TRUE
@@ -513,6 +815,8 @@ END FUNCTION
 SUB Arrived ()
     VAR text AS String
     VAR line AS String
+    VAR mine AS String
+    VAR box AS GUI_MessageBox
     fetching = FALSE
     TRY
         web.Close()
@@ -527,14 +831,26 @@ SUB Arrived ()
             FOR EACH line IN text.Lines()
                 IF line.Split("|").Count >= 7 THEN catalog.Add(line)
             NEXT
-            win.Status = "Store: " + store + "  -  " + Str(catalog.Count) + " games"
+            win.Status = "Store: " + store + "  -  " + Str(catalog.Count) + " items"
         END IF
-        IF tab = "STORE" THEN ShowTab("STORE")
+        IF tab <> "DOWNLOADS" THEN ShowTab(tab)
+        ' a newer Vapor? ask once
+        mine = MyVersion()
+        line = StoreLine("VAPOR")
+        IF line <> "" AND mine <> "" AND Field(line, 8) <> mine AND NOT offeredSelf AND NOT Busy("VAPOR") THEN
+            offeredSelf = TRUE
+            box = GUI_MessageBox.New(win)
+            box.Title = "Vapor"
+            box.Kind = "confirm"
+            box.Buttons = "yesno"
+            box.Text = "A new version of Vapor is in the store (build " + Field(line, 8) + "; this is " + mine + ")." + EOL + EOL + "Update Vapor now? It will restart."
+            IF box.Show() THEN queue.Insert(0, line)
+        END IF
         RETURN
     END IF
     ' a part of the download
     IF text = "" THEN
-        win.Status = "The download of " + dlLine.Split("|")[1] + " failed (" + fError + ")."
+        win.Status = "The download of " + Field(dlLine, 1) + " failed (" + fError + ")."
         progress.Value = 0
         note.Text = ""
         dlId = ""
@@ -543,27 +859,152 @@ SUB Arrived ()
     END IF
     dlText = dlText + text
     progress.Value = Int(dlPart * 100 / dlParts)
-    note.Text = "Downloading " + dlLine.Split("|")[1] + ": part " + Str(dlPart) + " of " + Str(dlParts) + "  -  " + Str(Int(dlText.Length / MATH.Max(1, SYS.Ticks - dlStart) * 1000 / 102.4) / 10) + " KB/s"
-    IF tab = "DOWNLOADS" AND games.Count > 0 THEN games.Set(0, dlLine.Split("|")[1] + "  " + Str(Int(dlPart * 100 / dlParts)) + "%")
+    note.Text = "Downloading " + Field(dlLine, 1) + ": part " + Str(dlPart) + " of " + Str(dlParts) + "  -  " + Str(Int(dlText.Length / MATH.Max(1, SYS.Ticks - dlStart) * 1000 / 102.4) / 10) + " KB/s"
+    IF tab = "DOWNLOADS" AND games.Count > 0 THEN games.Set(0, Field(dlLine, 1) + "  " + Str(Int(dlPart * 100 / dlParts)) + "%")
     IF dlPart >= dlParts THEN Finish()
 END SUB
 
-' All the parts are here: put the game together and into the library.
+' All the parts are here: what happens next depends on what it is.
 SUB Finish ()
-    VAR p AS Array OF String
+    VAR f AS String
     VAR dir AS String
-    p = dlLine.Split("|")
+    VAR kind AS String
+    VAR line AS String
+    line = dlLine
     dir = HOME + "\" + dlId
+    kind = Field(line, 7)
+    IF kind = "" THEN kind = "game"
+    IF kind = "client" THEN
+        ' a new Vapor: in place of this one, which starts it and goes
+        FS.Write(ME, dlText)
+        SYS.Start(ME, "")
+        SYS.Exit(0)
+        RETURN
+    END IF
     IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
-    FS.Write(dir + "\" + dlId + ".SPK", dlText)
-    FS.Append(HOME + "\LIBRARY.TXT", dlId + "|" + p[1] + "|" + TIME.Date + "|0|" + p[5] + "|" + p[6] + EOL)
-    win.Status = p[1] + " is installed. Find it in your Library."
-    note.Text = p[1] + " is ready to play."
-    SYS.Beep(660, 60)
     dlId = ""
+    IF kind = "game" THEN
+        FS.Write(dir + "\" + Field(line, 0) + ".SPK", dlText)
+        dlText = ""
+        Keep(line)
+        win.Status = Field(line, 1) + " is installed. Find it in your Library."
+        note.Text = Field(line, 1) + " is ready to play."
+        SYS.Beep(660, 60)
+        ShowTab(tab)
+        RETURN
+    END IF
+    ' an installer: clear away the old files it writes, run it, and wait for them
+    FS.Write(dir + "\INSTALL.SPK", dlText)
     dlText = ""
+    FOR EACH f IN Field(line, 10).Split(";")
+        IF f <> "" AND f.Upper() <> ME THEN
+            IF FS.Exists(f) THEN FS.Delete(f)
+        END IF
+    NEXT
+    setupLine = line
+    setupSince = SYS.Ticks
+    setupPid = SYS.Run(dir + "\INSTALL.SPK")
+    note.Text = "Installing " + Field(line, 1) + "..."
+    win.Status = "Running " + Field(line, 1) + "'s installer..."
     ShowTab(tab)
 END SUB
+
+' ================================================================ publishing (on a store machine)
+
+' Every installer in C:\MYFILES with a Vapor header goes on the store's shelf,
+' in place of an older version of it.
+SUB Publish ()
+    VAR f AS String
+    VAR text AS String
+    VAR done AS Array OF String
+    VAR same AS Array OF String
+    VAR answer AS String
+    IF NOT FS.Exists(STOREDIR) THEN
+        Say("This machine is not a Vapor store. Run Vapor's INSTALL.SPK here first.", "warn")
+        RETURN
+    END IF
+    win.Status = "Looking in C:\MYFILES for installers..."
+    FOR EACH f IN FS.List("C:\MYFILES")
+        IF NOT f.EndsWith(".SPK") THEN CONTINUE
+        text = FS.Read("C:\MYFILES\" + f)
+        IF NOT text.StartsWith("' VAPOR|") THEN CONTINUE
+        answer = PublishOne(text)
+        IF answer.StartsWith("=") THEN
+            same.Add(answer.Substring(1, answer.Length - 1))
+        ELSEIF answer <> "" THEN
+            done.Add(answer)
+        END IF
+    NEXT
+    IF done.Count = 0 AND same.Count = 0 THEN
+        Say("There are no installers to publish in C:\MYFILES." + EOL + EOL + "Paste an app's INSTALL.SPK into SPARK, save it in C:\MYFILES (any name ending .SPK) without running it, and choose Publish Apps again.", "info")
+        RETURN
+    END IF
+    answer = ""
+    IF done.Count > 0 THEN answer = "Published:" + EOL + "  " + done.Join(EOL + "  ")
+    IF same.Count > 0 THEN answer = answer + EOL + EOL + "Already up to date: " + same.Join(", ")
+    Say(answer.Trim(), "info")
+    wantCatalog = TRUE
+END SUB
+
+' One installer into the store: its parts, and its line in the catalog.
+' Returns "name (build)" or "=name" when the store already had that version.
+FUNCTION PublishOne (text AS String) AS String
+    VAR header AS String
+    VAR id AS String
+    VAR dir AS String
+    VAR f AS String
+    VAR lines AS Array OF String
+    VAR line AS String
+    VAR chunk AS String
+    VAR n AS Integer
+    VAR entry AS String
+    VAR out AS Array OF String
+    VAR found AS Bool
+    header = text.Lines()[0]
+    id = Meta(header, "id").Upper()
+    IF id = "" OR id.Length > 8 OR id.Contains("\") OR id.Contains(".") THEN RETURN ""
+    FOR EACH line IN ReadOr(STOREDIR + "\CATALOG.TXT", "").Lines()
+        IF Field(line, 0) = id AND Field(line, 8) = Meta(header, "version") THEN RETURN "=" + Meta(header, "name")
+    NEXT
+    dir = STOREDIR + "\" + id
+    IF FS.Exists(dir) THEN
+        FOR EACH f IN FS.List(dir)
+            IF NOT f.EndsWith("\") THEN FS.Delete(dir + "\" + f)
+        NEXT
+    ELSE
+        FS.MakeDir(dir)
+    END IF
+    ' parts of whole lines, each small enough for one network message
+    lines = text.Replace(Chr(13), "").Split(EOL)
+    IF lines.Count > 0 THEN
+        IF lines[lines.Count - 1] = "" THEN lines.RemoveAt(lines.Count - 1)
+    END IF
+    FOR EACH line IN lines
+        IF chunk.Length + line.Length + 1 > PART AND chunk <> "" THEN
+            n = n + 1
+            FS.Write(dir + "\" + Str(n) + ".TXT", chunk)
+            chunk = ""
+        END IF
+        chunk = chunk + line + EOL
+    NEXT
+    IF chunk <> "" THEN
+        n = n + 1
+        FS.Write(dir + "\" + Str(n) + ".TXT", chunk)
+    END IF
+    entry = id + "|" + Meta(header, "name") + "|" + Str(n) + "|" + Str(text.Length) + "|ok|" + Meta(header, "category") + "|" + Meta(header, "about") + "|" + Meta(header, "kind") + "|" + Meta(header, "version") + "|" + Meta(header, "run") + "|" + Meta(header, "files") + "|" + Meta(header, "tasks") + "|" + Meta(header, "startup")
+    FOR EACH line IN ReadOr(STOREDIR + "\CATALOG.TXT", "").Lines()
+        IF line = "" THEN CONTINUE
+        IF Field(line, 0) = id THEN
+            out.Add(entry)
+            found = TRUE
+        ELSE
+            out.Add(line)
+        END IF
+    NEXT
+    IF NOT found THEN out.Add(entry)
+    FS.Write(STOREDIR + "\CATALOG.TXT", out.Join(EOL) + EOL)
+    RETURN Meta(header, "name") + " (build " + Meta(header, "version") + ")"
+END FUNCTION
 
 ' ================================================================ the header and the banners
 
@@ -612,14 +1053,10 @@ SUB Banner_OnDraw (canvas AS GUI_Canvas)
     VAR line AS String
     line = Current()
     banner.Tag = ""
-    IF line = "" THEN
-        DrawBanner("")
-    ELSE
-        DrawBanner(line.Split("|")[0])
-    END IF
+    DrawBanner(Field(line, 0))
 END SUB
 
-' Each game's banner, drawn.
+' Each item's banner, drawn.
 SUB DrawBanner (id AS String)
     VAR i AS Integer
     IF banner.Tag = id AND id <> "" THEN RETURN
@@ -646,8 +1083,6 @@ SUB DrawBanner (id AS String)
                 banner.SetColor(2)
                 banner.FillRect(60 + i * 12, 50 + Int(10 * MATH.Sin(i / 2)), 10, 10)
             NEXT
-            banner.SetColor(10)
-            banner.FillRect(312, 50 + Int(10 * MATH.Sin(10.5)), 10, 10)
             banner.SetColor(9)
             banner.FillCircle(360, 55, 5)
             banner.SetColor(10)
@@ -661,22 +1096,65 @@ SUB DrawBanner (id AS String)
             banner.FillCircle(70, 50, 28)
             banner.SetColor(11)
             banner.Line(58, 30, 82, 72)
-            banner.Line(59, 30, 83, 72)
             banner.Line(70, 50, 56, 72)
-            banner.Line(71, 50, 57, 72)
             banner.SetColor(15)
             banner.Text(130, 34, "HALF-LIFE 3")
             banner.SetColor(11)
             banner.Text(130, 56, "Coming soon(TM)")
+        CASE "SIMXPLOR"
+            Plate(1, 15, "Simxplorer")
+            banner.SetColor(12)
+            FOR i = 0 TO 15
+                banner.FillCircle(60 + Int(14 * MATH.Cos((-40 - i * 15) * MATH.Pi / 180)), 36 + Int(11 * MATH.Sin((-40 - i * 15) * MATH.Pi / 180)), 4)
+                banner.FillCircle(60 + Int(14 * MATH.Cos((-90 + i * 15) * MATH.Pi / 180)), 58 + Int(11 * MATH.Sin((-90 + i * 15) * MATH.Pi / 180)), 4)
+            NEXT
+        CASE "FROSTBRD"
+            Plate(14, 4, "Frostbird")
+            banner.SetColor(15)
+            banner.FillRect(30, 30, 60, 40)
+            banner.SetColor(0)
+            banner.Rect(30, 30, 60, 40)
+            banner.Line(30, 30, 60, 52)
+            banner.Line(60, 52, 89, 30)
+        CASE "CLIPPY"
+            Plate(11, 0, "Clippy")
+            banner.SetColor(8)
+            banner.Rect(50, 18, 20, 66)
+            banner.Rect(56, 26, 10, 46)
+            banner.SetColor(15)
+            banner.FillCircle(54, 40, 6)
+            banner.FillCircle(70, 40, 6)
+            banner.SetColor(0)
+            banner.FillCircle(55, 41, 2)
+            banner.FillCircle(71, 41, 2)
+        CASE "SIMBOOK"
+            Plate(4, 15, "[simbook]")
+        CASE "COLDMAIL"
+            Plate(14, 4, "ColdMail!")
+        CASE "ASKSIM"
+            Plate(5, 15, "AskSim")
+            banner.SetColor(7)
+            banner.FillCircle(60, 40, 16)
+            banner.SetColor(0)
+            banner.FillRect(44, 58, 32, 30)
+        CASE "ELIZA"
+            Plate(6, 15, "ELIZA-95")
         CASE ""
             banner.SetColor(7)
             banner.FillRect(0, 0, 440, 100)
         CASE ELSE
-            banner.SetColor(4)
-            banner.FillRect(0, 0, 440, 100)
-            banner.SetColor(15)
-            banner.Text(20, 40, id)
+            Plate(4, 15, id)
     END SELECT
+END SUB
+
+' A plain banner: a colour, and the name in big letters.
+SUB Plate (back AS Integer, ink AS Integer, name AS String)
+    banner.SetColor(back)
+    banner.FillRect(0, 0, 440, 100)
+    banner.SetColor(8)
+    banner.Text(132, 42, name)
+    banner.SetColor(ink)
+    banner.Text(130, 40, name)
 END SUB
 
 ' ================================================================ menus
@@ -689,14 +1167,18 @@ SUB Menu_OnSelect (item AS String)
             ShowTab("LIBRARY")
         CASE "Downloads"
             ShowTab("DOWNLOADS")
+        CASE "Update All"
+            UpdateAll()
         CASE "Change Store..."
             ChangeStore()
+        CASE "Publish Apps..."
+            Publish()
         CASE "Refresh"
             wantCatalog = TRUE
         CASE "Exit"
             win.Close()
         CASE "About Vapor"
-            Say("Vapor 1.0 for SIM95" + EOL + EOL + "Games from any machine that runs a Vapor store (http://machine/vapor/), downloaded part by part, with a library, play time and achievements." + EOL + EOL + "Half-Life 3 is coming soon.", "info")
+            Say("Vapor 2.0 for SIM95 (build " + MyVersion() + ")" + EOL + EOL + "Games, programs and web apps from any machine that runs a Vapor store (http://machine/vapor/): downloads, a library with updates, play time and achievements." + EOL + EOL + "Half-Life 3 is coming soon.", "info")
     END SELECT
 END SUB
 
