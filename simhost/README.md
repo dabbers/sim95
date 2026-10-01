@@ -13,6 +13,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | ColdMail | `http://HOST/mail/`  | `C:\WEB\MAIL`  |
 | AskSim   | `http://HOST/ask/`   | `C:\WEB\ASK`   |
 | GeoSimies | `http://HOST/geo/` | `C:\WEB\GEO`  |
+| WikiSim  | `http://HOST/wiki/`  | `C:\WEB\WIKI`  |
 | ELIZA-95 | `http://HOST/eliza/` | `C:\WEB\ELIZA` |
 | SimPal   | `http://HOST/pal/`   | `C:\WEB\PAL`   |
 | SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
@@ -20,7 +21,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 
 `http://HOST/` becomes a front page that lists them. Each app keeps its data
 where it always has (`C:\BOOKDATA`, `C:\MAILDATA`, `C:\ASKDATA`,
-`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`), and each has its own cookie, so they don't get in each other's
+`C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`, `C:\WIKIDATA`), and each has its own cookie, so they don't get in each other's
 way. The mail server and the crawler run side by side.
 
 ## Setting up
