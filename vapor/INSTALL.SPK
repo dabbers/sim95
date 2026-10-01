@@ -34,6 +34,7 @@ SUB Main ()
     File10()
     Print("Vapor is installed (11 files).")
     SYS.Start("C:\PROGRAMS\VAPOR.SPK", "")
+
     Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")
 END SUB
 

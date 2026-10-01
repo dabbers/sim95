@@ -7,7 +7,9 @@ VAR apps AS Array OF String
 VAR a AS String
 VAR p AS Array OF String
 VAR n AS Integer
+VAR known AS String
 here = SERVER.Name.Lower()
+
 apps.Add("BOOK|BOOK.SPK|SimBook|The social network: profiles, friends, a news feed, walls, photos and pokes.|#3B5998")
 apps.Add("MAIL|MAIL.SPK|ColdMail|Free webmail, with a real mail server behind it. Your address is you@" + here + ".|#2E5E8C")
 apps.Add("ASK|ASK.SPK|AskSim|A search engine with a real crawler that goes round every machine on the network.|#8B1A1A")
@@ -16,15 +18,36 @@ apps.Add("ELIZA|BOT.SPK|ELIZA-95|A chatbot with Language-Model-of-Certain-Size m
 apps.Add("PAL|PAL.SPK|SimPal|Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.|#003087")
 apps.Add("TUBE|TUBE.SPK|SimTube|Movies: watch them, put yours up, give them stars. They play in SimPlayer.|#CC0000")
 apps.Add("VAPOR|CATALOG.TXT|Vapor|The store: get Vapor, then games and every SIM95 program.|#1B2838")
-FOR EACH a IN apps
-    p = a.Split("|")
-    IF NOT FS.Exists("C:\WEB\" + p[0] + "\" + p[1]) THEN CONTINUE
-    n = n + 1
-    rows = rows + "<tr><td bgcolor=""" + p[4] + """ width=""150""><a href=""/" + p[0].Lower() + "/""><font color=""#FFFFFF"" size=""4""><b>" + p[2] + "</b></font></a></td>" _
-        + "<td>" + SERVER.HtmlEncode(p[3]) + "<br><font size=""2""><a href=""/" + p[0].Lower() + "/"">http://" + here + "/" + p[0].Lower() + "/</a></font></td></tr>"
+' Apps that leave an APP.INF in their folder (name|blurb|colour) say how they
+' show here; the list above covers ones installed before they did.
+FOR EACH a IN FS.List("C:\WEB")
+    IF NOT a.EndsWith("\") THEN CONTINUE
+    a = a.Substring(0, a.Length - 1).Upper()
+    IF FS.Exists("C:\WEB\" + a + "\APP.INF") THEN
+        p = FS.Read("C:\WEB\" + a + "\APP.INF").Trim().Split("|")
+        IF p.Count >= 3 THEN
+            n = n + 1
+            rows = rows + Row(a, p[0], p[1], p[2], here)
+            CONTINUE
+        END IF
+    END IF
+    FOR EACH known IN apps
+        p = known.Split("|")
+        IF p[0] = a AND FS.Exists("C:\WEB\" + a + "\" + p[1]) THEN
+            n = n + 1
+            rows = rows + Row(a, p[2], p[3], p[4], here)
+        END IF
+    NEXT
 NEXT
 IF n = 0 THEN rows = "<tr><td>No web apps here yet. Install SimBook, ColdMail, AskSim, GeoSimies, ELIZA-95, SimPal or SimTube (from Vapor, or with their INSTALL.SPK): each goes in a folder of its own and shows up here.</td></tr>"
 %>
+<script runat="server">
+' One app's row on the front page.
+FUNCTION Row (folder AS String, name AS String, blurb AS String, colour AS String, here AS String) AS String
+    RETURN "<tr><td bgcolor=""" + SERVER.HtmlEncode(colour) + """ width=""150""><a href=""/" + folder.Lower() + "/""><font color=""#FFFFFF"" size=""4""><b>" + SERVER.HtmlEncode(name) + "</b></font></a></td>" _
+        + "<td>" + SERVER.HtmlEncode(blurb) + "<br><font size=""2""><a href=""/" + folder.Lower() + "/"">http://" + here + "/" + folder.Lower() + "/</a></font></td></tr>"
+END FUNCTION
+</script>
 <html>
 <head>
 <title><%= SERVER.Name %> - SimHost</title>

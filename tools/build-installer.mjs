@@ -107,6 +107,24 @@ function vaporStore() {
   return files;
 }
 
+// How each web app shows on a SimHost front page: its installer leaves this in
+// its folder as APP.INF (name|blurb|colour), and the front page lists every
+// folder that has one. An app not listed here gets the first sentence of its
+// Vapor blurb.
+const portal = {
+  BOOK: ["The social network: profiles, friends, a news feed, walls, photos and pokes.", "#3B5998"],
+  MAIL: ["Free webmail, with a real mail server behind it.", "#2E5E8C"],
+  ASK: ["A search engine with a real crawler that goes round every machine on the network.", "#8B1A1A"],
+  GEO: ["Free homepages for everybody: neighborhoods, hit counters, guestbooks and webrings.", "#008080"],
+  ELIZA: ["A chatbot with Language-Model-of-Certain-Size manners.", "#2F6F4F"],
+  PAL: ["Send and request money in SimBucks, and pay at any shop with a Pay with SimPal button.", "#003087"],
+  TUBE: ["Movies: watch them, put yours up, give them stars. They play in SimPlayer.", "#CC0000"],
+};
+const appInf = (app) => {
+  const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
+  return [app.vapor?.name || app.title, blurb, colour].map((v) => v.replace(/[|\r\n]/g, " ")).join("|");
+};
+
 const apps = {
   simbook: {
     folder: "BOOK",
@@ -395,6 +413,8 @@ ${app.first.map((s) => "    " + (s === "MoveHomePage()" ? `IF intoDir = "" THEN 
 ${files.map((f, i) => `    File${i}()`).join("\n")}
     Print("${app.title} is installed (${files.length} files).")
 ${app.last.map((s) => "    " + s).join("\n")}
+${app.folder ? `    ' how it shows on the SimHost front page, which lists every folder with one of these
+    IF intoDir <> "" THEN FS.Write("C:\\WEB\\" + intoDir + "\\APP.INF", ${lit(appInf(app))})` : ""}
     ${app.done || (app.folder ? `IF intoDir = "" THEN
         Print("Open http://" + NET.HostName.Lower() + "/ in Voyager.")
     ELSE

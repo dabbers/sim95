@@ -18,7 +18,7 @@ to tell the apps apart. It gives each app a folder on the one machine:
 | SimTube  | `http://HOST/tube/`  | `C:\WEB\TUBE`  |
 | Vapor    | `http://HOST/vapor/` | `C:\WEB\VAPOR` |
 
-`http://HOST/` becomes a front page that lists them. Each app keeps its data
+`http://HOST/` becomes a front page that lists them. Each web app's installer leaves an `APP.INF` (name, blurb, colour) in its folder, and the front page lists every folder that has one, so apps added later show up without reinstalling SimHost. Each app keeps its data
 where it always has (`C:\BOOKDATA`, `C:\MAILDATA`, `C:\ASKDATA`,
 `C:\GEODATA`, `C:\BOTDATA`, `C:\PALDATA`), and each has its own cookie, so they don't get in each other's
 way. The mail server and the crawler run side by side.
