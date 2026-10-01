@@ -31,6 +31,9 @@ window has a **Crawl Now** button and a log of what it found.
    and 500 in all.
    * **robots.txt**: it reads each machine's `/robots.txt` first and stays out
      of every path listed after `Disallow:`.
+   * **/docs/ is skipped**: every SIM95 machine serves the same manuals there,
+     so indexing them on each machine only buries real pages. (`SKIPDIRS` at
+     the top of `CRAWLER.SPK` lists the folders it never visits.)
    * **Links it won't follow**: ones that look like they change something
      (logout, delete, vote, poke, anything carrying a form token `t=`),
      `localhost` links, and pictures and program files.

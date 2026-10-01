@@ -31,7 +31,7 @@ bravo.write("C:\\WEB\\INDEX.HTM", `<html><head><title>Bravo's Hobby Corner</titl
 <h1>Welcome to Bravo's hobby corner</h1>
 <p>I like <a href="chess.htm">chess</a>, <a href="/recipes.htm">cooking</a> and my friend's
 <a href="http://charlie/club.htm">Chess Club</a>.</p>
-<p><a href="secret/plans.htm">My secret plans</a> &middot; <a href="logout.asp?t=1">Log out</a> &middot; <a href="mailto:bob@bravo">Mail me</a></p>
+<p><a href="secret/plans.htm">My secret plans</a> &middot; <a href="logout.asp?t=1">Log out</a> &middot; <a href="mailto:bob@bravo">Mail me</a> &middot; <a href="/docs/spark.txt">The SPARK manual</a></p>
 <script type="spark">SUB Hidden ()
     PAGE.Status = "zebra"
 END SUB</script>
@@ -43,6 +43,7 @@ bravo.write("C:\\WEB\\RECIPES.HTM", `<html><head><title>Recipes</title></head><b
 bravo.mkdir("C:\\WEB\\SECRET");
 bravo.write("C:\\WEB\\SECRET\\PLANS.HTM", `<html><head><title>Secret</title></head><body>Take over the world with platypus.</body></html>`);
 bravo.write("C:\\WEB\\ORPHAN.HTM", `<html><head><title>Nobody links here</title></head><body>An unlinked page about walrus.</body></html>`);
+bravo.write("C:\\WEB\\DOCS\\SPARK.TXT", "The SPARK manual, which every machine has: ocelot.");
 bravo.write("C:\\WEB\\ROBOTS.TXT", "User-agent: *\nDisallow: /secret/\n");
 charlie.write("C:\\WEB\\CLUB.HTM", `<html><head><title>Charlie's Chess Club</title></head><body>
 <p>The chess club meets on Tuesdays. Bring your own chess board. Chess chess chess!</p>
@@ -77,6 +78,7 @@ await test("it found the pages, followed links between machines, and minded robo
   assert.ok(!doc("http://bravo/secret/plans.htm"), "robots.txt");
   assert.ok(!asked(bravo).includes("/secret/"), "never even asked for it");
   assert.ok(!asked(bravo).includes("logout"), "links that change things are left alone");
+  assert.ok(!asked(bravo).includes("/docs/"), "the manuals every machine has are skipped");
   assert.match(doc("http://bravo/chess.htm"), /\|All About Chess\|.*\|ok\|$/);
   assert.match(alpha.read(`C:\\ASKDATA\\TEXT\\${doc("http://bravo/").split("|")[0]}.TXT`), /^Bravo's Hobby Corner\nWelcome to Bravo's hobby corner I like chess, cooking/);
   assert.ok(!alpha.read(`C:\\ASKDATA\\TEXT\\${doc("http://bravo/").split("|")[0]}.TXT`).includes("zebra"), "scripts are not text");

@@ -536,6 +536,7 @@ SUB File5 ()
     t = t + "' through onMessage and onClose instead of Receive, and the whole tick sits in" + NL
     t = t + "' a TRY with an empty CATCH and nothing after it, so a spoiled tick just ends." + NL
     t = t + "" + NL
+    t = t + "CONST SKIPDIRS = ""/docs/""            ' folders never crawled, ""|"" between them" + NL
     t = t + "CONST DATA = ""C:\ASKDATA""" + NL
     t = t + "CONST PERHOST = 40" + NL
     t = t + "CONST MAXPAGES = 500" + NL
@@ -757,10 +758,21 @@ SUB File5 ()
     t = t + "    RETURN Normal(""http://"" + HostOf(base) + dir + l)" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
+    t = t + "' Folders every machine has the same copy of (the SIM95 manuals): not worth" + NL
+    t = t + "' indexing over and over." + NL
+    t = t + "FUNCTION Skipped (url AS String) AS Bool" + NL
+    t = t + "    VAR dir AS String" + NL
+    t = t + "    FOR EACH dir IN SKIPDIRS.Split(""|"")" + NL
+    t = t + "        IF dir <> """" AND (PathOf(url) + ""/"").StartsWith(dir) THEN RETURN TRUE" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN FALSE" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
     t = t + "' Links nobody wants a robot to follow: they change things." + NL
     t = t + "FUNCTION Harmless (url AS String) AS Bool" + NL
     t = t + "    VAR p AS String" + NL
     t = t + "    p = PathOf(url)" + NL
+    t = t + "    IF Skipped(url) THEN RETURN FALSE" + NL
     t = t + "    IF p.Contains(""logout"") OR p.Contains(""delete"") OR p.Contains(""remove"") OR p.Contains(""vote."") OR p.Contains(""poke."") THEN RETURN FALSE" + NL
     t = t + "    IF p.Contains(""?t="") OR p.Contains(""&t="") THEN RETURN FALSE" + NL
     t = t + "    RETURN NOT (p.EndsWith("".pic"") OR p.EndsWith("".spk"") OR p.EndsWith("".inc""))" + NL
@@ -1025,7 +1037,8 @@ SUB File5 ()
     t = t + "    fetchedOk = ""|""" + NL
     t = t + "    EnsureDirs()" + NL
     t = t + "    FOR EACH line IN ReadOr(DATA + ""\DOCS.TXT"", """").Lines()" + NL
-    t = t + "        IF line.Split(""|"").Count >= 6 THEN" + NL
+    t = t + "        ' (pages from a folder that is skipped now are forgotten)" + NL
+    t = t + "        IF line.Split(""|"").Count >= 6 AND NOT Skipped(line.Split(""|"")[1]) THEN" + NL
     t = t + "            docUrls.Add(line.Split(""|"")[1])" + NL
     t = t + "            docLines.Add(line)" + NL
     t = t + "        END IF" + NL
