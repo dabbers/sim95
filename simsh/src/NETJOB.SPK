@@ -1,0 +1,638 @@
+' NETJOB.SPK - the Sim Shell's network commands: ssh, scp and sim-get's
+' downloads. CORE.SPK only notes that one is wanted (jobWant, jobKind,
+' jobArgs); the window runs it from a GUI_Timer tick with RunJob and, a tick
+' later, hands what it printed back to the waiting pipeline with ShResume.
+'
+' Each job starts in a tick of its own, inside the tick's TRY with an empty
+' CATCH (see SIM95-NOTES.md): a Connect nobody answers is caught, but it
+' spoils the rest of that handler, so a failed job sets jobFinished before
+' anything else and the tick ends there. Replies come in through the
+' socket's onMessage and onClose, never Receive.
+'
+' ssh speaks to SSHD.SPK on port 22 (see SSHD.SPK for the protocol); scp to
+' the Files service on port 139 (FILESVC.SPK); sim-get to a Vapor store on
+' port 80, exactly as VAPOR.SPK does.
+
+CONST SSHPORT = 22
+CONST FILEPORT = 139
+CONST JOBPATIENCE = 15000
+CONST MSGMAX = 60000
+
+VAR jobSock AS NET_Socket
+VAR jobConn AS NET_Connection
+VAR jobNo AS Integer
+VAR jobParts AS Array OF String
+VAR jobAnswer AS String
+VAR jobAnswered AS Bool
+VAR jobClosed AS Bool
+VAR jobBroken AS Bool           ' a Connect failed: this tick must end
+VAR jobError AS String
+VAR jobPass AS String           ' the password for ssh and scp, asked for by the window
+VAR jobRunning AS Bool
+VAR jobFinished AS Bool         ' done: ShResume on the next tick
+VAR jobResult AS String
+VAR jobResultStatus AS Integer
+VAR jobBeat AS Integer          ' SYS.Ticks when the job last showed signs of life
+
+' an interactive ssh session
+VAR remoteOn AS Bool
+VAR remoteHost AS String
+VAR remotePrompt AS String
+
+SUB JobInit ()
+    jobSock = NET_Socket.New()
+    jobSock.onMessage = Job_OnMessage
+    jobSock.onClose = Job_OnClose
+END SUB
+
+SUB Job_OnMessage (conn AS NET_Connection, message AS String)
+    IF conn.Tag <> Str(jobNo) THEN RETURN
+    jobParts.Add(message)
+    jobAnswer = message
+    jobAnswered = TRUE
+END SUB
+
+SUB Job_OnClose (conn AS NET_Connection)
+    IF conn.Tag = Str(jobNo) THEN jobClosed = TRUE
+END SUB
+
+' Printed as the job goes (the window shows it at once).
+SUB JobSay (text AS String)
+    shOut = shOut + text + EOL
+END SUB
+
+' The job is over; its output goes down the pipeline next tick.
+SUB JobEnd (status AS Integer)
+    jobResultStatus = status
+    jobFinished = TRUE
+    jobBeat = 0
+END SUB
+
+' Whether a job needs a password before it can start.
+FUNCTION JobNeedsPass () AS Bool
+    RETURN jobKind = "ssh" OR jobKind = "sshi" OR jobKind = "scp"
+END FUNCTION
+
+' The machine a job talks to, for the password prompt.
+FUNCTION JobTarget () AS String
+    VAR t AS String
+    t = jobArgs[0]
+    IF jobKind = "scp" THEN
+        IF NOT IsRemote(t) AND jobArgs.Count > 1 THEN t = jobArgs[1]
+        t = t.Substring(0, t.IndexOf(":"))
+    END IF
+    IF NOT t.Contains("@") THEN t = shUser + "@" + t
+    RETURN t
+END FUNCTION
+
+' Called from the window's tick, inside its TRY.
+SUB RunJob ()
+    jobRunning = TRUE
+    jobBroken = FALSE
+    jobFinished = FALSE
+    jobResult = ""
+    jobResultStatus = 0
+    jobBeat = SYS.Ticks
+    TRY
+        SELECT CASE jobKind
+            CASE "ssh"
+                SshJob(FALSE)
+            CASE "sshi"
+                SshJob(TRUE)
+            CASE "scp"
+                ScpJob()
+            CASE "get"
+                GetJob()
+        END SELECT
+    CATCH err
+        IF NOT jobBroken THEN
+            JobSay(jobKind.Replace("sshi", "ssh").Replace("get", "sim-get") + ": " + err)
+            jobResultStatus = 1
+        END IF
+    END TRY
+    jobPass = ""
+    jobFinished = TRUE
+END SUB
+
+' Next tick: give the output to the pipeline.
+SUB JobCollect ()
+    jobFinished = FALSE
+    jobRunning = FALSE
+    ShResume(jobResult, jobResultStatus)
+END SUB
+
+' Ctrl+C: forget the job.
+SUB JobCancel ()
+    IF jobRunning OR jobWant THEN
+        jobNo = jobNo + 1
+        jobRunning = FALSE
+        jobFinished = FALSE
+        jobWant = FALSE
+        pendStages.Clear()
+        jobPass = ""
+    END IF
+END SUB
+
+' ================================================================ talking
+
+FUNCTION JobConnect (host AS String, port AS Integer) AS Bool
+    jobNo = jobNo + 1
+    jobParts.Clear()
+    jobAnswered = FALSE
+    jobClosed = FALSE
+    TRY
+        jobConn = jobSock.Connect(host, port)
+        jobConn.Tag = Str(jobNo)
+    CATCH err
+        ' (the handler is spoiled now: note the failure and get out)
+        jobBroken = TRUE
+        jobError = err
+        jobFinished = TRUE
+        jobBeat = 0
+        RETURN FALSE
+    END TRY
+    RETURN TRUE
+END FUNCTION
+
+' One message, and the one that answers it.
+FUNCTION JobRequest (text AS String) AS String
+    VAR since AS Integer
+    jobAnswered = FALSE
+    jobAnswer = ""
+    IF jobClosed THEN THROW "the other machine hung up"
+    jobConn.Send(text)
+    since = SYS.Ticks
+    WHILE NOT jobAnswered AND NOT jobClosed AND SYS.Ticks - since < JOBPATIENCE
+        jobBeat = SYS.Ticks
+        SYS.Sleep(20)
+    END WHILE
+    IF NOT jobAnswered THEN
+        IF jobClosed THEN THROW "the other machine hung up"
+        THROW "the other machine stopped answering"
+    END IF
+    RETURN jobAnswer
+END FUNCTION
+
+SUB JobHangUp ()
+    TRY
+        IF jobConn.IsOpen THEN jobConn.Close()
+    CATCH err
+    END TRY
+END SUB
+
+' Line n of a reply, and everything after line n.
+FUNCTION ReplyLine (reply AS String, n AS Integer) AS String
+    VAR p AS Array OF String
+    p = reply.Split(EOL)
+    IF n >= p.Count THEN RETURN ""
+    RETURN p[n]
+END FUNCTION
+
+FUNCTION ReplyRest (reply AS String, n AS Integer) AS String
+    VAR p AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    p = reply.Split(EOL)
+    FOR i = n TO p.Count - 1
+        out.Add(p[i])
+    NEXT
+    RETURN out.Join(EOL)
+END FUNCTION
+
+' ================================================================ ssh
+
+SUB SshJob (interactive AS Bool)
+    VAR user AS String
+    VAR host AS String
+    VAR reply AS String
+    VAR cmd AS Array OF String
+    VAR i AS Integer
+    user = shUser
+    host = jobArgs[0]
+    IF host.Contains("@") THEN
+        user = host.Substring(0, host.IndexOf("@"))
+        host = host.Substring(host.IndexOf("@") + 1, host.Length - host.IndexOf("@") - 1)
+    END IF
+    IF NOT JobConnect(host, SSHPORT) THEN
+        JobSay("ssh: connect to host " + host + " port 22: " + jobError)
+        JobEnd(255)
+        RETURN
+    END IF
+    reply = JobRequest("AUTH " + user + "|" + jobPass)
+    IF NOT reply.StartsWith("OK") THEN
+        JobHangUp()
+        JobSay(user + "@" + host + ": Permission denied (password).")
+        JobEnd(255)
+        RETURN
+    END IF
+    IF interactive THEN
+        remoteOn = TRUE
+        remoteHost = host.Lower()
+        remotePrompt = ReplyLine(reply, 1)
+        IF ReplyRest(reply, 2) <> "" THEN JobSay(ReplyRest(reply, 2))
+        RETURN
+    END IF
+    FOR i = 1 TO jobArgs.Count - 1
+        cmd.Add(jobArgs[i])
+    NEXT
+    reply = JobRequest("RUN " + cmd.Join(" "))
+    JobHangUp()
+    jobResult = ReplyRest(reply, 2)
+    IF jobResult <> "" AND NOT jobResult.EndsWith(EOL) THEN jobResult = jobResult + EOL
+    IF reply.StartsWith("ERR") THEN
+        JobSay("ssh: " + reply.Substring(4, reply.Length - 4))
+        jobResultStatus = 255
+    ELSE
+        jobResultStatus = Int(Val(ReplyLine(reply, 0).Substring(3, ReplyLine(reply, 0).Length - 3)))
+    END IF
+END SUB
+
+' One line typed in an interactive session, run over there.
+SUB RemoteRun (line AS String)
+    VAR reply AS String
+    VAR body AS String
+    TRY
+        reply = JobRequest("RUN " + line)
+    CATCH err
+        RemoteGone()
+        RETURN
+    END TRY
+    body = ReplyRest(reply, 2)
+    IF body <> "" THEN
+        IF NOT body.EndsWith(EOL) THEN body = body + EOL
+        shOut = shOut + body
+    END IF
+    IF reply.StartsWith("BYE") OR reply.StartsWith("ERR") THEN
+        IF reply.StartsWith("ERR") THEN JobSay(reply)
+        JobHangUp()
+        RemoteGone()
+        RETURN
+    END IF
+    shClear = shClear OR ReplyLine(reply, 0).EndsWith(" clear")
+    remotePrompt = ReplyLine(reply, 1)
+END SUB
+
+SUB RemoteGone ()
+    IF NOT remoteOn THEN RETURN
+    remoteOn = FALSE
+    JobSay("Connection to " + remoteHost + " closed.")
+END SUB
+
+' ================================================================ scp
+
+' host:path or user@host:path (but not C:\path)
+FUNCTION IsRemote (s AS String) AS Bool
+    RETURN s.IndexOf(":") >= 2
+END FUNCTION
+
+' A path on the other machine: /x and C:\X as they are, anything else in
+' its C:\MYFILES.
+FUNCTION RemotePath (p AS String) AS String
+    VAR s AS String
+    s = p.Replace("/", "\")
+    IF s = "" OR s = "~" THEN RETURN "C:\MYFILES"
+    IF s.StartsWith("~\") THEN RETURN "C:\MYFILES" + s.Substring(1, s.Length - 1).Upper()
+    IF s.StartsWith("\") THEN RETURN "C:" + s.Upper()
+    IF s.Length >= 2 AND s.CharAt(1) = ":" THEN RETURN s.Upper()
+    RETURN "C:\MYFILES\" + s.Upper()
+END FUNCTION
+
+SUB ScpJob ()
+    VAR src AS String
+    VAR dst AS String
+    VAR spec AS String
+    VAR user AS String
+    VAR host AS String
+    VAR rpath AS String
+    VAR local AS String
+    VAR text AS String
+    VAR reply AS String
+    VAR down AS Bool
+    VAR files AS Array OF String
+    VAR a AS String
+    FOR EACH a IN jobArgs
+        IF NOT a.StartsWith("-") THEN files.Add(a)
+    NEXT
+    IF files.Count <> 2 THEN
+        JobSay("usage: scp [user@]host:path localpath  or  scp localpath [user@]host:path")
+        JobEnd(1)
+        RETURN
+    END IF
+    src = files[0]
+    dst = files[1]
+    down = IsRemote(src)
+    IF down = IsRemote(dst) THEN
+        JobSay("scp: one side must be on another machine (host:path), the other here")
+        JobEnd(1)
+        RETURN
+    END IF
+    spec = dst
+    IF down THEN spec = src
+    user = shUser
+    host = spec.Substring(0, spec.IndexOf(":"))
+    rpath = RemotePath(spec.Substring(spec.IndexOf(":") + 1, spec.Length - spec.IndexOf(":") - 1))
+    IF host.Contains("@") THEN
+        user = host.Substring(0, host.IndexOf("@"))
+        host = host.Substring(host.IndexOf("@") + 1, host.Length - host.IndexOf("@") - 1)
+    END IF
+    IF NOT down THEN
+        local = Resolve(src)
+        IF NOT FS.Exists(local) OR FS.IsDir(local) THEN
+            JobSay("scp: " + src + ": No such file")
+            JobEnd(1)
+            RETURN
+        END IF
+        text = FS.Read(local)
+        IF text.Length + rpath.Length + 20 > MSGMAX THEN
+            JobSay("scp: " + src + ": too big for one network message (" + Str(text.Length) + " bytes; the Files service takes about 60K)")
+            JobEnd(1)
+            RETURN
+        END IF
+    END IF
+    IF NOT JobConnect(host, FILEPORT) THEN
+        JobSay("scp: connect to host " + host + " port 139: " + jobError)
+        JobEnd(1)
+        RETURN
+    END IF
+    reply = JobRequest("AUTH " + user + "|" + jobPass)
+    IF NOT reply.StartsWith("OK") THEN
+        JobHangUp()
+        JobSay(user + "@" + host + ": Permission denied (password).")
+        JobEnd(1)
+        RETURN
+    END IF
+    IF down THEN
+        reply = JobRequest("READ " + rpath)
+        IF NOT reply.StartsWith("OK") THEN
+            JobHangUp()
+            JobSay("scp: " + host + ":" + rpath + ": " + reply.Replace("ERR ", ""))
+            JobEnd(1)
+            RETURN
+        END IF
+        text = ReplyRest(reply, 1)
+        local = Resolve(dst)
+        IF FS.Exists(local) THEN
+            IF FS.IsDir(local) THEN local = JoinPath(local, BaseName(rpath))
+        END IF
+        FS.Write(local, text)
+        JobSay(BaseName(rpath).PadRight(24) + "100%  " + Str(text.Length).PadLeft(7) + " bytes  -> " + local)
+    ELSE
+        IF JobRequest("STAT " + rpath) = "OK" + EOL + "D" THEN rpath = JoinPath(rpath, BaseName(local))
+        reply = JobRequest("WRITE " + rpath + EOL + text)
+        IF NOT reply.StartsWith("OK") THEN
+            JobHangUp()
+            JobSay("scp: " + host + ":" + rpath + ": " + reply.Replace("ERR ", ""))
+            JobEnd(1)
+            RETURN
+        END IF
+        JobSay(BaseName(local).PadRight(24) + "100%  " + Str(text.Length).PadLeft(7) + " bytes  -> " + host + ":" + rpath)
+    END IF
+    JobHangUp()
+END SUB
+
+' ================================================================ sim-get
+
+' A page from the store: its body, or "" with jobError saying why. Like
+' Vapor's StartFetch and Body.
+FUNCTION JobFetch (url AS String) AS String
+    VAR host AS String
+    VAR path AS String
+    VAR raw AS String
+    VAR since AS Integer
+    host = url.Substring(7, url.Length - 7)
+    path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
+    host = host.Substring(0, host.IndexOf("/"))
+    jobError = ""
+    IF NOT JobConnect(host, 80) THEN RETURN ""
+    jobConn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: sim-get/1.0 (SIM95)")
+    since = SYS.Ticks
+    WHILE NOT jobClosed AND SYS.Ticks - since < JOBPATIENCE
+        jobBeat = SYS.Ticks
+        SYS.Sleep(20)
+    END WHILE
+    JobHangUp()
+    raw = jobParts.Join(EOL)
+    IF raw = "" THEN
+        jobError = "no answer"
+        RETURN ""
+    END IF
+    IF NOT raw.StartsWith("HTTP/1.0 200") THEN
+        jobError = raw.Lines()[0]
+        RETURN ""
+    END IF
+    IF NOT raw.Contains(EOL + EOL) THEN RETURN ""
+    RETURN raw.Substring(raw.IndexOf(EOL + EOL) + 2, raw.Length - raw.IndexOf(EOL + EOL) - 2)
+END FUNCTION
+
+FUNCTION Kb (bytes AS Integer) AS String
+    RETURN Str(Int(bytes / 1024) + 1) + " kB"
+END FUNCTION
+
+SUB GetJob ()
+    VAR what AS String
+    VAR ids AS Array OF String
+    VAR yes AS Bool
+    VAR a AS String
+    VAR i AS Integer
+    VAR ln AS String
+    VAR n AS Integer
+    VAR held AS Integer
+    VAR mine AS String
+    what = jobArgs[0].Lower()
+    FOR i = 1 TO jobArgs.Count - 1
+        a = jobArgs[i]
+        IF a = "-y" OR a = "--yes" THEN
+            yes = TRUE
+        ELSE
+            ids.Add(a.Upper())
+        END IF
+    NEXT
+    IF NOT GetUpdate(what = "update") THEN RETURN
+    IF what = "update" THEN RETURN
+    IF what = "upgrade" THEN
+        JobSay("Calculating upgrade... Done")
+        FOR EACH ln IN Library()
+            IF HasUpdate(Field(ln, 0)) THEN ids.Add(Field(ln, 0))
+        NEXT
+        ' Vapor itself, if it is here and the store has a newer one
+        ln = StoreLine("VAPOR")
+        IF ln <> "" AND FS.Exists(VAPORME) THEN
+            mine = ReadOr(VAPORME, "")
+            IF mine.StartsWith("' VAPOR|") THEN
+                IF Meta(mine.Lines()[0], "version") <> Field(ln, 8) THEN ids.Add("VAPOR")
+            END IF
+        END IF
+        IF ids.Count = 0 THEN
+            JobSay("0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.")
+            RETURN
+        END IF
+        JobSay("The following packages will be upgraded:")
+        JobSay("  " + ids.Join(" ").Lower())
+        FOR EACH a IN ids
+            IF NOT InstallOne(StoreLine(a), n + 1) THEN RETURN
+            n = n + 1
+        NEXT
+        JobSay(Str(n) + " upgraded, 0 newly installed, 0 to remove and 0 not upgraded.")
+        RETURN
+    END IF
+    ' install
+    IF ids.Count = 0 THEN
+        JobSay("E: install what? (sim-get install id)")
+        JobEnd(1)
+        RETURN
+    END IF
+    FOR EACH a IN ids
+        ln = StoreLine(a)
+        IF ln = "" THEN
+            JobSay("E: Unable to locate package " + a.Lower())
+            jobResultStatus = 100
+            CONTINUE
+        END IF
+        IF Field(ln, 4) = "soon" THEN
+            JobSay("E: " + Field(ln, 1) + " is coming soon. It is not in the store yet.")
+            jobResultStatus = 100
+            CONTINUE
+        END IF
+        IF LibLine(a) <> "" AND NOT HasUpdate(a) AND what <> "reinstall" THEN
+            JobSay(a.Lower() + " is already the newest version (" + Field(LibLine(a), 6) + ").")
+            held = held + 1
+            CONTINUE
+        END IF
+        ' a web app takes the home page, so it asks first, as Vapor does
+        IF Field(ln, 7) = "web" AND LibLine(a) = "" AND NOT (Folders() AND Field(ln, 13) <> "") AND NOT yes THEN
+            JobSay(Field(ln, 1) + " is a web app: it becomes this machine's home page, http://" + NET.HostName.Lower() + "/ (the page there now moves aside to WELCOME.HTM).")
+            JobSay("E: not installed. Say so with: sim-get install -y " + a.Lower())
+            jobResultStatus = 1
+            CONTINUE
+        END IF
+        IF NOT InstallOne(ln, n + 1) THEN RETURN
+        n = n + 1
+    NEXT
+    JobSay(Str(n) + " newly installed, " + Str(held) + " already there.")
+END SUB
+
+' The catalog, fresh from the store, into C:\SYSTEM\SIMGET.TXT.
+FUNCTION GetUpdate (loud AS Bool) AS Bool
+    VAR store AS String
+    VAR text AS String
+    VAR ln AS String
+    VAR items AS Integer
+    VAR ups AS Integer
+    store = StoreUrl()
+    text = JobFetch(store + "catalog.txt")
+    IF jobBroken THEN
+        JobSay("Err:1 " + store + " catalog.txt")
+        JobSay("E: Failed to fetch " + store + "catalog.txt  " + jobError)
+        JobEnd(100)
+        RETURN FALSE
+    END IF
+    IF text = "" THEN
+        JobSay("Err:1 " + store + " catalog.txt")
+        JobSay("E: Failed to fetch " + store + "catalog.txt  " + jobError)
+        JobEnd(100)
+        RETURN FALSE
+    END IF
+    FS.Write(GETCACHE, text)
+    IF NOT loud THEN
+        JobSay("Hit:1 " + store + " catalog.txt")
+        RETURN TRUE
+    END IF
+    JobSay("Get:1 " + store + " catalog.txt [" + Str(text.Length) + " B]")
+    JobSay("Reading package lists... Done")
+    FOR EACH ln IN Catalog()
+        IF Field(ln, 7) = "client" THEN CONTINUE
+        items = items + 1
+        IF HasUpdate(Field(ln, 0)) THEN ups = ups + 1
+    NEXT
+    IF ups = 0 THEN
+        JobSay(Str(items) + " packages in the store. All installed packages are up to date.")
+    ELSE
+        JobSay(Str(items) + " packages in the store. " + Str(ups) + " can be upgraded. Run 'sim-get list --upgradable' to see them.")
+    END IF
+    RETURN TRUE
+END FUNCTION
+
+' Download one catalog item and set it up the way Vapor's Finish does.
+FUNCTION InstallOne (ln AS String, k AS Integer) AS Bool
+    VAR store AS String
+    VAR id AS String
+    VAR parts AS Integer
+    VAR p AS Integer
+    VAR text AS String
+    VAR chunk AS String
+    VAR started AS Integer
+    VAR kind AS String
+    VAR dir AS String
+    VAR f AS String
+    VAR pid AS Integer
+    VAR since AS Integer
+    VAR secs AS Integer
+    store = StoreUrl()
+    id = Field(ln, 0)
+    parts = Int(Val(Field(ln, 2)))
+    kind = Field(ln, 7)
+    IF kind = "" THEN kind = "game"
+    started = SYS.Ticks
+    JobSay("Get:" + Str(k) + " " + store + " " + id.Lower() + " " + Str(parts) + " parts [" + Kb(Int(Val(Field(ln, 3)))) + "]")
+    FOR p = 1 TO parts
+        chunk = JobFetch(store + id.Lower() + "/" + Str(p) + ".txt")
+        IF jobBroken OR chunk = "" THEN
+            JobSay("E: Failed to fetch " + store + id.Lower() + "/" + Str(p) + ".txt  " + jobError)
+            JobEnd(100)
+            RETURN FALSE
+        END IF
+        text = text + chunk
+    NEXT
+    secs = Int((SYS.Ticks - started) / 1000)
+    JobSay("Fetched " + Kb(text.Length) + " in " + Str(MATH.Max(1, secs)) + "s")
+    IF kind = "client" THEN
+        FS.Write(VAPORME, text)
+        JobSay("Unpacking Vapor (" + Field(ln, 8) + ") ... restart Vapor to use it.")
+        RETURN TRUE
+    END IF
+    dir = GAMEDIR + "\" + id
+    IF NOT FS.Exists(GAMEDIR) THEN FS.MakeDir(GAMEDIR)
+    IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    JobSay("Unpacking " + Field(ln, 1) + " (" + Field(ln, 8) + ") ...")
+    IF kind = "game" THEN
+        FS.Write(dir + "\" + id + ".SPK", text)
+        Keep(ln)
+        JobSay("Setting up " + Field(ln, 1) + " (" + Field(ln, 8) + ") ... play it: " + dir + "\" + id + ".SPK")
+        RETURN TRUE
+    END IF
+    ' an installer: an update clears away the old files it writes first, then
+    ' it runs, and it is done when they are all back (or when it ends)
+    FS.Write(dir + "\INSTALL.SPK", text)
+    IF LibLine(id) <> "" THEN
+        FOR EACH f IN Field(ln, 10).Split(";")
+            IF f <> "" AND f.Upper() <> VAPORME THEN
+                IF FS.Exists(Where(f, Field(ln, 13))) THEN FS.Delete(Where(f, Field(ln, 13)))
+            END IF
+        NEXT
+    END IF
+    JobSay("Setting up " + Field(ln, 1) + " (" + Field(ln, 8) + ") ... running its installer")
+    since = SYS.Ticks
+    pid = SYS.Run(dir + "\INSTALL.SPK")
+    WHILE TRUE
+        jobBeat = SYS.Ticks
+        SYS.Sleep(100)
+        IF NOT TaskAlive(pid) THEN BREAK
+        IF SYS.Ticks - since > 300 AND AllThere(Field(ln, 10), Field(ln, 13)) THEN BREAK
+        IF SYS.Ticks - since > 60000 THEN BREAK
+    END WHILE
+    Keep(ln)
+    IF kind = "web" THEN
+        JobSay(Field(ln, 1) + " is installed: open it in your browser.")
+    ELSE
+        JobSay(Field(ln, 1) + " is installed. Run: " + Field(ln, 9))
+    END IF
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION TaskAlive (pid AS Integer) AS Bool
+    VAR task AS String
+    FOR EACH task IN SYS.Tasks()
+        IF Int(Val(task.Split("|")[0])) = pid THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION

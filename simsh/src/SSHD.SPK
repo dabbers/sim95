@@ -1,0 +1,170 @@
+' SSHD.SPK - the Sim Shell server. It listens on port 22 and runs commands
+' sent by another machine's "ssh" (in the Sim Shell), in that machine's shell,
+' on this machine's disk. The installer builder puts CORE.SPK above this, so
+' the server runs commands with exactly the built-ins the window does.
+'
+' NOT SECURE. SIM95 has no crypto: this is rsh with a password. AUTH takes
+' the machine's own user name and password (C:\SYSTEM\USERS.INI), the same
+' ones the Files service takes, and the whole session travels as plain text
+' that Monitor can read. See README.md.
+'
+' Protocol, one request per message, one reply per message:
+'   AUTH user|password      -> OK + prompt + motd, or ERR reason
+'   RUN command line        -> "RET <code>[ clear]" + prompt + output
+'                              ("BYE" + prompt + output when the command is exit)
+' A reply must fit in one network message (64K), so long output is cut.
+
+CONST SSHDPORT = 22
+CONST REPLYMAX = 60000
+
+VAR win AS GUI_Window
+VAR log AS GUI_ListBox
+VAR sock AS NET_Socket
+VAR sessions AS Integer
+VAR ran AS Integer
+VAR brk AS Integer
+
+SUB Main ()
+    EOL = Chr(10)
+    shRemote = TRUE
+    win = GUI_Window.New("Sim Shell Server", 460, 220)
+    win.Icon = "network"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    log = GUI_ListBox.New(win)
+    log.Mono = TRUE
+    Win_OnResize()
+
+    sock = NET_Socket.New()
+    sock.onConnect = Sock_OnConnect
+    sock.onMessage = Sock_OnMessage
+    sock.onClose = Sock_OnClose
+    sock.onError = Sock_OnError
+    sock.Listen(SSHDPORT)
+    Note("sshd listening on port " + Str(SSHDPORT) + " as " + NET.HostName.Lower())
+    Note("Not secure: rsh with a password. See README.md.")
+    Status()
+    win.Show()
+END SUB
+
+SUB Win_OnClose ()
+    sock.Close()
+    SYS.Exit(0)
+END SUB
+
+SUB Win_OnResize ()
+    log.SetBounds(0, 0, win.Width, win.Height)
+END SUB
+
+SUB Sock_OnError (message AS String)
+    Note("ERROR " + message)
+    IF message.Contains("in use") THEN Note("Is another sshd already running? See Tasks.")
+END SUB
+
+SUB Note (text AS String)
+    log.Add(TIME.Clock + "  " + text)
+    IF log.Count > 300 THEN log.RemoveAt(0)
+    log.ScrollToEnd()
+END SUB
+
+SUB Status ()
+    win.Status = NET.HostName.Lower() + " port " + Str(SSHDPORT) + " - " + Str(sessions) + " logins, " + Str(ran) + " commands"
+END SUB
+
+SUB Sock_OnConnect (conn AS NET_Connection)
+    conn.Accept()
+    conn.Tag = ""
+END SUB
+
+SUB Sock_OnClose (conn AS NET_Connection)
+    Note("session from " + conn.FromAddress + " closed")
+END SUB
+
+' Cut a reply to one network message.
+FUNCTION Cap (text AS String) AS String
+    IF text.Length <= REPLYMAX THEN RETURN text
+    RETURN text.Substring(0, REPLYMAX - 40) + EOL + "...[output cut at 60K]" + EOL
+END FUNCTION
+
+SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+    VAR cmd AS String
+    VAR arg AS String
+    VAR sp AS Integer
+    VAR bar AS Integer
+    VAR user AS String
+    VAR pass AS String
+    VAR out AS String
+    VAR state AS String
+    VAR line AS String
+    sp = message.IndexOf(" ")
+    cmd = message
+    arg = ""
+    IF sp >= 0 THEN
+        cmd = message.Substring(0, sp)
+        arg = message.Substring(sp + 1, message.Length - sp - 1)
+    END IF
+    cmd = cmd.Upper()
+    IF cmd <> "AUTH" AND cmd <> "RUN" THEN
+        brk = message.IndexOf(EOL)
+        IF brk >= 0 THEN
+            cmd = message.Substring(0, brk).Upper().Trim()
+            arg = message.Substring(brk + 1, message.Length - brk - 1)
+        END IF
+    END IF
+
+    IF cmd = "AUTH" THEN
+        bar = arg.IndexOf("|")
+        IF bar < 0 THEN bar = arg.Length
+        user = arg.Substring(0, bar)
+        pass = arg.Substring(bar + 1, arg.Length - bar - 1)
+        IF NOT CheckLogin(user, pass) THEN
+            conn.Send("ERR Access denied")
+            Note("login refused from " + conn.FromAddress + " (" + user + ")")
+            RETURN
+        END IF
+        ShInit(MachineUser(), NET.HostName.Lower())
+        shRemote = TRUE
+        conn.Tag = Chr(5) + SaveState()
+        sessions = sessions + 1
+        Status()
+        Note("login from " + conn.FromAddress + " as " + user)
+        conn.Send("OK" + EOL + Prompt() + EOL + "Sim Shell on " + NET.HostName.Lower() + ". Not secure. Type exit to log out.")
+        RETURN
+    END IF
+
+    IF cmd = "RUN" THEN
+        IF NOT conn.Tag.StartsWith(Chr(5)) THEN
+            conn.Send("ERR Not logged in")
+            RETURN
+        END IF
+        state = conn.Tag.Substring(1, conn.Tag.Length - 1)
+        LoadState(state)
+        shRemote = TRUE
+        shOut = ""
+        shClear = FALSE
+        shExit = FALSE
+        line = arg
+        out = ""
+        TRY
+            out = ShRun(line)
+        CATCH err
+            out = line.Split(" ")[0] + ": " + err + EOL
+        END TRY
+        ran = ran + 1
+        Status()
+        IF shExit THEN
+            conn.Send(Cap("BYE" + EOL + Prompt() + EOL + out))
+            conn.Close()
+            RETURN
+        END IF
+        conn.Tag = Chr(5) + SaveState()
+        IF shClear THEN
+            conn.Send(Cap("RET 0 clear" + EOL + Prompt() + EOL + out))
+        ELSE
+            conn.Send(Cap("RET " + Str(shStatus) + EOL + Prompt() + EOL + out))
+        END IF
+        RETURN
+    END IF
+
+    conn.Send("ERR Bad command")
+END SUB

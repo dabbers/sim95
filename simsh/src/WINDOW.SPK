@@ -1,0 +1,366 @@
+' WINDOW.SPK - the Sim Shell window: a bash-like terminal. The scrollback is a
+' mono GUI_ListBox, the input a GUI_TextBox with a user@host:path$ prompt. Up
+' and Down walk the history, Ctrl+Space completes a file name, Ctrl+C stops.
+'
+' CORE.SPK does the parsing and the built-ins; NETJOB.SPK does ssh, scp and
+' sim-get. The window ties them together: it echoes a line, hands it to the
+' shell, and a GUI_Timer drives the work a step at a time so a long job never
+' hangs the window. Network jobs run one per tick, each inside the tick's TRY
+' with an empty CATCH (SIM95-NOTES.md: a failed Connect spoils its handler).
+
+VAR win AS GUI_Window
+VAR screen AS GUI_ListBox
+VAR promptLbl AS GUI_Label
+VAR inbox AS GUI_TextBox
+VAR clock AS GUI_Timer
+
+VAR busy AS Bool
+VAR passMode AS Bool            ' the input box is taking a password
+VAR goJob AS Bool              ' a password is in hand: run the job now
+VAR remoteLine AS String       ' a line to run on the remote machine
+VAR haveRemoteLine AS Bool
+VAR histPos AS Integer
+VAR curLine AS String
+
+SUB Main ()
+    VAR me AS String
+    EOL = Chr(10)
+    me = MachineUser()
+    IF me = "" THEN me = "user"
+    ShInit(me, NET.HostName.Lower())
+    JobInit()
+
+    win = GUI_Window.New("Sim Shell", 620, 400)
+    win.Icon = "terminal"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    win.onKey = Win_OnKey
+
+    screen = GUI_ListBox.New(win)
+    screen.Mono = TRUE
+    promptLbl = GUI_Label.New(win)
+    promptLbl.Bold = TRUE
+    inbox = GUI_TextBox.New(win)
+    inbox.onEnter = In_Enter
+    inbox.onKey = In_Key
+    Layout()
+
+    Echo("Sim Shell " + SHVERSION + " for SIM95.  Type help for a list of commands.")
+    Echo("")
+    ShRc()
+
+    clock = GUI_Timer.New(win)
+    clock.Interval = 40
+    clock.onTick = Clock_OnTick
+    clock.Start()
+
+    win.Show()
+    inbox.Focus()
+    Ready()
+END SUB
+
+SUB Win_OnClose ()
+    TRY
+        JobHangUp()
+    CATCH err
+    END TRY
+    SYS.Exit(0)
+END SUB
+
+SUB Win_OnResize ()
+    Layout()
+END SUB
+
+SUB Layout ()
+    VAR w AS Integer
+    VAR h AS Integer
+    VAR pw AS Integer
+    w = win.Width
+    h = win.Height
+    screen.SetBounds(0, 0, w, h - 26)
+    pw = MATH.Min(260, promptLbl.Text.Length * 7 + 10)
+    promptLbl.SetBounds(4, h - 22, pw, 18)
+    inbox.SetBounds(4 + pw, h - 24, w - pw - 8, 20)
+END SUB
+
+' Ctrl+C anywhere stops the running job.
+SUB Win_OnKey (key AS String)
+    IF key = "Ctrl+C" THEN Interrupt()
+END SUB
+
+' ================================================================ the screen
+
+SUB Echo (text AS String)
+    VAR ln AS String
+    FOR EACH ln IN text.Split(EOL)
+        screen.Add(ln)
+    NEXT
+    WHILE screen.Count > 1000
+        screen.RemoveAt(0)
+    END WHILE
+    screen.ScrollToEnd()
+END SUB
+
+' Show whatever the shell has printed, and act on clear.
+SUB Flush ()
+    IF shClear THEN
+        screen.Clear()
+        shClear = FALSE
+    END IF
+    IF shOut <> "" THEN
+        ' keep the trailing blank line off (lines already end at EOL)
+        IF shOut.EndsWith(EOL) THEN shOut = shOut.Substring(0, shOut.Length - 1)
+        Echo(shOut)
+        shOut = ""
+    END IF
+END SUB
+
+' Put the prompt up and let the user type.
+SUB Ready ()
+    IF passMode THEN RETURN
+    IF remoteOn THEN
+        promptLbl.Text = remotePrompt
+    ELSE
+        promptLbl.Text = Prompt()
+    END IF
+    Layout()
+    inbox.Enabled = TRUE
+    inbox.Focus()
+END SUB
+
+' ================================================================ input
+
+SUB In_Enter ()
+    VAR line AS String
+    line = inbox.Text
+    inbox.Text = ""
+    histPos = -1
+
+    IF passMode THEN
+        passMode = FALSE
+        inbox.Password = FALSE
+        jobPass = line
+        goJob = TRUE
+        Echo("")
+        RETURN
+    END IF
+
+    IF remoteOn THEN
+        Echo(remotePrompt + " " + line)
+        IF busy THEN RETURN
+        remoteLine = line
+        haveRemoteLine = TRUE
+        inbox.Enabled = FALSE
+        RETURN
+    END IF
+
+    Echo(Prompt() + " " + line)
+    IF line.Trim() = "" THEN
+        Ready()
+        RETURN
+    END IF
+    inbox.Enabled = FALSE
+    ShStart(line)
+    Pump()
+END SUB
+
+SUB In_Key (key AS String)
+    SELECT CASE key
+        CASE "ArrowUp"
+            History(-1)
+        CASE "ArrowDown"
+            History(1)
+        CASE "Ctrl+Space", "Tab"
+            Complete()
+        CASE "Ctrl+C"
+            Interrupt()
+    END SELECT
+END SUB
+
+SUB History (dir AS Integer)
+    IF hist.Count = 0 THEN RETURN
+    IF histPos < 0 THEN
+        curLine = inbox.Text
+        histPos = hist.Count
+    END IF
+    histPos = histPos + dir
+    IF histPos >= hist.Count THEN
+        histPos = -1
+        inbox.Text = curLine
+        RETURN
+    END IF
+    IF histPos < 0 THEN histPos = 0
+    inbox.Text = hist[histPos]
+    inbox.SelectAll()
+END SUB
+
+SUB Interrupt ()
+    Echo((Prompt() + " " + inbox.Text).Trim() + "^C")
+    inbox.Text = ""
+    histPos = -1
+    IF passMode THEN
+        passMode = FALSE
+        inbox.Password = FALSE
+    END IF
+    IF remoteOn THEN
+        RemoteGone()
+        JobHangUp()
+    END IF
+    JobCancel()
+    queue.Clear()
+    busy = FALSE
+    jobRunning = FALSE
+    Flush()
+    Ready()
+END SUB
+
+' Ctrl+Space / Tab: complete the last word against the files in its directory.
+SUB Complete ()
+    VAR text AS String
+    VAR cut AS Integer
+    VAR word AS String
+    VAR dir AS String
+    VAR shown AS String
+    VAR stub AS String
+    VAR hits AS Array OF String
+    VAR n AS String
+    VAR common AS String
+    VAR parts AS Array OF String
+    text = inbox.Text
+    cut = LastSpace(text)
+    word = text.Substring(cut + 1, text.Length - cut - 1)
+    IF word = "" THEN RETURN
+    parts = word.Replace("/", "\").Split("\")
+    stub = parts[parts.Count - 1]
+    shown = word.Substring(0, word.Length - stub.Length)
+    dir = Resolve(shown)
+    TRY
+        FOR EACH n IN FS.List(dir)
+            IF n.EndsWith("\") THEN n = n.Substring(0, n.Length - 1) + "\"
+            IF n.Upper().StartsWith(stub.Upper()) THEN hits.Add(n)
+        NEXT
+    CATCH err
+    END TRY
+    IF hits.Count = 0 THEN RETURN
+    IF hits.Count = 1 THEN
+        inbox.Text = text.Substring(0, cut + 1) + shown + hits[0]
+        RETURN
+    END IF
+    hits.Sort()
+    common = CommonStart(hits)
+    IF common.Length > stub.Length THEN inbox.Text = text.Substring(0, cut + 1) + shown + common.Substring(0, common.Length)
+    Echo(Prompt() + " " + text)
+    Echo("  " + hits.Join("   "))
+END SUB
+
+FUNCTION LastSpace (s AS String) AS Integer
+    VAR i AS Integer
+    FOR i = s.Length - 1 TO 0 STEP -1
+        IF s.CharAt(i) = " " THEN RETURN i
+    NEXT
+    RETURN -1
+END FUNCTION
+
+FUNCTION CommonStart (items AS Array OF String) AS String
+    VAR pre AS String
+    VAR i AS Integer
+    VAR ok AS Bool
+    pre = items[0]
+    WHILE pre.Length > 0
+        ok = TRUE
+        FOR i = 1 TO items.Count - 1
+            IF NOT items[i].Upper().StartsWith(pre.Upper()) THEN ok = FALSE
+        NEXT
+        IF ok THEN RETURN pre
+        pre = pre.Substring(0, pre.Length - 1)
+    END WHILE
+    RETURN ""
+END FUNCTION
+
+' ================================================================ the engine, a step at a time
+
+SUB Clock_OnTick ()
+    TRY
+        Pump()
+    CATCH err
+    END TRY
+END SUB
+
+' One tick of work. Network jobs get a tick to themselves, so a failed Connect
+' (which spoils this handler) can only end the tick.
+SUB Pump ()
+    IF busy THEN RETURN
+
+    ' a job that has finished: its output goes down the pipeline (no network)
+    IF jobFinished THEN
+        busy = TRUE
+        jobRunning = FALSE
+        JobCollect()
+        StepQueue()
+        Flush()
+        busy = FALSE
+        IF NOT ShBusy() AND NOT haveRemoteLine THEN Ready()
+        RETURN
+    END IF
+
+    ' an interactive remote command
+    IF haveRemoteLine THEN
+        haveRemoteLine = FALSE
+        busy = TRUE
+        jobRunning = TRUE
+        RemoteStep(remoteLine)
+        RETURN
+    END IF
+
+    ' a job is wanted: ask for a password, then run it in a tick of its own
+    IF jobWant THEN
+        IF JobNeedsPass() AND jobPass = "" AND NOT goJob THEN
+            AskPassword()
+            RETURN
+        END IF
+        goJob = FALSE
+        busy = TRUE
+        jobRunning = TRUE
+        RunJob()
+        busy = FALSE
+        RETURN
+    END IF
+
+    ' plain built-ins
+    IF queue.Count > 0 THEN
+        busy = TRUE
+        StepQueue()
+        Flush()
+        busy = FALSE
+        IF NOT ShBusy() THEN Ready()
+    END IF
+END SUB
+
+' Keep running pipelines until one wants a job (or we are done).
+SUB StepQueue ()
+    VAR guard AS Integer
+    WHILE queue.Count > 0 AND NOT jobWant
+        IF NOT ShStep() THEN BREAK
+        guard = guard + 1
+        IF guard > 500 THEN BREAK
+    END WHILE
+END SUB
+
+SUB AskPassword ()
+    passMode = TRUE
+    promptLbl.Text = JobTarget() + "'s password:"
+    Layout()
+    inbox.Password = TRUE
+    inbox.Text = ""
+    inbox.Enabled = TRUE
+    inbox.Focus()
+END SUB
+
+' One remote command, over the open connection, then collect its output.
+SUB RemoteStep (line AS String)
+    RemoteRun(line)
+    Flush()
+    busy = FALSE
+    jobRunning = FALSE
+    Ready()
+END SUB
