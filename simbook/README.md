@@ -3,17 +3,22 @@
 A tiny social network for [SIM95](https://sim95.kippy.io/), in the spirit of
 the 2004 PHP-era thefacebook: accounts, profiles with a picture, friends,
 Walls, and a News Feed. It is written entirely in SPARK as ActiveSparkPages
-(`.ASP`) served by the machine's own `HTTPD.SPK`.
+(`.ASP`) served by the machine's own `HTTPD.SPK`, and it installs as the
+machine's home page.
 
 ## Install
 
 1. In SIM95 open **Start > Programs > SPARK**.
 2. Paste in the whole of [`INSTALL.SPK`](INSTALL.SPK), save it as
    `C:\MYFILES\INSTALL.SPK`, and press **F5**.
-3. Open `http://YOURNAME/book/` in Voyager (from this machine or any other one
-   on the network), and register.
+3. Open `http://YOURNAME/` in Voyager (from this machine or any other one on
+   the network), and register.
 
-Running the installer again upgrades the pages without touching anyone's data.
+The pages go straight into `C:\WEB`. `HTTPD.SPK` serves `INDEX.ASP` for a
+folder only when there is no `INDEX.HTM`, so the installer moves the stock
+home page aside to `C:\WEB\WELCOME.HTM` rather than deleting it. The samples
+(`hello.asp` and the rest) keep working. Running the installer again upgrades
+the pages without touching anyone's data.
 
 ## What it does
 
@@ -45,7 +50,7 @@ C:\BOOKDATA\POSTS.TXT           every post, append-only (the feed reads this)
 C:\BOOKDATA\PEOPLE.TXT          user|name directory
 C:\BOOKDATA\SESSIONS\<id>.TXT   sign-in cookie -> user
 C:\BOOKDATA\NEXTID.TXT          post counter
-C:\WEB\BOOK\PICS\<user>.PIC     profile pictures
+C:\WEB\PICS\<user>.PIC          profile pictures
 ```
 
 User names are 3–8 letters or digits, because they double as 8.3 file names.
@@ -60,7 +65,7 @@ User names are 3–8 letters or digits, because they double as 8.3 file names.
 
 ## Developing
 
-Edit the files in `WEB/BOOK`, then:
+Edit the files in `WEB`, then:
 
 ```
 node tools/build-installer.mjs        # regenerate INSTALL.SPK

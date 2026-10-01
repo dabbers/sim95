@@ -1,5 +1,5 @@
 ' BOOK.SPK - SimBook, a little social network for SIM95.
-' Every page in C:\WEB\BOOK pulls this in with <%@ import file="BOOK.SPK" %>.
+' SimBook is the machine's home page: it lives in C:\WEB, and every page pulls this in with <%@ import file="BOOK.SPK" %>.
 '
 ' There is no database server: everything lives in plain text files under
 ' C:\BOOKDATA (outside C:\WEB, so the web server never hands it out), and every
@@ -13,7 +13,7 @@
 '   C:\BOOKDATA\PEOPLE.TXT          user|name, one per member, for the directory
 '   C:\BOOKDATA\SESSIONS\<id>.TXT   who a sign-in cookie belongs to
 '   C:\BOOKDATA\NEXTID.TXT          the last post number handed out
-'   C:\WEB\BOOK\PICS\<user>.PIC     profile pictures (Sketch .PIC files)
+'   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)
 '
 ' A post is one line: id|date time|author|author name|wall|wall name|text
 ' Names and text are escaped with Esc so they never contain | or a line break.
@@ -23,7 +23,7 @@
 ' stop after a screenful, and the feed only looks back through recent posts.
 
 CONST DATADIR = "C:\BOOKDATA"
-CONST PICDIR = "C:\WEB\BOOK\PICS"
+CONST PICDIR = "C:\WEB\PICS"
 CONST COOKIE = "simbook"
 CONST FEEDSIZE = 25
 CONST FEEDSCAN = 1000

@@ -95,8 +95,14 @@ export async function machine(hostname = "SIM95") {
   };
   // One HTTP request, answered the way HTTPD.SPK answers it.
   m.request = async (method, url, { body = "", cookies = "", budget } = {}) => {
+    // Same mapping as PathToFile in HTTPD.SPK, with its INDEX.HTM -> INDEX.ASP fallback.
     const p = url.split("?")[0].replace(/\//g, "\\").toUpperCase();
-    const file = "C:\\WEB" + (p.endsWith("\\") ? p + "INDEX.ASP" : p);
+    let file = "C:\\WEB" + (p.endsWith("\\") ? p + "INDEX.HTM" : p || "\\INDEX.HTM");
+    if (file.endsWith("\\INDEX.HTM") && !disk.exists(file)) file = file.replace("\\INDEX.HTM", "\\INDEX.ASP");
+    if (!file.endsWith(".ASP")) {
+      if (!disk.exists(file) || disk.isDir(file)) return { status: "404 Not Found", headers: [], body: "", raw: "" };
+      return { status: "200 OK", headers: [], body: disk.read(file), raw: "" };
+    }
     const raw = `${method} ${url} HTTP/1.0\nHost: ${hostname}\n` + (cookies ? `Cookie: ${cookies}\n` : "") + "\n" + body;
     const text = await S.render(m, file, raw, "65.240.0.9", budget ? { budget } : {});
     const [head, ...rest] = text.split("\n\n");
