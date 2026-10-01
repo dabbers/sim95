@@ -1,0 +1,2048 @@
+' CORE.SPK - the Sim Shell's engine: it reads a command line, runs it, and
+' hands back the text it printed. No window and no socket, so the shell window
+' (SIMSH.SPK) and the remote shell server (SSHD.SPK) both carry this same code;
+' tools/build-installer.mjs puts it at the top of each.
+'
+'   ShInit(user, host)    once, at the start
+'   ShStart(line)         queue a command line (; && || between pipelines)
+'   ShStep()              run the next pipeline; TRUE while there is more to do
+'   ShRun(line)           all of the above at once, for a headless caller
+'   shOut                 what has been printed so far (the caller empties it)
+'
+' A command that needs the network (ssh, scp, sim-get update/install/upgrade)
+' is not run here: it sets jobWant and the rest of its pipeline waits until
+' the caller runs the job and calls ShResume with the job's output.
+'
+' Paths: /programs/notes.spk and C:\PROGRAMS\NOTES.SPK are the same file; ~ is
+' $HOME (C:\MYFILES). There is no backslash escaping, so DOS paths type as is.
+
+CONST SHVERSION = "1.0"
+CONST RCFILE = "C:\SYSTEM\SIMSHRC.SH"
+CONST HISTFILE = "C:\SYSTEM\SHHIST.TXT"
+CONST GAMEDIR = "C:\GAMES"
+CONST VAPORME = "C:\PROGRAMS\VAPOR.SPK"
+CONST WEBAPPSINI = "C:\SYSTEM\WEBAPPS.INI"
+CONST GETCACHE = "C:\SYSTEM\SIMGET.TXT"
+
+VAR EOL AS String
+VAR shCwd AS String = "C:\MYFILES"
+VAR shPrev AS String
+VAR shUser AS String
+VAR shHost AS String
+VAR shStatus AS Integer
+VAR shOut AS String
+VAR shClear AS Bool             ' "clear" was typed: the window empties its screen
+VAR shExit AS Bool              ' "exit" was typed
+VAR shTty AS Bool               ' this command's output goes to the screen
+VAR shRemote AS Bool            ' running inside SSHD: no waiting, no jobs
+VAR varNames AS Array OF String
+VAR varVals AS Array OF String
+VAR expNames AS Array OF String
+VAR aliasNames AS Array OF String
+VAR aliasVals AS Array OF String
+VAR hist AS Array OF String
+VAR posArgs AS Array OF String  ' $1..$9 in a script
+VAR queue AS Array OF String    ' pipelines waiting: op + Chr(1) + text
+VAR lexWords AS Array OF String
+VAR lexWild AS Array OF String  ' "1" when the word had an unquoted * or ?
+VAR lexOps AS Array OF String   ' "" for a word, or > >> <
+
+' a pipeline waiting for a job
+VAR jobWant AS Bool
+VAR jobKind AS String           ' ssh, sshi, scp, get
+VAR jobArgs AS Array OF String
+VAR pendStages AS Array OF String
+VAR pendIdx AS Integer
+VAR pendFile AS String
+VAR pendAppend AS Bool
+
+' ================================================================ start
+
+SUB ShInit (user AS String, host AS String)
+    EOL = Chr(10)
+    shUser = user
+    shHost = host
+    IF shUser = "" THEN shUser = "user"
+    SetVar("HOME", "C:\MYFILES")
+    SetVar("PATH", "C:\PROGRAMS;C:\MYFILES")
+    SetVar("USER", shUser)
+    SetVar("HOSTNAME", shHost)
+    SetVar("SHELL", "C:\PROGRAMS\SIMSH.SPK")
+    SetVar("PWD", shCwd)
+    expNames = ["HOME", "PATH", "USER", "HOSTNAME", "SHELL", "PWD"]
+    IF NOT FS.Exists(shCwd) THEN shCwd = "C:\"
+END SUB
+
+' The user name from C:\SYSTEM\USERS.INI, as the Files service reads it.
+FUNCTION MachineUser () AS String
+    VAR ln AS String
+    TRY
+        FOR EACH ln IN FS.Read("C:\SYSTEM\USERS.INI").Lines()
+            ln = ln.Trim()
+            IF ln.Lower().StartsWith("name=") THEN RETURN ln.Substring(5, ln.Length - 5).Trim()
+        NEXT
+    CATCH err
+    END TRY
+    RETURN ""
+END FUNCTION
+
+' Is user|password this machine's account? (FILESVC.SPK's CheckLogin.)
+FUNCTION CheckLogin (user AS String, password AS String) AS Bool
+    VAR ln AS String
+    VAR name AS String
+    VAR pass AS String
+    TRY
+        FOR EACH ln IN FS.Read("C:\SYSTEM\USERS.INI").Lines()
+            ln = ln.Trim()
+            IF ln.Lower().StartsWith("name=") THEN name = ln.Substring(5, ln.Length - 5).Trim()
+            IF ln.Lower().StartsWith("password=") THEN pass = ln.Substring(9, ln.Length - 9)
+        NEXT
+    CATCH err
+        RETURN FALSE
+    END TRY
+    IF name = "" THEN RETURN FALSE
+    RETURN name.Lower() = user.Trim().Lower() AND pass = password
+END FUNCTION
+
+FUNCTION Prompt () AS String
+    RETURN shUser + "@" + shHost + ":" + shCwd + "$"
+END FUNCTION
+
+' Queue a line typed at the prompt (it goes in the history).
+SUB ShStart (line AS String)
+    IF line.Trim() <> "" THEN
+        hist.Add(line)
+        IF hist.Count > 200 THEN hist.RemoveAt(0)
+    END IF
+    QueueLines(line, FALSE)
+END SUB
+
+' Put the pipelines of some lines at the front of the queue.
+SUB QueueLines (text AS String, atBack AS Bool)
+    VAR items AS Array OF String
+    VAR ln AS String
+    VAR it AS String
+    VAR i AS Integer
+    FOR EACH ln IN text.Lines()
+        FOR EACH it IN SplitLine(ln)
+            items.Add(it)
+        NEXT
+    NEXT
+    IF atBack THEN
+        FOR EACH it IN items
+            queue.Add(it)
+        NEXT
+        RETURN
+    END IF
+    FOR i = items.Count - 1 TO 0 STEP -1
+        queue.Insert(0, items[i])
+    NEXT
+END SUB
+
+FUNCTION ShBusy () AS Bool
+    RETURN queue.Count > 0 OR jobWant
+END FUNCTION
+
+' Run the next pipeline in the queue.
+FUNCTION ShStep () AS Bool
+    VAR it AS String
+    VAR op AS String
+    VAR text AS String
+    VAR cut AS Integer
+    IF jobWant THEN RETURN TRUE
+    IF queue.Count = 0 THEN RETURN FALSE
+    it = queue[0]
+    queue.RemoveAt(0)
+    cut = it.IndexOf(Chr(1))
+    op = it.Substring(0, cut)
+    text = it.Substring(cut + 1, it.Length - cut - 1)
+    IF op = "args" THEN
+        posArgs = text.Split(Chr(2))
+        IF text = "" THEN posArgs.Clear()
+    ELSEIF op = "&&" AND shStatus <> 0 THEN
+        ' skipped
+    ELSEIF op = "||" AND shStatus = 0 THEN
+        ' skipped
+    ELSE
+        shOut = shOut + RunPipe(SplitPipe(text), 0, "", TRUE)
+    END IF
+    IF shExit THEN queue.Clear()
+    RETURN queue.Count > 0 OR jobWant
+END FUNCTION
+
+' Everything at once. A job can't run here, so it fails.
+FUNCTION ShRun (line AS String) AS String
+    VAR out AS String
+    ShStart(line)
+    WHILE ShStep()
+        IF jobWant THEN JobRefuse()
+    END WHILE
+    out = shOut
+    shOut = ""
+    RETURN out
+END FUNCTION
+
+SUB JobRefuse ()
+    VAR what AS String
+    what = jobKind
+    IF what = "get" THEN what = "sim-get"
+    IF what = "sshi" THEN
+        Complain("ssh: an interactive session needs the Sim Shell window; try ssh host command")
+    ELSE
+        Complain(what + ": needs the network; run it in the Sim Shell window")
+    END IF
+    ShResume("", 1)
+END SUB
+
+' A job finished: its output goes on down the pipeline that was waiting for it.
+SUB ShResume (out AS String, status AS Integer)
+    VAR stages AS Array OF String
+    jobWant = FALSE
+    shStatus = status
+    IF pendFile <> "" THEN
+        TRY
+            IF pendAppend AND FS.Exists(pendFile) THEN
+                FS.Append(pendFile, out)
+            ELSE
+                FS.Write(pendFile, out)
+            END IF
+        CATCH err
+            Complain("simsh: " + pendFile + ": " + err)
+        END TRY
+        out = ""
+    END IF
+    stages = pendStages
+    pendStages = []
+    IF pendIdx < stages.Count THEN out = RunPipe(stages, pendIdx, out, TRUE)
+    shOut = shOut + out
+END SUB
+
+' Errors go straight to the screen, never down a pipe.
+SUB Complain (text AS String)
+    shOut = shOut + text + EOL
+    shStatus = 1
+END SUB
+
+' ================================================================ variables
+
+FUNCTION GetVar (name AS String) AS String
+    VAR i AS Integer
+    i = varNames.IndexOf(name.Upper())
+    IF i < 0 THEN RETURN ""
+    RETURN varVals[i]
+END FUNCTION
+
+SUB SetVar (name AS String, value AS String)
+    VAR i AS Integer
+    i = varNames.IndexOf(name.Upper())
+    IF i < 0 THEN
+        varNames.Add(name.Upper())
+        varVals.Add(value)
+    ELSE
+        varVals[i] = value
+    END IF
+END SUB
+
+SUB UnsetVar (name AS String)
+    VAR i AS Integer
+    i = varNames.IndexOf(name.Upper())
+    IF i >= 0 THEN
+        varNames.RemoveAt(i)
+        varVals.RemoveAt(i)
+    END IF
+    i = expNames.IndexOf(name.Upper())
+    IF i >= 0 THEN expNames.RemoveAt(i)
+END SUB
+
+FUNCTION IsName (s AS String) AS Bool
+    VAR i AS Integer
+    VAR c AS String
+    IF s = "" THEN RETURN FALSE
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i).Upper()
+        IF NOT ((c >= "A" AND c <= "Z") OR c = "_" OR (i > 0 AND c >= "0" AND c <= "9")) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' A remote session keeps its own directory, variables and aliases, saved here
+' between commands.
+FUNCTION SaveState () AS String
+    VAR i AS Integer
+    VAR parts AS Array OF String
+    parts.Add(shCwd)
+    parts.Add(shPrev)
+    parts.Add(shUser)
+    parts.Add(varNames.Join(Chr(3)))
+    parts.Add(varVals.Join(Chr(3)))
+    parts.Add(expNames.Join(Chr(3)))
+    parts.Add(aliasNames.Join(Chr(3)))
+    parts.Add(aliasVals.Join(Chr(3)))
+    parts.Add(hist.Join(Chr(3)))
+    RETURN parts.Join(Chr(4))
+END FUNCTION
+
+SUB LoadState (state AS String)
+    VAR p AS Array OF String
+    p = state.Split(Chr(4))
+    shCwd = p[0]
+    shPrev = p[1]
+    shUser = p[2]
+    varNames = Unpack(p[3])
+    varVals = Unpack(p[4])
+    expNames = Unpack(p[5])
+    aliasNames = Unpack(p[6])
+    aliasVals = Unpack(p[7])
+    hist = Unpack(p[8])
+END SUB
+
+FUNCTION Unpack (s AS String) AS Array OF String
+    VAR out AS Array OF String
+    IF s = "" THEN RETURN out
+    RETURN s.Split(Chr(3))
+END FUNCTION
+
+' ================================================================ parsing
+
+' A line into its pipelines: "op" + Chr(1) + text, op being ; && or ||.
+' Quotes are kept for later; # starts a comment.
+FUNCTION SplitLine (line AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR cur AS String
+    VAR op AS String = ";"
+    VAR q AS String
+    VAR i AS Integer
+    VAR c AS String
+    VAR nx AS String
+    i = 0
+    WHILE i < line.Length
+        c = line.CharAt(i)
+        nx = ""
+        IF i + 1 < line.Length THEN nx = line.CharAt(i + 1)
+        IF q <> "" THEN
+            IF c = q THEN q = ""
+            cur = cur + c
+        ELSEIF c = "'" OR c = Chr(34) THEN
+            q = c
+            cur = cur + c
+        ELSEIF c = "#" AND (cur = "" OR cur.EndsWith(" ")) THEN
+            BREAK
+        ELSEIF c = ";" OR (c = "&" AND nx = "&") OR (c = "|" AND nx = "|") THEN
+            IF cur.Trim() <> "" THEN out.Add(op + Chr(1) + cur.Trim())
+            cur = ""
+            IF c = ";" THEN
+                op = ";"
+            ELSE
+                op = c + nx
+                i = i + 1
+            END IF
+        ELSE
+            cur = cur + c
+        END IF
+        i = i + 1
+    END WHILE
+    IF cur.Trim() <> "" THEN out.Add(op + Chr(1) + cur.Trim())
+    RETURN out
+END FUNCTION
+
+' A pipeline into its stages, at each | outside quotes.
+FUNCTION SplitPipe (text AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR cur AS String
+    VAR q AS String
+    VAR i AS Integer
+    VAR c AS String
+    FOR i = 0 TO text.Length - 1
+        c = text.CharAt(i)
+        IF q <> "" THEN
+            IF c = q THEN q = ""
+            cur = cur + c
+        ELSEIF c = "'" OR c = Chr(34) THEN
+            q = c
+            cur = cur + c
+        ELSEIF c = "|" THEN
+            out.Add(cur.Trim())
+            cur = ""
+        ELSE
+            cur = cur + c
+        END IF
+    NEXT
+    out.Add(cur.Trim())
+    RETURN out
+END FUNCTION
+
+' One stage into words (lexWords), with quotes removed and $VARs expanded,
+' and the redirects marked (lexOps).
+SUB Lex (text AS String)
+    VAR i AS Integer
+    VAR c AS String
+    VAR q AS String
+    VAR cur AS String
+    VAR have AS Bool
+    VAR starred AS Bool
+    VAR name AS String
+    lexWords.Clear()
+    lexWild.Clear()
+    lexOps.Clear()
+    i = 0
+    WHILE i < text.Length
+        c = text.CharAt(i)
+        IF q = "'" THEN
+            IF c = "'" THEN
+                q = ""
+            ELSE
+                cur = cur + c
+            END IF
+        ELSEIF c = "$" AND i + 1 < text.Length THEN
+            ' $NAME, ${NAME}, $?, $#, $0-$9
+            name = ""
+            c = text.CharAt(i + 1)
+            IF c = "{" THEN
+                i = i + 2
+                WHILE i < text.Length
+                    IF text.CharAt(i) = "}" THEN BREAK
+                    name = name + text.CharAt(i)
+                    i = i + 1
+                END WHILE
+            ELSEIF c = "?" OR c = "#" OR (c >= "0" AND c <= "9") THEN
+                name = c
+                i = i + 1
+            ELSE
+                WHILE i + 1 < text.Length
+                    IF NOT IsName(name + text.CharAt(i + 1)) THEN BREAK
+                    name = name + text.CharAt(i + 1)
+                    i = i + 1
+                END WHILE
+            END IF
+            IF name = "" THEN
+                cur = cur + "$"
+            ELSE
+                cur = cur + Expand(name)
+            END IF
+            have = TRUE
+        ELSEIF q = Chr(34) THEN
+            IF c = Chr(34) THEN
+                q = ""
+            ELSE
+                cur = cur + c
+            END IF
+        ELSEIF c = "'" OR c = Chr(34) THEN
+            q = c
+            have = TRUE
+        ELSEIF c = " " OR c = Chr(9) THEN
+            IF have THEN AddWord(cur, starred, "")
+            cur = ""
+            have = FALSE
+            starred = FALSE
+        ELSEIF c = ">" OR c = "<" THEN
+            IF have THEN AddWord(cur, starred, "")
+            cur = ""
+            have = FALSE
+            starred = FALSE
+            IF c = ">" AND i + 1 < text.Length THEN
+                IF text.CharAt(i + 1) = ">" THEN
+                    c = ">>"
+                    i = i + 1
+                END IF
+            END IF
+            AddWord("", FALSE, c)
+        ELSEIF c = "~" AND NOT have THEN
+            ' ~ and ~/x at the start of a word
+            IF i + 1 >= text.Length THEN
+                cur = GetVar("HOME")
+            ELSEIF text.CharAt(i + 1) = "/" OR text.CharAt(i + 1) = "\" OR text.CharAt(i + 1) = " " THEN
+                cur = GetVar("HOME")
+            ELSE
+                cur = "~"
+            END IF
+            have = TRUE
+        ELSE
+            IF c = "*" OR c = "?" THEN starred = TRUE
+            cur = cur + c
+            have = TRUE
+        END IF
+        i = i + 1
+    END WHILE
+    IF have THEN AddWord(cur, starred, "")
+END SUB
+
+SUB AddWord (w AS String, starred AS Bool, op AS String)
+    lexWords.Add(w)
+    lexOps.Add(op)
+    IF starred THEN
+        lexWild.Add("1")
+    ELSE
+        lexWild.Add("")
+    END IF
+END SUB
+
+FUNCTION Expand (name AS String) AS String
+    VAR n AS Integer
+    IF name = "?" THEN RETURN Str(shStatus)
+    IF name = "#" THEN RETURN Str(posArgs.Count)
+    IF name.Length = 1 AND name >= "0" AND name <= "9" THEN
+        n = Int(Val(name))
+        IF n = 0 THEN RETURN "simsh"
+        IF n <= posArgs.Count THEN RETURN posArgs[n - 1]
+        RETURN ""
+    END IF
+    IF name.Upper() = "PWD" THEN RETURN shCwd
+    IF name.Upper() = "RANDOM" THEN RETURN Str(Rnd(32768))
+    RETURN GetVar(name)
+END FUNCTION
+
+' ================================================================ paths
+
+' Any path the user types, as a full DOS path: /programs/x.spk, ~/a.txt,
+' ..\docs, C:/WEB and C:\WEB all work.
+FUNCTION Resolve (p AS String) AS String
+    VAR s AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR part AS String
+    VAR i AS Integer
+    s = p.Trim().Replace("/", "\")
+    IF s = "" THEN RETURN shCwd
+    IF s = "~" OR s.StartsWith("~\") THEN s = GetVar("HOME") + s.Substring(1, s.Length - 1)
+    IF s.Length >= 2 AND s.CharAt(1) = ":" THEN
+        IF s.Length = 2 THEN s = s + "\"
+    ELSEIF s.StartsWith("\") THEN
+        s = "C:" + s
+    ELSE
+        s = shCwd + "\" + s
+    END IF
+    parts = s.Split("\")
+    out.Add(parts[0].Upper())
+    FOR i = 1 TO parts.Count - 1
+        part = parts[i]
+        IF part = "" OR part = "." THEN CONTINUE
+        IF part = ".." THEN
+            IF out.Count > 1 THEN out.RemoveAt(out.Count - 1)
+            CONTINUE
+        END IF
+        out.Add(part.Upper())
+    NEXT
+    IF out.Count = 1 THEN RETURN out[0] + "\"
+    RETURN out.Join("\")
+END FUNCTION
+
+FUNCTION JoinPath (dir AS String, name AS String) AS String
+    IF dir.EndsWith("\") THEN RETURN dir + name
+    RETURN dir + "\" + name
+END FUNCTION
+
+FUNCTION BaseName (p AS String) AS String
+    VAR parts AS Array OF String
+    parts = p.Replace("/", "\").Split("\")
+    IF parts[parts.Count - 1] = "" AND parts.Count > 1 THEN RETURN parts[parts.Count - 2]
+    RETURN parts[parts.Count - 1]
+END FUNCTION
+
+FUNCTION DirName (p AS String) AS String
+    VAR parts AS Array OF String
+    parts = p.Split("\")
+    IF parts.Count <= 2 THEN RETURN parts[0] + "\"
+    parts.RemoveAt(parts.Count - 1)
+    RETURN parts.Join("\")
+END FUNCTION
+
+' * and ? against a name, ignoring case.
+FUNCTION MatchWild (pat AS String, s AS String) AS Bool
+    VAR p AS String
+    VAR t AS String
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR star AS Integer = -1
+    VAR mark AS Integer
+    p = pat.Upper()
+    t = s.Upper()
+    WHILE j < t.Length
+        IF i < p.Length AND p.CharAt(i) <> "*" AND (p.CharAt(i) = "?" OR p.CharAt(i) = t.CharAt(j)) THEN
+            i = i + 1
+            j = j + 1
+        ELSEIF i < p.Length AND p.CharAt(i) = "*" THEN
+            star = i
+            mark = j
+            i = i + 1
+        ELSEIF star >= 0 THEN
+            i = star + 1
+            mark = mark + 1
+            j = mark
+        ELSE
+            RETURN FALSE
+        END IF
+    END WHILE
+    WHILE i < p.Length
+        IF p.CharAt(i) <> "*" THEN BREAK
+        i = i + 1
+    END WHILE
+    RETURN i = p.Length
+END FUNCTION
+
+' A word with * or ? in its last part, as the names it matches (or itself).
+FUNCTION Glob (w AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR shown AS String
+    VAR pat AS String
+    VAR dir AS String
+    VAR n AS String
+    VAR cut AS Integer
+    VAR parts AS Array OF String
+    parts = w.Replace("/", "\").Split("\")
+    pat = parts[parts.Count - 1]
+    shown = ""
+    IF parts.Count > 1 THEN shown = w.Substring(0, w.Length - pat.Length)
+    dir = Resolve(shown)
+    TRY
+        FOR EACH n IN FS.List(dir)
+            IF n.EndsWith("\") THEN n = n.Substring(0, n.Length - 1)
+            IF MatchWild(pat, n) THEN out.Add(shown + n)
+        NEXT
+    CATCH err
+    END TRY
+    IF out.Count = 0 THEN out.Add(w)
+    out.Sort()
+    RETURN out
+END FUNCTION
+
+' ================================================================ running
+
+' Run stages from i on, feeding each one's output to the next.
+FUNCTION RunPipe (stages AS Array OF String, start AS Integer, input AS String, top AS Bool) AS String
+    VAR i AS Integer
+    VAR data AS String
+    data = input
+    FOR i = start TO stages.Count - 1
+        IF stages[i] = "" THEN
+            Complain("simsh: syntax error near |")
+            RETURN ""
+        END IF
+        data = RunStage(stages[i], data, i = stages.Count - 1 AND top)
+        IF jobWant THEN
+            IF top THEN
+                pendStages = stages
+                pendIdx = i + 1
+                RETURN ""
+            END IF
+            JobRefuse()
+            data = ""
+        END IF
+    NEXT
+    RETURN data
+END FUNCTION
+
+FUNCTION RunStage (raw AS String, input AS String, last AS Bool) AS String
+    VAR text AS String
+    VAR first AS String
+    VAR sp AS Integer
+    VAR i AS Integer
+    VAR argv AS Array OF String
+    VAR words AS Array OF String
+    VAR wilds AS Array OF String
+    VAR ops AS Array OF String
+    VAR g AS String
+    VAR outFile AS String
+    VAR inFile AS String
+    VAR app AS Bool
+    VAR out AS String
+    VAR data AS String
+    VAR eq AS Integer
+    ' an alias is the first word swapped for its text
+    text = raw
+    sp = text.IndexOf(" ")
+    first = text
+    IF sp >= 0 THEN first = text.Substring(0, sp)
+    i = aliasNames.IndexOf(first)
+    IF i >= 0 THEN text = aliasVals[i] + text.Substring(first.Length, text.Length - first.Length)
+    Lex(text)
+    words = lexWords
+    wilds = lexWild
+    ops = lexOps
+    lexWords = []
+    lexWild = []
+    lexOps = []
+    i = 0
+    WHILE i < words.Count
+        IF ops[i] <> "" THEN
+            IF i + 1 >= words.Count OR ops[i + 1] <> "" THEN
+                Complain("simsh: syntax error near " + ops[i])
+                RETURN ""
+            END IF
+            IF ops[i] = "<" THEN
+                inFile = Resolve(words[i + 1])
+            ELSE
+                outFile = Resolve(words[i + 1])
+                app = ops[i] = ">>"
+            END IF
+            i = i + 2
+            CONTINUE
+        END IF
+        IF wilds[i] = "1" THEN
+            FOR EACH g IN Glob(words[i])
+                argv.Add(g)
+            NEXT
+        ELSE
+            argv.Add(words[i])
+        END IF
+        i = i + 1
+    END WHILE
+    data = input
+    IF inFile <> "" THEN
+        IF NOT FS.Exists(inFile) OR FS.IsDir(inFile) THEN
+            Complain("simsh: " + inFile + ": No such file")
+            RETURN ""
+        END IF
+        data = FS.Read(inFile)
+    END IF
+    ' NAME=value on its own sets a variable
+    WHILE argv.Count > 0
+        eq = argv[0].IndexOf("=")
+        IF eq <= 0 THEN BREAK
+        IF NOT IsName(argv[0].Substring(0, eq)) THEN BREAK
+        SetVar(argv[0].Substring(0, eq), argv[0].Substring(eq + 1, argv[0].Length - eq - 1))
+        argv.RemoveAt(0)
+    END WHILE
+    shStatus = 0
+    IF argv.Count = 0 THEN RETURN ""
+    shTty = last AND outFile = ""
+    TRY
+        out = Command(argv, data)
+    CATCH err
+        Complain(argv[0] + ": " + err)
+        out = ""
+    END TRY
+    IF jobWant THEN
+        pendFile = outFile
+        pendAppend = app
+        RETURN ""
+    END IF
+    IF outFile <> "" THEN
+        TRY
+            IF app AND FS.Exists(outFile) THEN
+                FS.Append(outFile, out)
+            ELSE
+                FS.Write(outFile, out)
+            END IF
+        CATCH err
+            Complain("simsh: " + outFile + ": " + err)
+        END TRY
+        RETURN ""
+    END IF
+    RETURN out
+END FUNCTION
+
+FUNCTION Builtins () AS Array OF String
+    RETURN ["alias", "basename", "cat", "cd", "clear", "cp", "date", "echo", "env", "exit", "export", "false", "grep", "head", "help", "history", "hostname", "kill", "ls", "mkdir", "mv", "ps", "pwd", "rm", "rmdir", "run", "scp", "seq", "set", "sh", "sim-get", "sleep", "sort", "source", "ssh", "tail", "tee", "touch", "true", "unalias", "uname", "uniq", "unset", "wc", "which", "whoami"]
+END FUNCTION
+
+' One command, with its arguments and its input. Returns what it printed.
+FUNCTION Command (argv AS Array OF String, input AS String) AS String
+    VAR cmd AS String
+    VAR args AS Array OF String
+    VAR i AS Integer
+    cmd = argv[0]
+    FOR i = 1 TO argv.Count - 1
+        args.Add(argv[i])
+    NEXT
+    SELECT CASE cmd.Lower()
+        CASE "ls", "dir"
+            RETURN CmdLs(args)
+        CASE "cd"
+            RETURN CmdCd(args)
+        CASE "pwd"
+            RETURN shCwd + EOL
+        CASE "cat", "type"
+            RETURN CmdCat(args, input)
+        CASE "echo"
+            RETURN CmdEcho(args)
+        CASE "mkdir", "md"
+            RETURN CmdMkdir(args)
+        CASE "rm", "del"
+            RETURN CmdRm(args)
+        CASE "rmdir", "rd"
+            RETURN CmdRmdir(args)
+        CASE "mv", "move"
+            RETURN CmdCopy(args, TRUE)
+        CASE "cp", "copy"
+            RETURN CmdCopy(args, FALSE)
+        CASE "touch"
+            RETURN CmdTouch(args)
+        CASE "head"
+            RETURN CmdHeadTail(args, input, TRUE)
+        CASE "tail"
+            RETURN CmdHeadTail(args, input, FALSE)
+        CASE "wc"
+            RETURN CmdWc(args, input)
+        CASE "grep"
+            RETURN CmdGrep(args, input)
+        CASE "sort"
+            RETURN CmdSort(args, input)
+        CASE "uniq"
+            RETURN CmdUniq(args, input)
+        CASE "tee"
+            RETURN CmdTee(args, input)
+        CASE "seq"
+            RETURN CmdSeq(args)
+        CASE "basename"
+            IF args.Count = 0 THEN RETURN Usage("basename path")
+            RETURN BaseName(args[0]) + EOL
+        CASE "env"
+            RETURN CmdEnv(TRUE)
+        CASE "set"
+            IF args.Count > 0 THEN RETURN CmdExport(args, FALSE)
+            RETURN CmdEnv(FALSE)
+        CASE "export"
+            IF args.Count = 0 THEN RETURN CmdEnv(TRUE)
+            RETURN CmdExport(args, TRUE)
+        CASE "unset"
+            FOR i = 0 TO args.Count - 1
+                UnsetVar(args[i])
+            NEXT
+            RETURN ""
+        CASE "alias"
+            RETURN CmdAlias(args)
+        CASE "unalias"
+            FOR i = 0 TO args.Count - 1
+                IF aliasNames.IndexOf(args[i]) >= 0 THEN
+                    aliasVals.RemoveAt(aliasNames.IndexOf(args[i]))
+                    aliasNames.RemoveAt(aliasNames.IndexOf(args[i]))
+                END IF
+            NEXT
+            RETURN ""
+        CASE "history"
+            RETURN CmdHistory(args)
+        CASE "clear", "cls"
+            shClear = TRUE
+            RETURN ""
+        CASE "exit", "logout"
+            shExit = TRUE
+            RETURN ""
+        CASE "ps"
+            RETURN CmdPs()
+        CASE "kill"
+            RETURN CmdKill(args)
+        CASE "run", "start"
+            IF args.Count = 0 THEN RETURN Usage("run program.spk [args]")
+            RETURN RunProgram(args)
+        CASE "date"
+            IF args.Count > 0 THEN
+                IF args[0] = "+%s" THEN RETURN Str(TIME.Now) + EOL
+            END IF
+            RETURN TIME.Date + " " + TIME.Clock + EOL
+        CASE "whoami"
+            RETURN shUser + EOL
+        CASE "hostname"
+            RETURN NET.HostName + EOL
+        CASE "uname"
+            IF args.Count > 0 THEN
+                IF args[0] = "-a" THEN RETURN "SIM95 " + shHost + " Sim Shell " + SHVERSION + EOL
+            END IF
+            RETURN "SIM95" + EOL
+        CASE "which"
+            RETURN CmdWhich(args)
+        CASE "help"
+            RETURN CmdHelp(args)
+        CASE "true"
+            RETURN ""
+        CASE "false"
+            shStatus = 1
+            RETURN ""
+        CASE "sleep"
+            IF args.Count > 0 AND NOT shRemote THEN SYS.Sleep(Int(MATH.Min(10, Val(args[0])) * 1000))
+            RETURN ""
+        CASE "sh", "source", "."
+            IF args.Count = 0 THEN RETURN Usage("sh script.sh [args]")
+            RETURN RunScript(args, shTty)
+        CASE "ssh"
+            RETURN CmdSsh(args)
+        CASE "scp"
+            IF args.Count < 2 THEN RETURN Usage("scp [user@]host:path localpath  or  scp localpath [user@]host:path")
+            Defer("scp", args)
+            RETURN ""
+        CASE "sim-get", "simget"
+            RETURN CmdSimGet(args)
+    END SELECT
+    RETURN RunExternal(argv)
+END FUNCTION
+
+FUNCTION Usage (text AS String) AS String
+    Complain("usage: " + text)
+    RETURN ""
+END FUNCTION
+
+SUB Defer (kind AS String, args AS Array OF String)
+    jobKind = kind
+    jobArgs = args
+    jobWant = TRUE
+END SUB
+
+' Not a built-in: a .SPK program or a .SH script, by path or on $PATH.
+FUNCTION RunExternal (argv AS Array OF String) AS String
+    VAR path AS String
+    path = FindProgram(argv[0])
+    IF path = "" THEN
+        Complain("simsh: " + argv[0] + ": command not found")
+        shStatus = 127
+        RETURN ""
+    END IF
+    argv[0] = path
+    IF path.EndsWith(".SH") THEN RETURN RunScript(argv, shTty)
+    RETURN RunProgram(argv)
+END FUNCTION
+
+FUNCTION FindProgram (name AS String) AS String
+    VAR dir AS String
+    VAR p AS String
+    IF name.Contains("\") OR name.Contains("/") OR name.Contains(".") THEN
+        p = Resolve(name)
+        IF FS.Exists(p) AND NOT FS.IsDir(p) THEN RETURN p
+        IF FS.Exists(p + ".SPK") THEN RETURN p + ".SPK"
+        RETURN ""
+    END IF
+    FOR EACH dir IN GetVar("PATH").Split(";")
+        IF dir.Trim() = "" THEN CONTINUE
+        p = JoinPath(Resolve(dir), name.Upper() + ".SPK")
+        IF FS.Exists(p) THEN RETURN p
+        p = JoinPath(Resolve(dir), name.Upper() + ".SH")
+        IF FS.Exists(p) THEN RETURN p
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION RunProgram (args AS Array OF String) AS String
+    VAR path AS String
+    VAR rest AS Array OF String
+    VAR i AS Integer
+    VAR pid AS Integer
+    path = FindProgram(args[0])
+    IF path = "" THEN
+        Complain("run: " + args[0] + ": No such program")
+        RETURN ""
+    END IF
+    IF path.EndsWith(".SH") THEN RETURN RunScript(args, shTty)
+    IF NOT path.EndsWith(".SPK") THEN
+        Complain("run: " + path + ": not a SPARK program (.SPK)")
+        RETURN ""
+    END IF
+    FOR i = 1 TO args.Count - 1
+        rest.Add(args[i])
+    NEXT
+    pid = SYS.Start(path, rest.Join(" "))
+    RETURN "[" + Str(pid) + "] " + path + EOL
+END FUNCTION
+
+' A script: its lines go to the front of the queue (so they can use the
+' network), unless its output is wanted down a pipe or in a file, when they
+' run here and now.
+FUNCTION RunScript (args AS Array OF String, queued AS Bool) AS String
+    VAR path AS String
+    VAR text AS String
+    VAR i AS Integer
+    VAR rest AS Array OF String
+    VAR saved AS Array OF String
+    VAR out AS String
+    VAR ln AS String
+    VAR it AS String
+    VAR cut AS Integer
+    path = Resolve(args[0])
+    IF NOT FS.Exists(path) THEN
+        IF FindProgram(args[0]).EndsWith(".SH") THEN path = FindProgram(args[0])
+    END IF
+    IF NOT FS.Exists(path) OR FS.IsDir(path) THEN
+        Complain("sh: " + args[0] + ": No such file")
+        shStatus = 127
+        RETURN ""
+    END IF
+    text = FS.Read(path)
+    FOR i = 1 TO args.Count - 1
+        rest.Add(args[i])
+    NEXT
+    IF queued THEN
+        queue.Insert(0, "args" + Chr(1) + posArgs.Join(Chr(2)))
+        QueueLines(text, FALSE)
+        queue.Insert(0, "args" + Chr(1) + rest.Join(Chr(2)))
+        RETURN ""
+    END IF
+    saved = posArgs
+    posArgs = rest
+    FOR EACH ln IN text.Lines()
+        FOR EACH it IN SplitLine(ln)
+            cut = it.IndexOf(Chr(1))
+            IF it.StartsWith("&&") AND shStatus <> 0 THEN CONTINUE
+            IF it.StartsWith("||") AND shStatus = 0 THEN CONTINUE
+            out = out + RunPipe(SplitPipe(it.Substring(cut + 1, it.Length - cut - 1)), 0, "", FALSE)
+            IF shExit THEN BREAK
+        NEXT
+        IF shExit THEN BREAK
+    NEXT
+    shExit = FALSE
+    posArgs = saved
+    RETURN out
+END FUNCTION
+
+' Run the startup file, if there is one.
+SUB ShRc ()
+    IF FS.Exists(RCFILE) THEN
+        queue.Add("args" + Chr(1))
+        QueueLines(FS.Read(RCFILE), TRUE)
+    END IF
+END SUB
+
+' ================================================================ files
+
+' Text as lines, without the empty one after a final line break.
+FUNCTION TextLines (text AS String) AS Array OF String
+    VAR out AS Array OF String
+    IF text = "" THEN RETURN out
+    out = text.Replace(Chr(13), "").Split(EOL)
+    IF out[out.Count - 1] = "" THEN out.RemoveAt(out.Count - 1)
+    RETURN out
+END FUNCTION
+
+FUNCTION LinesText (lines AS Array OF String) AS String
+    IF lines.Count = 0 THEN RETURN ""
+    RETURN lines.Join(EOL) + EOL
+END FUNCTION
+
+' Flags at the front (-l, -la, -n 5) into one string of letters; returns
+' the index of the first argument that is not a flag.
+VAR flagText AS String
+FUNCTION Flags (args AS Array OF String) AS Integer
+    VAR i AS Integer
+    flagText = ""
+    FOR i = 0 TO args.Count - 1
+        IF args[i] = "--" THEN RETURN i + 1
+        IF NOT args[i].StartsWith("-") OR args[i].Length < 2 THEN RETURN i
+        flagText = flagText + args[i].Substring(1, args[i].Length - 1)
+    NEXT
+    RETURN args.Count
+END FUNCTION
+
+FUNCTION ReadFile (cmd AS String, name AS String) AS String
+    VAR p AS String
+    p = Resolve(name)
+    IF NOT FS.Exists(p) THEN THROW name + ": No such file or directory"
+    IF FS.IsDir(p) THEN THROW name + ": Is a directory"
+    RETURN FS.Read(p)
+END FUNCTION
+
+FUNCTION CmdLs (args AS Array OF String) AS String
+    VAR first AS Integer
+    VAR long AS Bool
+    VAR paths AS Array OF String
+    VAR out AS String
+    VAR i AS Integer
+    VAR p AS String
+    first = Flags(args)
+    long = flagText.Contains("l")
+    FOR i = first TO args.Count - 1
+        paths.Add(args[i])
+    NEXT
+    IF paths.Count = 0 THEN paths.Add(".")
+    FOR i = 0 TO paths.Count - 1
+        p = Resolve(paths[i])
+        IF NOT FS.Exists(p) THEN
+            Complain("ls: " + paths[i] + ": No such file or directory")
+            CONTINUE
+        END IF
+        IF NOT FS.IsDir(p) THEN
+            IF long THEN
+                out = out + LongLine(BaseName(p), FS.Size(p), FALSE)
+            ELSE
+                out = out + paths[i] + EOL
+            END IF
+            CONTINUE
+        END IF
+        IF paths.Count > 1 THEN out = out + paths[i] + ":" + EOL
+        out = out + ListDir(p, long)
+        IF paths.Count > 1 AND i < paths.Count - 1 THEN out = out + EOL
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION LongLine (name AS String, size AS Integer, dir AS Bool) AS String
+    IF dir THEN RETURN "drwxr-xr-x  " + shUser.PadRight(8) + "        -  " + name + "/" + EOL
+    RETURN "-rw-r--r--  " + shUser.PadRight(8) + Str(size).PadLeft(9) + "  " + name + EOL
+END FUNCTION
+
+FUNCTION ListDir (p AS String, long AS Bool) AS String
+    VAR names AS Array OF String
+    VAR n AS String
+    VAR out AS String
+    VAR row AS String
+    VAR total AS Integer
+    names = FS.List(p)
+    names.Sort()
+    FOR EACH n IN names
+        IF long THEN
+            IF n.EndsWith("\") THEN
+                out = out + LongLine(n.Substring(0, n.Length - 1), 0, TRUE)
+            ELSE
+                out = out + LongLine(n, FS.Size(JoinPath(p, n)), FALSE)
+                total = total + FS.Size(JoinPath(p, n))
+            END IF
+        ELSE
+            IF n.EndsWith("\") THEN n = n.Substring(0, n.Length - 1) + "/"
+            IF shTty THEN
+                ' columns on the screen, one a line down a pipe
+                IF row.Length >= 64 THEN
+                    out = out + row.Trim() + EOL
+                    row = ""
+                END IF
+                row = row + n.PadRight(16)
+            ELSE
+                out = out + n + EOL
+            END IF
+        END IF
+    NEXT
+    IF row <> "" THEN out = out + row.Trim() + EOL
+    IF long THEN out = "total " + Str(total) + EOL + out
+    RETURN out
+END FUNCTION
+
+FUNCTION CmdCd (args AS Array OF String) AS String
+    VAR p AS String
+    IF args.Count = 0 THEN
+        p = GetVar("HOME")
+    ELSEIF args[0] = "-" THEN
+        p = shPrev
+        IF p = "" THEN p = shCwd
+    ELSE
+        p = Resolve(args[0])
+    END IF
+    IF NOT FS.Exists(p) OR NOT FS.IsDir(p) THEN
+        Complain("cd: " + args[0] + ": No such directory")
+        RETURN ""
+    END IF
+    shPrev = shCwd
+    shCwd = Resolve(p)
+    SetVar("PWD", shCwd)
+    IF args.Count > 0 THEN
+        IF args[0] = "-" THEN RETURN shCwd + EOL
+    END IF
+    RETURN ""
+END FUNCTION
+
+FUNCTION CmdCat (args AS Array OF String, input AS String) AS String
+    VAR first AS Integer
+    VAR out AS String
+    VAR i AS Integer
+    VAR lines AS Array OF String
+    first = Flags(args)
+    IF first >= args.Count THEN
+        out = input
+    ELSE
+        FOR i = first TO args.Count - 1
+            TRY
+                out = out + ReadFile("cat", args[i])
+            CATCH err
+                Complain("cat: " + err)
+            END TRY
+        NEXT
+    END IF
+    IF flagText.Contains("n") THEN
+        lines = TextLines(out)
+        FOR i = 0 TO lines.Count - 1
+            lines[i] = Str(i + 1).PadLeft(6) + "  " + lines[i]
+        NEXT
+        RETURN LinesText(lines)
+    END IF
+    RETURN out
+END FUNCTION
+
+FUNCTION CmdEcho (args AS Array OF String) AS String
+    IF args.Count > 0 THEN
+        IF args[0] = "-n" THEN
+            args.RemoveAt(0)
+            RETURN args.Join(" ")
+        END IF
+    END IF
+    RETURN args.Join(" ") + EOL
+END FUNCTION
+
+' Every folder down to p that is not there yet.
+SUB MakeDirs (p AS String)
+    VAR parts AS Array OF String
+    VAR sofar AS String
+    VAR i AS Integer
+    parts = p.Split("\")
+    sofar = parts[0]
+    FOR i = 1 TO parts.Count - 1
+        IF parts[i] = "" THEN CONTINUE
+        sofar = sofar + "\" + parts[i]
+        IF NOT FS.Exists(sofar) THEN FS.MakeDir(sofar)
+    NEXT
+END SUB
+
+FUNCTION CmdMkdir (args AS Array OF String) AS String
+    VAR first AS Integer
+    VAR i AS Integer
+    VAR p AS String
+    first = Flags(args)
+    IF first >= args.Count THEN RETURN Usage("mkdir [-p] dir")
+    FOR i = first TO args.Count - 1
+        p = Resolve(args[i])
+        IF FS.Exists(p) THEN
+            IF NOT flagText.Contains("p") THEN Complain("mkdir: " + args[i] + ": File exists")
+        ELSEIF flagText.Contains("p") THEN
+            MakeDirs(p)
+        ELSEIF NOT FS.Exists(DirName(p)) THEN
+            Complain("mkdir: " + args[i] + ": No such directory (try mkdir -p)")
+        ELSE
+            FS.MakeDir(p)
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' A folder and everything in it.
+SUB DeleteTree (p AS String)
+    VAR n AS String
+    FOR EACH n IN FS.List(p)
+        IF n.EndsWith("\") THEN
+            DeleteTree(JoinPath(p, n.Substring(0, n.Length - 1)))
+        ELSE
+            FS.Delete(JoinPath(p, n))
+        END IF
+    NEXT
+    FS.Delete(p)
+END SUB
+
+FUNCTION CmdRm (args AS Array OF String) AS String
+    VAR first AS Integer
+    VAR i AS Integer
+    VAR p AS String
+    first = Flags(args)
+    IF first >= args.Count THEN RETURN Usage("rm [-r] [-f] file...")
+    FOR i = first TO args.Count - 1
+        p = Resolve(args[i])
+        IF p.Length <= 3 THEN
+            Complain("rm: refusing to remove " + p)
+        ELSEIF NOT FS.Exists(p) THEN
+            IF NOT flagText.Contains("f") THEN Complain("rm: " + args[i] + ": No such file or directory")
+        ELSEIF FS.IsDir(p) THEN
+            IF flagText.Contains("r") OR flagText.Contains("R") THEN
+                DeleteTree(p)
+            ELSE
+                Complain("rm: " + args[i] + ": Is a directory (use rm -r)")
+            END IF
+        ELSE
+            FS.Delete(p)
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION CmdRmdir (args AS Array OF String) AS String
+    VAR i AS Integer
+    VAR p AS String
+    IF args.Count = 0 THEN RETURN Usage("rmdir dir")
+    FOR i = 0 TO args.Count - 1
+        p = Resolve(args[i])
+        IF NOT FS.Exists(p) OR NOT FS.IsDir(p) THEN
+            Complain("rmdir: " + args[i] + ": No such directory")
+        ELSEIF FS.List(p).Count > 0 THEN
+            Complain("rmdir: " + args[i] + ": Directory not empty")
+        ELSE
+            FS.Delete(p)
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB CopyTree (src AS String, dest AS String)
+    VAR n AS String
+    IF NOT FS.Exists(dest) THEN FS.MakeDir(dest)
+    FOR EACH n IN FS.List(src)
+        IF n.EndsWith("\") THEN
+            CopyTree(JoinPath(src, n.Substring(0, n.Length - 1)), JoinPath(dest, n.Substring(0, n.Length - 1)))
+        ELSE
+            FS.Write(JoinPath(dest, n), FS.Read(JoinPath(src, n)))
+        END IF
+    NEXT
+END SUB
+
+' cp and mv: one file to a name, or several into a folder.
+FUNCTION CmdCopy (args AS Array OF String, move AS Bool) AS String
+    VAR first AS Integer
+    VAR i AS Integer
+    VAR dest AS String
+    VAR src AS String
+    VAR target AS String
+    VAR name AS String
+    name = "cp"
+    IF move THEN name = "mv"
+    first = Flags(args)
+    IF args.Count - first < 2 THEN RETURN Usage(name + " source... dest")
+    dest = Resolve(args[args.Count - 1])
+    IF args.Count - first > 2 AND NOT FS.IsDir(dest) THEN
+        Complain(name + ": " + args[args.Count - 1] + ": not a directory")
+        RETURN ""
+    END IF
+    FOR i = first TO args.Count - 2
+        src = Resolve(args[i])
+        IF NOT FS.Exists(src) THEN
+            Complain(name + ": " + args[i] + ": No such file or directory")
+            CONTINUE
+        END IF
+        target = dest
+        IF FS.Exists(dest) THEN
+            IF FS.IsDir(dest) THEN target = JoinPath(dest, BaseName(src))
+        END IF
+        IF target = src THEN
+            Complain(name + ": " + args[i] + " and " + target + " are the same file")
+            CONTINUE
+        END IF
+        IF move THEN
+            IF FS.Exists(target) AND NOT FS.IsDir(target) THEN FS.Delete(target)
+            FS.Rename(src, target)
+        ELSEIF FS.IsDir(src) THEN
+            IF flagText.Contains("r") OR flagText.Contains("R") THEN
+                CopyTree(src, target)
+            ELSE
+                Complain("cp: " + args[i] + ": Is a directory (use cp -r)")
+            END IF
+        ELSE
+            FS.Write(target, FS.Read(src))
+        END IF
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION CmdTouch (args AS Array OF String) AS String
+    VAR i AS Integer
+    VAR p AS String
+    IF args.Count = 0 THEN RETURN Usage("touch file...")
+    FOR i = 0 TO args.Count - 1
+        p = Resolve(args[i])
+        IF NOT FS.Exists(p) THEN FS.Write(p, "")
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' head and tail: -n N or -N, files or the input.
+FUNCTION CmdHeadTail (args AS Array OF String, input AS String, top AS Bool) AS String
+    VAR n AS Integer = 10
+    VAR i AS Integer
+    VAR files AS Array OF String
+    VAR lines AS Array OF String
+    VAR out AS Array OF String
+    VAR text AS String
+    VAR k AS Integer
+    VAR name AS String
+    name = "tail"
+    IF top THEN name = "head"
+    i = 0
+    WHILE i < args.Count
+        IF args[i] = "-n" AND i + 1 < args.Count THEN
+            n = Int(Val(args[i + 1]))
+            i = i + 2
+        ELSEIF args[i].StartsWith("-") AND args[i].Length > 1 THEN
+            n = Int(Val(args[i].Substring(1, args[i].Length - 1).Replace("n", "")))
+            i = i + 1
+        ELSE
+            files.Add(args[i])
+            i = i + 1
+        END IF
+    END WHILE
+    IF files.Count = 0 THEN
+        text = input
+    ELSE
+        FOR k = 0 TO files.Count - 1
+            TRY
+                text = text + ReadFile(name, files[k])
+            CATCH err
+                Complain(name + ": " + err)
+            END TRY
+        NEXT
+    END IF
+    lines = TextLines(text)
+    IF top THEN
+        FOR k = 0 TO Int(MATH.Min(n, lines.Count)) - 1
+            out.Add(lines[k])
+        NEXT
+    ELSE
+        FOR k = Int(MATH.Max(0, lines.Count - n)) TO lines.Count - 1
+            out.Add(lines[k])
+        NEXT
+    END IF
+    RETURN LinesText(out)
+END FUNCTION
+
+FUNCTION Counts (text AS String) AS String
+    VAR words AS Integer
+    VAR w AS String
+    VAR ln AS String
+    VAR lines AS Array OF String
+    lines = TextLines(text)
+    FOR EACH ln IN lines
+        FOR EACH w IN ln.Replace(Chr(9), " ").Split(" ")
+            IF w <> "" THEN words = words + 1
+        NEXT
+    NEXT
+    IF flagText = "" THEN RETURN Str(lines.Count).PadLeft(7) + Str(words).PadLeft(8) + Str(text.Length).PadLeft(8)
+    w = ""
+    IF flagText.Contains("l") THEN w = w + Str(lines.Count).PadLeft(7)
+    IF flagText.Contains("w") THEN w = w + Str(words).PadLeft(8)
+    IF flagText.Contains("c") THEN w = w + Str(text.Length).PadLeft(8)
+    RETURN w
+END FUNCTION
+
+FUNCTION CmdWc (args AS Array OF String, input AS String) AS String
+    VAR first AS Integer
+    VAR i AS Integer
+    VAR out AS String
+    VAR text AS String
+    first = Flags(args)
+    IF first >= args.Count THEN RETURN Counts(input) + EOL
+    FOR i = first TO args.Count - 1
+        TRY
+            text = ReadFile("wc", args[i])
+            out = out + Counts(text) + " " + args[i] + EOL
+        CATCH err
+            Complain("wc: " + err)
+        END TRY
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Does a line match? Plain text, with ^ and $ to anchor it.
+FUNCTION Matches (ln AS String, pat AS String, nocase AS Bool) AS Bool
+    VAR s AS String
+    VAR p AS String
+    VAR head AS Bool
+    VAR tail AS Bool
+    s = ln
+    p = pat
+    IF nocase THEN
+        s = s.Lower()
+        p = p.Lower()
+    END IF
+    IF p.StartsWith("^") THEN
+        head = TRUE
+        p = p.Substring(1, p.Length - 1)
+    END IF
+    IF p.EndsWith("$") AND p.Length > 0 THEN
+        tail = TRUE
+        p = p.Substring(0, p.Length - 1)
+    END IF
+    IF head AND tail THEN RETURN s = p
+    IF head THEN RETURN s.StartsWith(p)
+    IF tail THEN RETURN s.EndsWith(p)
+    RETURN s.Contains(p)
+END FUNCTION
+
+FUNCTION CmdGrep (args AS Array OF String, input AS String) AS String
+    VAR first AS Integer
+    VAR pat AS String
+    VAR files AS Array OF String
+    VAR texts AS Array OF String
+    VAR out AS String
+    VAR i AS Integer
+    VAR k AS Integer
+    VAR lines AS Array OF String
+    VAR hit AS Bool
+    VAR count AS Integer
+    VAR found AS Integer
+    VAR pre AS String
+    first = Flags(args)
+    IF first >= args.Count THEN RETURN Usage("grep [-i] [-n] [-v] [-c] pattern [file...]")
+    pat = args[first]
+    FOR i = first + 1 TO args.Count - 1
+        TRY
+            texts.Add(ReadFile("grep", args[i]))
+            files.Add(args[i])
+        CATCH err
+            Complain("grep: " + err)
+        END TRY
+    NEXT
+    IF args.Count = first + 1 THEN
+        texts.Add(input)
+        files.Add("")
+    END IF
+    FOR k = 0 TO texts.Count - 1
+        lines = TextLines(texts[k])
+        count = 0
+        FOR i = 0 TO lines.Count - 1
+            hit = Matches(lines[i], pat, flagText.Contains("i"))
+            IF flagText.Contains("v") THEN hit = NOT hit
+            IF NOT hit THEN CONTINUE
+            count = count + 1
+            IF flagText.Contains("c") OR flagText.Contains("l") THEN CONTINUE
+            pre = ""
+            IF files.Count > 1 THEN pre = files[k] + ":"
+            IF flagText.Contains("n") THEN pre = pre + Str(i + 1) + ":"
+            out = out + pre + lines[i] + EOL
+        NEXT
+        found = found + count
+        IF flagText.Contains("l") AND count > 0 THEN out = out + files[k] + EOL
+        IF flagText.Contains("c") THEN
+            IF files.Count > 1 THEN
+                out = out + files[k] + ":" + Str(count) + EOL
+            ELSE
+                out = out + Str(count) + EOL
+            END IF
+        END IF
+    NEXT
+    IF found = 0 THEN shStatus = 1
+    RETURN out
+END FUNCTION
+
+FUNCTION CmdSort (args AS Array OF String, input AS String) AS String
+    VAR first AS Integer
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR text AS String
+    first = Flags(args)
+    text = input
+    IF first < args.Count THEN
+        text = ""
+        FOR i = first TO args.Count - 1
+            text = text + ReadFile("sort", args[i])
+        NEXT
+    END IF
+    lines = TextLines(text)
+    lines.Sort()
+    IF flagText.Contains("r") THEN lines.Reverse()
+    RETURN LinesText(lines)
+END FUNCTION
+
+FUNCTION CmdUniq (args AS Array OF String, input AS String) AS String
+    VAR lines AS Array OF String
+    VAR out AS Array OF String
+    VAR ln AS String
+    FOR EACH ln IN TextLines(input)
+        IF out.Count > 0 THEN
+            IF out[out.Count - 1] = ln THEN CONTINUE
+        END IF
+        out.Add(ln)
+    NEXT
+    RETURN LinesText(out)
+END FUNCTION
+
+FUNCTION CmdTee (args AS Array OF String, input AS String) AS String
+    VAR first AS Integer
+    VAR i AS Integer
+    VAR p AS String
+    first = Flags(args)
+    FOR i = first TO args.Count - 1
+        p = Resolve(args[i])
+        IF flagText.Contains("a") AND FS.Exists(p) THEN
+            FS.Append(p, input)
+        ELSE
+            FS.Write(p, input)
+        END IF
+    NEXT
+    RETURN input
+END FUNCTION
+
+FUNCTION CmdSeq (args AS Array OF String) AS String
+    VAR a AS Integer = 1
+    VAR b AS Integer
+    VAR i AS Integer
+    VAR out AS String
+    IF args.Count = 0 THEN RETURN Usage("seq [first] last")
+    b = Int(Val(args[args.Count - 1]))
+    IF args.Count > 1 THEN a = Int(Val(args[0]))
+    IF b - a > 5000 THEN b = a + 5000
+    FOR i = a TO b
+        out = out + Str(i) + EOL
+    NEXT
+    RETURN out
+END FUNCTION
+
+' ================================================================ environment
+
+FUNCTION CmdEnv (onlyExported AS Bool) AS String
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    FOR i = 0 TO varNames.Count - 1
+        IF onlyExported AND NOT expNames.Contains(varNames[i]) THEN CONTINUE
+        lines.Add(varNames[i] + "=" + varVals[i])
+    NEXT
+    lines.Sort()
+    RETURN LinesText(lines)
+END FUNCTION
+
+FUNCTION CmdExport (args AS Array OF String, exported AS Bool) AS String
+    VAR i AS Integer
+    VAR eq AS Integer
+    VAR name AS String
+    FOR i = 0 TO args.Count - 1
+        eq = args[i].IndexOf("=")
+        name = args[i]
+        IF eq > 0 THEN name = args[i].Substring(0, eq)
+        IF NOT IsName(name) THEN
+            Complain("export: " + args[i] + ": not a valid name")
+            CONTINUE
+        END IF
+        IF eq > 0 THEN SetVar(name, args[i].Substring(eq + 1, args[i].Length - eq - 1))
+        IF exported AND NOT expNames.Contains(name.Upper()) THEN expNames.Add(name.Upper())
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION CmdAlias (args AS Array OF String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR eq AS Integer
+    VAR name AS String
+    VAR k AS Integer
+    IF args.Count = 0 THEN
+        FOR i = 0 TO aliasNames.Count - 1
+            out = out + "alias " + aliasNames[i] + "='" + aliasVals[i] + "'" + EOL
+        NEXT
+        RETURN out
+    END IF
+    FOR i = 0 TO args.Count - 1
+        eq = args[i].IndexOf("=")
+        IF eq <= 0 THEN
+            k = aliasNames.IndexOf(args[i])
+            IF k < 0 THEN
+                Complain("alias: " + args[i] + ": not found")
+            ELSE
+                out = out + "alias " + aliasNames[k] + "='" + aliasVals[k] + "'" + EOL
+            END IF
+            CONTINUE
+        END IF
+        name = args[i].Substring(0, eq)
+        k = aliasNames.IndexOf(name)
+        IF k >= 0 THEN
+            aliasVals[k] = args[i].Substring(eq + 1, args[i].Length - eq - 1)
+        ELSE
+            aliasNames.Add(name)
+            aliasVals.Add(args[i].Substring(eq + 1, args[i].Length - eq - 1))
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION CmdHistory (args AS Array OF String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    IF args.Count > 0 THEN
+        IF args[0] = "-c" THEN
+            hist.Clear()
+            RETURN ""
+        END IF
+    END IF
+    FOR i = 0 TO hist.Count - 1
+        out = out + Str(i + 1).PadLeft(5) + "  " + hist[i] + EOL
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION CmdPs () AS String
+    VAR out AS String
+    VAR t AS String
+    VAR p AS Array OF String
+    out = "  PID NAME        STATE     WIN    CPU ms" + EOL
+    FOR EACH t IN SYS.Tasks()
+        p = t.Split("|")
+        out = out + p[0].PadLeft(5) + " " + p[1].PadRight(11) + " " + p[2].PadRight(9) + p[3].PadLeft(4) + p[4].PadLeft(9) + EOL
+    NEXT
+    RETURN out
+END FUNCTION
+
+' kill 12, or kill NOTES (every process of that name)
+FUNCTION CmdKill (args AS Array OF String) AS String
+    VAR i AS Integer
+    VAR t AS String
+    VAR hit AS Bool
+    VAR pid AS Integer
+    IF args.Count = 0 THEN RETURN Usage("kill pid|name")
+    FOR i = 0 TO args.Count - 1
+        IF args[i].StartsWith("-") THEN CONTINUE
+        hit = FALSE
+        FOR EACH t IN SYS.Tasks()
+            pid = Int(Val(t.Split("|")[0]))
+            IF (t.Split("|")[0] = args[i] OR t.Split("|")[1].Upper() = args[i].Upper()) AND pid <> SYS.Pid THEN
+                SYS.Kill(pid)
+                hit = TRUE
+            END IF
+        NEXT
+        IF NOT hit THEN Complain("kill: " + args[i] + ": no such process")
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION CmdWhich (args AS Array OF String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR p AS String
+    FOR i = 0 TO args.Count - 1
+        IF aliasNames.IndexOf(args[i]) >= 0 THEN
+            out = out + args[i] + ": aliased to " + aliasVals[aliasNames.IndexOf(args[i])] + EOL
+        ELSEIF Builtins().Contains(args[i].Lower()) THEN
+            out = out + args[i] + ": shell built-in" + EOL
+        ELSE
+            p = FindProgram(args[i])
+            IF p = "" THEN
+                Complain(args[i] + " not found")
+            ELSE
+                out = out + p + EOL
+            END IF
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION CmdHelp (args AS Array OF String) AS String
+    VAR h AS Array OF String
+    h.Add("Sim Shell " + SHVERSION + " for SIM95. Built-in commands:")
+    h.Add("")
+    h.Add("  files     ls [-l] [path]  cd [dir|-|~]  pwd  cat [-n]  echo [-n]")
+    h.Add("            mkdir [-p]  rm [-r] [-f]  rmdir  mv  cp [-r]  touch")
+    h.Add("            head [-n N]  tail [-n N]  wc [-l -w -c]  grep [-i -n -v -c]")
+    h.Add("            sort [-r]  uniq  tee [-a]  seq  basename")
+    h.Add("  shell     env  export NAME=value  set  unset  alias name='text'")
+    h.Add("            unalias  history [-c]  clear  exit  sh script.sh  source")
+    h.Add("  system    ps  kill pid|name  run prog.spk [args]  date  whoami")
+    h.Add("            hostname  uname  which  sleep  true  false  help")
+    h.Add("  network   ssh [user@]host [command]   scp src dest (host:path)")
+    h.Add("            sim-get update|list|search|show|install|remove|upgrade|store")
+    h.Add("")
+    h.Add("  cmd1 ; cmd2   cmd1 && cmd2   cmd1 || cmd2   cmd1 | cmd2")
+    h.Add("  cmd > file    cmd >> file    cmd < file     $VAR  ${VAR}  $?  'text'")
+    h.Add("  /programs/notes.spk is C:\PROGRAMS\NOTES.SPK; ~ is $HOME.")
+    h.Add("  Type a program's name (notes) or path to run it. Up/Down: history.")
+    h.Add("  Ctrl+Space completes a file name. Ctrl+C stops. Startup: " + RCFILE)
+    RETURN LinesText(h)
+END FUNCTION
+
+' ================================================================ ssh, scp: checked here, run by the caller
+
+FUNCTION CmdSsh (args AS Array OF String) AS String
+    VAR i AS Integer
+    VAR rest AS Array OF String
+    IF args.Count = 0 THEN RETURN Usage("ssh [user@]host [command]")
+    IF args.Count = 1 THEN
+        Defer("sshi", args)
+    ELSE
+        rest.Add(args[0])
+        FOR i = 1 TO args.Count - 1
+            rest.Add(args[i])
+        NEXT
+        Defer("ssh", rest)
+    END IF
+    RETURN ""
+END FUNCTION
+
+' ================================================================ sim-get: the Vapor library, shared with VAPOR.SPK
+
+' These follow VAPOR.SPK line for line, so that whatever one installs the
+' other sees. The catalog (http://STORE/vapor/catalog.txt):
+'   id|name|parts|bytes|status|category|about|kind|version|run|files|tasks|startup|folder
+' The library (C:\GAMES\LIBRARY.TXT):
+'   id|name|installed|seconds|category|about|version|kind|run|files|tasks|startup|folder
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION Field (ln AS String, i AS Integer) AS String
+    VAR p AS Array OF String
+    p = ln.Split("|")
+    IF i >= p.Count THEN RETURN ""
+    RETURN p[i]
+END FUNCTION
+
+FUNCTION Meta (header AS String, key AS String) AS String
+    VAR part AS String
+    FOR EACH part IN header.Split("|")
+        IF part.StartsWith(key + "=") THEN RETURN part.Substring(key.Length + 1, part.Length - key.Length - 1)
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", EOL).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+' The store, as Vapor keeps it in C:\GAMES\VAPOR.INI ("http://alpha/vapor/").
+FUNCTION StoreUrl () AS String
+    VAR ln AS String
+    VAR s AS String
+    FOR EACH ln IN ReadOr(GAMEDIR + "\VAPOR.INI", "").Lines()
+        IF ln.StartsWith("store=") THEN s = ln.Substring(6, ln.Length - 6).Trim()
+    NEXT
+    IF s = "" AND FS.Exists("C:\WEB\VAPOR\CATALOG.TXT") THEN s = "http://" + NET.HostName.Lower() + "/vapor/"
+    RETURN s
+END FUNCTION
+
+' The catalog from the last sim-get update.
+FUNCTION Catalog () AS Array OF String
+    VAR out AS Array OF String
+    VAR ln AS String
+    FOR EACH ln IN ReadOr(GETCACHE, "").Lines()
+        IF ln.Split("|").Count >= 7 THEN out.Add(ln)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION StoreLine (id AS String) AS String
+    VAR ln AS String
+    FOR EACH ln IN Catalog()
+        IF Field(ln, 0) = id.Upper() THEN RETURN ln
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION Library () AS Array OF String
+    VAR out AS Array OF String
+    VAR ln AS String
+    FOR EACH ln IN ReadOr(GAMEDIR + "\LIBRARY.TXT", "").Lines()
+        IF ln.Split("|").Count >= 4 THEN out.Add(ln)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION LibLine (id AS String) AS String
+    VAR ln AS String
+    FOR EACH ln IN Library()
+        IF Field(ln, 0) = id.Upper() THEN RETURN ln
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION HasUpdate (id AS String) AS Bool
+    VAR lib AS String
+    VAR shop AS String
+    lib = LibLine(id)
+    shop = StoreLine(id)
+    IF lib = "" OR shop = "" OR Field(shop, 4) <> "ok" THEN RETURN FALSE
+    RETURN Field(lib, 6) <> Field(shop, 8)
+END FUNCTION
+
+SUB SaveLibrary (lines AS Array OF String)
+    VAR text AS String
+    IF NOT FS.Exists(GAMEDIR) THEN FS.MakeDir(GAMEDIR)
+    IF lines.Count > 0 THEN text = lines.Join(EOL) + EOL
+    FS.Write(GAMEDIR + "\LIBRARY.TXT", text)
+END SUB
+
+' Into the library, or its line there brought up to date (keeping when it
+' was first installed and the time played). Vapor's Keep.
+SUB Keep (ln AS String)
+    VAR out AS Array OF String
+    VAR l AS String
+    VAR first AS String
+    VAR seconds AS String = "0"
+    VAR found AS Bool
+    VAR old AS String
+    first = TIME.Date
+    FOR EACH l IN Library()
+        IF Field(l, 0) = Field(ln, 0) THEN
+            first = Field(l, 2)
+            seconds = Field(l, 3)
+            found = TRUE
+        END IF
+    NEXT
+    l = Field(ln, 0) + "|" + Field(ln, 1) + "|" + first + "|" + seconds + "|" + Field(ln, 5) + "|" + Field(ln, 6) + "|" + Field(ln, 8) + "|" + Field(ln, 7) + "|" + Field(ln, 9) + "|" + Field(ln, 10) + "|" + Field(ln, 11) + "|" + Field(ln, 12) + "|" + Field(ln, 13)
+    FOR EACH old IN Library()
+        IF Field(old, 0) = Field(l, 0) THEN
+            out.Add(l)
+        ELSE
+            out.Add(old)
+        END IF
+    NEXT
+    IF NOT found THEN out.Add(l)
+    SaveLibrary(out)
+END SUB
+
+FUNCTION Folders () AS Bool
+    RETURN ReadOr(WEBAPPSINI, "").Contains("mode=folders")
+END FUNCTION
+
+FUNCTION Where (f AS String, folder AS String) AS String
+    IF folder = "" OR NOT Folders() THEN RETURN f
+    IF NOT f.Upper().StartsWith("C:\WEB\") THEN RETURN f
+    RETURN "C:\WEB\" + folder + "\" + f.Substring(7, f.Length - 7)
+END FUNCTION
+
+FUNCTION AllThere (files AS String, folder AS String) AS Bool
+    VAR f AS String
+    IF files = "" THEN RETURN FALSE
+    FOR EACH f IN files.Split(";")
+        IF f <> "" AND NOT FS.Exists(Where(f, folder)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' Stops it, takes it out of startup, deletes the files it wrote, and its
+' folder in C:\GAMES. Vapor's Uninstall.
+SUB Uninstall (lib AS String)
+    VAR id AS String
+    VAR f AS String
+    VAR task AS String
+    VAR name AS String
+    VAR out AS Array OF String
+    VAR l AS String
+    id = Field(lib, 0)
+    FOR EACH name IN Field(lib, 10).Split(";")
+        IF name = "" THEN CONTINUE
+        FOR EACH task IN SYS.Tasks()
+            IF task.Split("|")[1].Upper() = name.Upper() AND Int(Val(task.Split("|")[0])) <> SYS.Pid THEN SYS.Kill(Int(Val(task.Split("|")[0])))
+        NEXT
+    NEXT
+    FOR EACH name IN Field(lib, 11).Split(";")
+        IF name <> "" AND FS.Exists("C:\SYSTEM\STARTUP\" + name) THEN FS.Delete("C:\SYSTEM\STARTUP\" + name)
+    NEXT
+    FOR EACH f IN Field(lib, 9).Split(";")
+        IF f <> "" AND f.Upper() <> VAPORME THEN
+            IF FS.Exists(Where(f, Field(lib, 12))) THEN FS.Delete(Where(f, Field(lib, 12)))
+        END IF
+    NEXT
+    IF Field(lib, 7) = "web" AND (Field(lib, 12) = "" OR NOT Folders()) AND NOT FS.Exists("C:\WEB\INDEX.HTM") AND FS.Exists("C:\WEB\WELCOME.HTM") THEN FS.Rename("C:\WEB\WELCOME.HTM", "C:\WEB\INDEX.HTM")
+    IF FS.Exists(GAMEDIR + "\" + id) THEN
+        FOR EACH f IN FS.List(GAMEDIR + "\" + id)
+            IF NOT f.EndsWith("\") THEN FS.Delete(GAMEDIR + "\" + id + "\" + f)
+        NEXT
+        FS.Delete(GAMEDIR + "\" + id)
+    END IF
+    FOR EACH l IN Library()
+        IF Field(l, 0) <> id THEN out.Add(l)
+    NEXT
+    SaveLibrary(out)
+END SUB
+
+FUNCTION KindWord (kind AS String) AS String
+    SELECT CASE kind
+        CASE "", "game"
+            RETURN "game"
+        CASE "web"
+            RETURN "web app"
+        CASE "service"
+            RETURN "service"
+        CASE "client"
+            RETURN "store client"
+    END SELECT
+    RETURN "program"
+END FUNCTION
+
+' sim-get: the local parts run here; update, install and upgrade are jobs.
+FUNCTION CmdSimGet (args AS Array OF String) AS String
+    VAR sub1 AS String
+    VAR out AS String
+    VAR ln AS String
+    VAR i AS Integer
+    VAR words AS Array OF String
+    VAR hit AS Bool
+    VAR w AS String
+    VAR s AS String
+    VAR lib AS String
+    IF args.Count = 0 THEN
+        out = "usage: sim-get update | list [--installed|--upgradable] | search words | show id" + EOL
+        out = out + "               install [-y] id... | remove id... | upgrade | store host" + EOL
+        out = out + "sim-get installs from a Vapor store and keeps Vapor's own library." + EOL
+        RETURN out
+    END IF
+    sub1 = args[0].Lower()
+    SELECT CASE sub1
+        CASE "update", "install", "upgrade", "reinstall"
+            IF StoreUrl() = "" THEN
+                Complain("E: no store yet. Choose one with: sim-get store <machine>")
+                RETURN ""
+            END IF
+            Defer("get", args)
+            RETURN ""
+        CASE "store"
+            IF args.Count < 2 THEN
+                IF StoreUrl() = "" THEN RETURN "No store yet. Choose one with: sim-get store <machine>" + EOL
+                RETURN StoreUrl() + EOL
+            END IF
+            ' the same tidying as Vapor's Change Store
+            s = args[1].Trim().Lower()
+            IF NOT s.StartsWith("http://") THEN s = "http://" + s
+            IF s.Substring(7, s.Length - 7).IndexOf("/") < 0 THEN s = s + "/vapor/"
+            IF NOT s.EndsWith("/") THEN s = s + "/"
+            IF NOT FS.Exists(GAMEDIR) THEN FS.MakeDir(GAMEDIR)
+            FS.Write(GAMEDIR + "\VAPOR.INI", "store=" + s + EOL)
+            IF FS.Exists(GETCACHE) THEN FS.Delete(GETCACHE)
+            RETURN "Store: " + s + EOL + "Now run sim-get update." + EOL
+        CASE "list"
+            IF Catalog().Count = 0 AND NOT (args.Count > 1 AND args[args.Count - 1] = "--installed") THEN
+                Complain("E: no package lists. Run sim-get update first.")
+                RETURN ""
+            END IF
+            IF args.Count > 1 AND args[args.Count - 1] = "--installed" THEN
+                FOR EACH ln IN Library()
+                    out = out + Field(ln, 0).Lower() + "/" + KindWord(Field(ln, 7)) + " " + Field(ln, 6) + " [installed]" + EOL
+                NEXT
+                RETURN out
+            END IF
+            out = "Listing..." + EOL
+            FOR EACH ln IN Catalog()
+                IF Field(ln, 7) = "client" THEN CONTINUE
+                lib = LibLine(Field(ln, 0))
+                IF args.Count > 1 AND args[args.Count - 1] = "--upgradable" AND NOT HasUpdate(Field(ln, 0)) THEN CONTINUE
+                s = Field(ln, 0).Lower() + "/" + KindWord(Field(ln, 7)) + " " + Field(ln, 8)
+                IF Field(ln, 4) = "soon" THEN
+                    s = s + " coming-soon"
+                ELSEIF HasUpdate(Field(ln, 0)) THEN
+                    s = s + " [upgradable from: " + Field(lib, 6) + "]"
+                ELSEIF lib <> "" THEN
+                    s = s + " [installed]"
+                END IF
+                out = out + s + EOL
+            NEXT
+            RETURN out
+        CASE "search"
+            IF args.Count < 2 THEN RETURN Usage("sim-get search words")
+            FOR EACH ln IN Catalog()
+                IF Field(ln, 7) = "client" THEN CONTINUE
+                hit = TRUE
+                FOR i = 1 TO args.Count - 1
+                    w = args[i].Lower()
+                    IF NOT (Field(ln, 0) + " " + Field(ln, 1) + " " + Field(ln, 5) + " " + Unesc(Field(ln, 6))).Lower().Contains(w) THEN hit = FALSE
+                NEXT
+                IF hit THEN out = out + Field(ln, 0).Lower() + " - " + Field(ln, 1) + ": " + Unesc(Field(ln, 6)).Replace(EOL, " ") + EOL
+            NEXT
+            IF out = "" THEN shStatus = 1
+            RETURN out
+        CASE "show"
+            IF args.Count < 2 THEN RETURN Usage("sim-get show id")
+            ln = StoreLine(args[1])
+            lib = LibLine(args[1])
+            IF ln = "" AND lib = "" THEN
+                Complain("E: No package found for " + args[1])
+                RETURN ""
+            END IF
+            IF ln = "" THEN
+                ln = Field(lib, 0) + "|" + Field(lib, 1) + "|0|0|ok|" + Field(lib, 4) + "|" + Field(lib, 5) + "|" + Field(lib, 7) + "|" + Field(lib, 6) + "|" + Field(lib, 8) + "|" + Field(lib, 9) + "|" + Field(lib, 10) + "|" + Field(lib, 11) + "|" + Field(lib, 12)
+            END IF
+            out = "Package: " + Field(ln, 0).Lower() + EOL
+            out = out + "Name: " + Field(ln, 1) + EOL
+            out = out + "Version: " + Field(ln, 8) + EOL
+            out = out + "Kind: " + KindWord(Field(ln, 7)) + EOL
+            out = out + "Section: " + Field(ln, 5) + EOL
+            out = out + "Size: " + Str(Int(Val(Field(ln, 3)) / 1024) + 1) + " kB in " + Field(ln, 2) + " parts" + EOL
+            IF Field(ln, 9) <> "" THEN out = out + "Run: " + Field(ln, 9) + EOL
+            IF Field(ln, 10) <> "" THEN out = out + "Files: " + Field(ln, 10).Replace(";", " ") + EOL
+            IF Field(ln, 12) <> "" THEN out = out + "Starts with SIM95: " + Field(ln, 12) + EOL
+            IF lib <> "" THEN
+                out = out + "Installed: " + Field(lib, 2) + " (build " + Field(lib, 6) + ")" + EOL
+            ELSE
+                out = out + "Installed: no" + EOL
+            END IF
+            IF Field(ln, 4) = "soon" THEN out = out + "Status: coming soon" + EOL
+            out = out + "Description: " + Unesc(Field(ln, 6)).Replace(EOL, " ") + EOL
+            RETURN out
+        CASE "remove", "purge"
+            IF args.Count < 2 THEN RETURN Usage("sim-get remove id...")
+            FOR i = 1 TO args.Count - 1
+                lib = LibLine(args[i])
+                IF lib = "" THEN
+                    Complain("E: " + args[i].Lower() + " is not installed")
+                    CONTINUE
+                END IF
+                out = out + "Removing " + Field(lib, 1) + " (" + Field(lib, 6) + ") ..." + EOL
+                Uninstall(lib)
+            NEXT
+            IF out <> "" THEN out = out + "Done. Saved data (mail, posts, settings) is left where it was." + EOL
+            RETURN out
+    END SELECT
+    Complain("E: Invalid operation " + args[0])
+    RETURN ""
+END FUNCTION

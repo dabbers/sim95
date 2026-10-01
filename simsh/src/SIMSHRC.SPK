@@ -1,0 +1,17 @@
+
+' Writes an example startup file the first time only; an existing one is kept,
+' so a reinstall or upgrade never overwrites yours.
+SUB MakeRc ()
+    VAR t AS String
+    IF FS.Exists("C:\SYSTEM\SIMSHRC.SH") THEN RETURN
+    t = ""
+    t = t + "# SIMSHRC.SH - the Sim Shell runs this at startup (8.3 name!)." + Chr(10)
+    t = t + "# Edit it to taste: aliases, variables, a welcome line." + Chr(10)
+    t = t + "alias ll='ls -l'" + Chr(10)
+    t = t + "alias ..='cd ..'" + Chr(10)
+    t = t + "alias h='history'" + Chr(10)
+    t = t + "export EDITOR=C:\PROGRAMS\NOTES.SPK" + Chr(10)
+    t = t + "echo Welcome to the Sim Shell, $USER." + Chr(10)
+    FS.Write("C:\SYSTEM\SIMSHRC.SH", t)
+    Print("  wrote C:\SYSTEM\SIMSHRC.SH (an example startup file)")
+END SUB
