@@ -55,7 +55,9 @@ Run `C:\PROGRAMS\MOVEIN.SPK` on the host for each old machine:
    * ELIZA-95's conversations;
    * Vapor's games, saves and achievements;
    * Frostbird;
-   * Simxplorer favorites.
+   * Simxplorer favorites;
+   * GeoSimies homepages and guestbooks (their neighborhood folders too);
+   * SimPal accounts and money.
 3. Press **Move In**.
 
 It copies over the old machine's Files service (port 139, on by default),
@@ -65,6 +67,9 @@ If the host already has some of the same data, Move In asks first, and then
 only adds to it:
 
 * Files that exist on both machines keep the host's copy.
+* SimPal is never merged: two ledgers can't be added together without money
+  appearing or vanishing, so if the host already has SimPal accounts, Move
+  In skips it and says so.
 * Lists that can be joined line by line get the lines they're missing:
   favorites, Vapor's library and SimBook's member list.
 

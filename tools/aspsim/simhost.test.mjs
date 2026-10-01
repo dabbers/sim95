@@ -232,6 +232,55 @@ await test("Move In onto a new SimHost before SimBook is there, then SimBook fin
   assert.match(r.url, /home\.asp$/, r.body.slice(0, 300));
 });
 
+await test("Move In brings GeoSimies homepages and SimPal money, and never merges two ledgers", async () => {
+  const old = await net.boot("OLDGEO");
+  await install(old, "simhost");
+  await install(old, "geosimies");
+  await install(old, "simpal");
+  let r = ok(await browser(old).post("/geo/join.asp", { name: "Zed", u: "zed", pw: "secret", pw2: "secret", h: "AREA95", n: "", title: "Zed's Zone", tpl: "STARS" }));
+  assert.match(r.url, /edit\.asp\?new=1/, r.body.slice(0, 300));
+  r = ok(await browser(old).post("/pal/join.asp", { name: "Zed", u: "zed", pw: "secret", pw2: "secret" }));
+  assert.match(r.url, /home\.asp\?new=1/, r.body.slice(0, 300));
+  old.write("C:\\SYSTEM\\USERS.INI", "name=zed\npassword=zzz\n");
+  if (!proc(old, "FILESVC")) old.run("C:\\PROGRAMS\\FILESVC.SPK");
+  await wait(() => proc(old, "FILESVC"), "the Files service on OLDGEO");
+
+  const fresh = await net.boot("FRESH2");
+  await install(fresh, "simhost");
+  const moveIn = async () => {
+    const pid = fresh.run("C:\\PROGRAMS\\MOVEIN.SPK");
+    await wait(() => fresh.widgets(pid, "Button").length, "Move In's window");
+    const boxes = fresh.widgets(pid, "TextBox");
+    boxes[0].set("Text", "oldgeo");
+    boxes[1].set("Text", "zed");
+    boxes[2].set("Text", "zzz");
+    const log = () => fresh.widgets(pid, "ListBox")[0].get("Items").join("\n");
+    fresh.ui.answers = [true, true, true, true, true, true, true, true, true];
+    fresh.button(pid, "Move In").call("Click");
+    await wait(() => /^(Done|Stopped)/m.test(log()), "Move In: " + log(), 90000);
+    assert.match(log(), /^Done:/m, log());
+    fresh.kernel.kill(pid);
+    return fresh.ui.dialogs.splice(0).map((d) => d.text).join("\n");
+  };
+  assert.equal(await moveIn(), "", "nothing here yet: nothing to ask");
+  assert.ok(fresh.exists("C:\\GEODATA\\SITES\\AREA95\\1001\\INDEX.HTM"));
+  assert.ok(fresh.exists("C:\\WEB\\GEO\\AREA95\\1001\\INDEX.ASP"), "the homepage's own folder came along");
+  assert.ok(fresh.exists("C:\\PALDATA"));
+  // the apps install around their data
+  await install(fresh, "geosimies");
+  await install(fresh, "simpal");
+  assert.match(ok(await browser(fresh).get("/geo/area95/1001/")).body, /Zed's Zone|Zed/);
+  r = ok(await browser(fresh).post("/pal/login.asp", { u: "zed", pw: "secret" }));
+  assert.match(r.url, /home\.asp$/);
+  assert.match(r.body, /&sect;100\.00/, "Zed's welcome bonus came too");
+
+  // again: GeoSimies asks to add, SimPal refuses to merge ledgers
+  const asked = await moveIn();
+  assert.match(asked, /already has GeoSimies data/);
+  assert.match(asked, /two SimPal ledgers can't be joined/);
+  assert.doesNotMatch(asked, /already has SimPal data/);
+});
+
 await test("Vapor knows web apps live in folders here", async () => {
   // a Vapor library line for SimBook with its folder: Open goes to /book/
   host.write("C:\\MYFILES\\VINST.SPK", installer("vapor"));

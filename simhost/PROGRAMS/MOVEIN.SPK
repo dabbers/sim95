@@ -29,6 +29,8 @@ VAR cBook AS GUI_CheckBox
 VAR cMail AS GUI_CheckBox
 VAR cAsk AS GUI_CheckBox
 VAR cBot AS GUI_CheckBox
+VAR cGeo AS GUI_CheckBox
+VAR cPal AS GUI_CheckBox
 VAR cGames AS GUI_CheckBox
 VAR cFrost AS GUI_CheckBox
 VAR cFav AS GUI_CheckBox
@@ -82,12 +84,14 @@ SUB Main ()
     cGames = Check("Games: Vapor library, saves, achievements", 220, 132)
     cFrost = Check("Frostbird: your letters", 220, 152)
     cFav = Check("Simxplorer favorites", 220, 172)
+    cGeo = Check("GeoSimies: homepages, guestbooks", 220, 192)
+    cPal = Check("SimPal: accounts and money", 10, 212)
     goBtn = GUI_Button.New(win)
     goBtn.SetBounds(330, 48, 100, 26)
     goBtn.Text = "Move In"
     goBtn.onClick = Go_Click
     log = GUI_ListBox.New(win)
-    log.SetBounds(10, 220, 420, 180)
+    log.SetBounds(10, 240, 420, 160)
     clock = GUI_Timer.New(win)
     clock.Interval = 100
     clock.onTick = Clock_OnTick
@@ -150,6 +154,10 @@ FUNCTION SetName (s AS String) AS String
             RETURN "Games"
         CASE "FROST"
             RETURN "Frostbird"
+        CASE "GEO"
+            RETURN "GeoSimies"
+        CASE "PAL"
+            RETURN "SimPal"
     END SELECT
     RETURN "Favorites"
 END FUNCTION
@@ -169,6 +177,10 @@ FUNCTION SetPath (s AS String) AS String
             RETURN "C:\GAMES"
         CASE "FROST"
             RETURN "C:\FROST"
+        CASE "GEO"
+            RETURN "C:\GEODATA"
+        CASE "PAL"
+            RETURN "C:\PALDATA"
     END SELECT
     RETURN "C:\SYSTEM\FAVORITE.TXT"
 END FUNCTION
@@ -177,22 +189,33 @@ END FUNCTION
 FUNCTION Joinable (path AS String) AS Bool
     VAR p AS String
     p = path.Upper()
-    RETURN p = "C:\SYSTEM\FAVORITE.TXT" OR p = "C:\GAMES\LIBRARY.TXT" OR p = "C:\BOOKDATA\PEOPLE.TXT"
+    IF p.StartsWith("C:\GEODATA\HOODS\") THEN RETURN TRUE
+    RETURN p = "C:\SYSTEM\FAVORITE.TXT" OR p = "C:\GAMES\LIBRARY.TXT" OR p = "C:\BOOKDATA\PEOPLE.TXT" OR p = "C:\GEODATA\MEMBERS.TXT" OR p = "C:\GEODATA\NEWEST.TXT"
 END FUNCTION
 
 ' Not worth moving: who is signed in, and the like.
 FUNCTION Skip (path AS String) AS Bool
     VAR p AS String
     p = path.Upper()
-    RETURN p = "C:\BOOKDATA\SESSIONS" OR p = "C:\MAILDATA\SESSIONS" OR p = "C:\MAILDATA\ALIVE.TXT"
+    RETURN p = "C:\BOOKDATA\SESSIONS" OR p = "C:\MAILDATA\SESSIONS" OR p = "C:\MAILDATA\ALIVE.TXT" OR p = "C:\GEODATA\SESSIONS" OR p = "C:\PALDATA\SESSIONS" OR p = "C:\PALDATA\LOCK"
 END FUNCTION
 
-' Where SimBook keeps its pictures here: beside its pages.
-FUNCTION BookHere () AS String
-    IF FS.Exists("C:\WEB\BOOK\BOOK.SPK") THEN RETURN "C:\WEB\BOOK"
-    IF FS.Exists("C:\WEB\BOOK.SPK") THEN RETURN "C:\WEB"
-    IF ReadOr(WEBAPPS, "").Contains("mode=folders") THEN RETURN "C:\WEB\BOOK"
+' Where a web app keeps its pages here (SimBook's pictures and GeoSimies'
+' homepages go beside them): its folder, or the root.
+FUNCTION AppHere (folder AS String, marker AS String) AS String
+    IF FS.Exists("C:\WEB\" + folder + "\" + marker) THEN RETURN "C:\WEB\" + folder
+    IF FS.Exists("C:\WEB\" + marker) THEN RETURN "C:\WEB"
+    IF ReadOr(WEBAPPS, "").Contains("mode=folders") THEN RETURN "C:\WEB\" + folder
     RETURN "C:\WEB"
+END FUNCTION
+
+FUNCTION BookHere () AS String
+    RETURN AppHere("BOOK", "BOOK.SPK")
+END FUNCTION
+
+' The neighborhoods GeoSimies keeps homepages in (geosimies/WEB/GEO.SPK)
+FUNCTION Hoods () AS Array OF String
+    RETURN ["AREA95", "SIMWOOD", "CHIPVALE", "HOMETOWN", "NEOTOKYO", "ROCKCITY", "STADIUM", "TOYLAND"]
 END FUNCTION
 
 ' Does this machine have anything (a file, not just empty folders) there?
@@ -237,12 +260,19 @@ SUB Go_Click ()
     IF cGames.Checked THEN all.Add("GAMES")
     IF cFrost.Checked THEN all.Add("FROST")
     IF cFav.Checked THEN all.Add("FAV")
+    IF cGeo.Checked THEN all.Add("GEO")
+    IF cPal.Checked THEN all.Add("PAL")
     IF all.Count = 0 THEN
         Warn("Tick what to move in.")
         RETURN
     END IF
     busy = TRUE
     FOR EACH s IN all
+        IF s = "PAL" AND HasData(SetPath(s)) THEN
+            ' two ledgers can't be added together without making or losing money
+            Warn("This machine already has SimPal accounts in C:\PALDATA, and two SimPal ledgers can't be joined without money going missing. SimPal is skipped." + EOL + EOL + "To move it anyway, rename C:\PALDATA here first.")
+            CONTINUE
+        END IF
         IF HasData(SetPath(s)) THEN
             box = GUI_MessageBox.New(win)
             box.Title = "Move In"
@@ -296,6 +326,8 @@ SUB MoveIn ()
     VAR s AS String
     VAR reply AS String
     VAR before AS Integer
+    VAR there AS String
+    VAR hood AS String
     closed = FALSE
     conn = sock.Connect(host, PORT)
     reply = Request("AUTH " + userBox.Text.Trim() + "|" + passBox.Text)
@@ -321,6 +353,17 @@ SUB MoveIn ()
                 CopyTree("C:\WEB\PICS", BookHere() + "\PICS")
                 CopyTree("C:\WEB\PHOTOS", BookHere() + "\PHOTOS")
             END IF
+        END IF
+        IF s = "GEO" THEN
+            ' the homepages' own folders are beside GeoSimies' pages, at the root or in its folder
+            IF ThereHas("C:\WEB\GEO\GEO.SPK") THEN
+                there = "C:\WEB\GEO"
+            ELSE
+                there = "C:\WEB"
+            END IF
+            FOR EACH hood IN Hoods()
+                IF ThereHas(there + "\" + hood) THEN CopyTree(there + "\" + hood, AppHere("GEO", "GEO.SPK") + "\" + hood)
+            NEXT
         END IF
         Say(SetName(s) + ": " + Str(copied + merged - before) + " files moved in.")
     NEXT
