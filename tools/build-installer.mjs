@@ -245,6 +245,26 @@ const apps = {
     done: `Print("Open http://" + NET.HostName.Lower() + "/ in Voyager. Then install the web apps (in any order), and run C:\\PROGRAMS\\MOVEIN.SPK to bring your other machines' data here.")`,
     code: () => moveHomePage + "\n" + read("simhost/SETUP.SPK") + relocateCode(),
   },
+  geosimies: {
+    folder: "GEO",
+    vapor: { folder: "GEO", id: "GEOSIMIE", name: "GeoSimies", kind: "web", category: "Internet", run: "/", tasks: "", startup: "", about: "Free homepages for everybody: neighborhoods, a page editor with templates and clip art, hit counters, guestbooks and webrings. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    title: "GeoSimies",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. GeoSimies
+' becomes this machine's home page: its pages go into C:\\WEB (the stock
+' INDEX.HTM moves to WELCOME.HTM) and its clip art into C:\\WEB\\CLIPART.
+' Members' homepages get folders of their own there (C:\\WEB\\AREA95\\1001...).
+' Everything people write is kept in C:\\GEODATA, which is left alone, so
+' running this again upgrades GeoSimies without losing anybody's homepage.
+' Then open http://YOURNAME/ in Voyager.`,
+    copy: [["geosimies/WEB", "C:\\WEB"], ["geosimies/CLIPART", "C:\\WEB\\CLIPART"]],
+    dirs: ["C:\\WEB\\CLIPART"],
+    // the neighborhoods' folders, which SimHost moves along with the rest
+    moreDirs: ["AREA95", "SIMWOOD", "CHIPVALE", "HOMETOWN", "NEOTOKYO", "ROCKCITY", "STADIUM", "TOYLAND"].map((h) => "C:\\WEB\\" + h),
+    first: ["MoveHomePage()"],
+    last: [],
+    url: "/",
+    code: () => moveHomePage,
+  },
   eliza: {
     folder: "ELIZA",
     vapor: { folder: "ELIZA", id: "ELIZA", name: "ELIZA-95", kind: "web", category: "Fun", run: "/", tasks: "", startup: "", about: "A chatbot with large-language-model manners and the occasional real answer. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
@@ -270,7 +290,7 @@ function relocateCode() {
   const keys = Object.keys(apps).filter((k) => apps[k].folder);
   const count = {};
   for (const k of keys) for (const f of web(k)) count[f] = (count[f] || 0) + 1;
-  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", eliza: "BOT.SPK" };
+  const marker = { simbook: "BOOK.SPK", coldmail: "MAIL.SPK", asksim: "ASK.SPK", geosimies: "GEO.SPK", eliza: "BOT.SPK" };
   const calls = keys.map((k) => {
     const a = apps[k];
     const files = web(k);

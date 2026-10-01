@@ -13,6 +13,9 @@ A series of programs for the sim95 playground
   time, achievements), with SimDOOM (a raycast 3D shooter) and Snake 95.
 * [`asksim/`](asksim/) – AskSim, an Ask Jeeves-style search engine with a
   real crawler that goes round every machine's web pages.
+* [`geosimies/`](geosimies/) – GeoSimies, free GeoCities-style homepages in
+  neighborhoods, with a page editor, clip art, hit counters, guestbooks and
+  webrings.
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with large-language-model
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
@@ -29,10 +32,10 @@ A series of programs for the sim95 playground
 Paste an app's `INSTALL.SPK` into SPARK and press F5. On its own, a web app
 becomes its machine's home page: one machine per app. Install
 [SimHost](simhost/) first and they all share one machine instead, at
-`/book/`, `/mail/`, `/ask/` and `/eliza/`; that is one browser tab for the
+`/book/`, `/mail/`, `/ask/`, `/geo/` and `/eliza/`; that is one browser tab for the
 lot. Simxplorer installs as a program (`C:\PROGRAMS\SIMXPLOR.SPK`) on any
 machine.
 
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
-frostbird, clippy, vapor, simhost). Rebuild the installers with `node tools/build-installer.mjs`.
+frostbird, clippy, vapor, simhost, geosimies). Rebuild the installers with `node tools/build-installer.mjs`.

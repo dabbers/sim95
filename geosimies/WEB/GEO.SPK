@@ -1,0 +1,1161 @@
+' GEO.SPK - GeoSimies, free homepages for everybody on the SIM95 network.
+' Every page pulls this in with <%@ import file="GEO.SPK" %>, and every
+' member's page with <%@ import file="..\..\GEO.SPK" %>.
+'
+' A member gets a homepage at an address in a neighborhood, the way it was
+' done in 1996: http://HOST/area95/1001/ (or /geo/area95/1001/ on a SimHost
+' machine), and /~name/ as a short way there. The pages people write are kept
+' in C:\GEODATA, outside C:\WEB, so the web server never hands them out as
+' they are. What it serves for an address is a small INDEX.ASP that comes back
+' here: ShowPage reads the member's HTML, counts the visitor, and adds the
+' hit counter, the webrings and the guestbook links.
+'
+'   C:\GEODATA\USERS\<user>.TXT          one member, key=value per line (password salted + hashed)
+'   C:\GEODATA\SESSIONS\<id>.TXT         a sign-in: user, form token, and the address it came from
+'   C:\GEODATA\MEMBERS.TXT               user|hood|number, one per member
+'   C:\GEODATA\HOODS\<hood>.TXT          number|user|title|description|updated, one per homepage
+'   C:\GEODATA\NEWEST.TXT                hood|number, in the order they moved in
+'   C:\GEODATA\SITES\<hood>\<n>\<p>.HTM  a page as its owner wrote it (.DRF: a preview not yet saved)
+'   C:\GEODATA\SITES\<hood>\<n>\<p>.CNT  that page's hit counter
+'   C:\GEODATA\SITES\<hood>\<n>\GUEST.TXT  the guestbook, one entry per line
+'   C:\GEODATA\SITES\<hood>\<n>\RINGS.TXT  |2|5|  the webrings this homepage is in
+'   C:\GEODATA\RINGS.TXT                 id|owner hood/number|name|description, one per webring
+'   C:\GEODATA\RINGS\<id>.TXT            hood/number, one member per line, in ring order
+'   C:\GEODATA\WHERE.TXT                 the folder GeoSimies was last seen in (see FixUp)
+'   C:\WEB\<hood>\<n>\<page>.ASP         the pages as served (all the same few lines)
+'   C:\WEB\<hood>\<n>\<name>.PIC         the member's own pictures
+'   C:\WEB\~<user>\INDEX.ASP             sends /~ann/ on to Ann's address
+'   C:\WEB\CLIPART\*.PIC                 the clip art everybody may use
+'
+' Every page HTTPD.SPK sends travels as one network message of at most 64K,
+' and so does every request Voyager makes, so a member's page is kept to
+' MAXHTML characters, which still fits when every one of them needs escaping.
+
+CONST DATADIR = "C:\GEODATA"
+CONST COOKIE = "geosimies"
+CONST MAXHTML = 16000         ' characters in one page
+CONST MAXSAFE = 40000         ' ...and once escaped, as the editor shows it
+CONST MAXPAGES = 6            ' pages per homepage, index included
+CONST MAXPICS = 10            ' pictures per homepage
+CONST MAXPIC = 40000          ' characters in one picture
+CONST PICSIZE = 200           ' largest picture, either way
+CONST MAXNAME = 40
+CONST MAXTITLE = 60
+CONST MAXDESC = 200
+CONST MAXSIGN = 500           ' a guestbook entry
+CONST MAXFROM = 60            ' "where are you from?"
+CONST GUESTKEEP = 200         ' guestbook entries kept
+CONST MAXRINGS = 5            ' webrings one homepage can be in
+CONST MAXRINGNAME = 40
+CONST PAGEROOM = 24000        ' how much directory or guestbook one page may carry
+CONST FIRSTNUM = 1001         ' the first address in a neighborhood
+CONST LASTNUM = 9999
+
+VAR viewer AS String          ' who is signed in; "" for nobody
+VAR formToken AS String       ' their session's form token; see RequireToken
+VAR geoHome AS String         ' GeoDir, once worked out
+
+' ---------------------------------------------------------------- the neighborhoods
+
+' key|name|what lives there|colour. The key is a folder name, so 8 letters at most.
+FUNCTION Hoods () AS Array OF String
+    VAR list AS Array OF String
+    list.Add("AREA95|Area95|UFOs, aliens, outer space, science fiction and the X-Files. The truth is out there.|#000040")
+    list.Add("SIMWOOD|Simwood|Movies, TV shows, soap operas and fan pages for the stars.|#800000")
+    list.Add("CHIPVALE|ChipVale|Computers, programming, SPARK and the information superhighway.|#004040")
+    list.Add("HOMETOWN|Hometown|Family, pets, hobbies, recipes and the old home town.|#406000")
+    list.Add("NEOTOKYO|NeoTokyo|Anime, manga and video games.|#600060")
+    list.Add("ROCKCITY|RockCity|Bands, garage rock, concerts and lyrics.|#202020")
+    list.Add("STADIUM|Stadium|Sports, teams, scores and fantasy leagues.|#004080")
+    list.Add("TOYLAND|Toyland|Kids, toys, cartoons and Saturday mornings.|#C04000")
+    RETURN list
+END FUNCTION
+
+' Field i of a neighborhood's entry (0 key, 1 name, 2 about, 3 colour), or "".
+FUNCTION HoodInfo (hood AS String, i AS Integer) AS String
+    VAR entry AS String
+    FOR EACH entry IN Hoods()
+        IF entry.Split("|")[0] = hood.Upper() THEN RETURN entry.Split("|")[i]
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION IsHood (hood AS String) AS Bool
+    IF hood = "" OR hood.Length > 8 THEN RETURN FALSE
+    RETURN HoodInfo(hood, 0) <> ""
+END FUNCTION
+
+' ---------------------------------------------------------------- where things are
+
+' The folder GEO.SPK is in: C:\WEB, or C:\WEB\GEO on a SimHost machine. A
+' member's page is two folders further down, so look up from the page.
+FUNCTION GeoDir () AS String
+    VAR d AS String
+    VAR i AS Integer
+    IF geoHome <> "" THEN RETURN geoHome
+    d = SERVER.ScriptName
+    FOR i = 1 TO 4
+        d = ParentOf(d)
+        IF FS.Exists(d + "\GEO.SPK") THEN
+            geoHome = d
+            RETURN d
+        END IF
+    NEXT
+    geoHome = "C:\WEB"
+    RETURN geoHome
+END FUNCTION
+
+FUNCTION ParentOf (p AS String) AS String
+    VAR parts AS Array OF String
+    parts = p.Split("\")
+    IF parts.Count < 2 THEN RETURN p
+    RETURN p.Substring(0, p.Length - parts[parts.Count - 1].Length - 1)
+END FUNCTION
+
+' Where GeoSimies is on the web: http://host/ or http://host/geo/
+FUNCTION SiteUrl () AS String
+    RETURN "http://" + SERVER.Name.Lower() + WebPath(GeoDir())
+END FUNCTION
+
+' The path of a folder in C:\WEB: "/" or "/geo/"
+FUNCTION WebPath (dir AS String) AS String
+    IF dir.Upper() = "C:\WEB" THEN RETURN "/"
+    RETURN "/" + dir.Substring(7, dir.Length - 7).Replace("\", "/").Lower() + "/"
+END FUNCTION
+
+FUNCTION SiteData (hood AS String, num AS String) AS String
+    RETURN DATADIR + "\SITES\" + hood.Upper() + "\" + num
+END FUNCTION
+
+FUNCTION SiteWeb (hood AS String, num AS String) AS String
+    RETURN GeoDir() + "\" + hood.Upper() + "\" + num
+END FUNCTION
+
+' A homepage's address, from GeoSimies' own folder.
+FUNCTION SiteLink (hood AS String, num AS String) AS String
+    RETURN hood.Lower() + "/" + num + "/"
+END FUNCTION
+
+FUNCTION FullAddress (hood AS String, num AS String) AS String
+    RETURN SiteUrl() + SiteLink(hood, num)
+END FUNCTION
+
+' ---------------------------------------------------------------- the disk
+
+SUB EnsureDisk ()
+    VAR dir AS String
+    FOR EACH dir IN ["", "\USERS", "\SESSIONS", "\HOODS", "\SITES", "\RINGS"]
+        IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
+    NEXT
+    IF NOT FS.Exists(DATADIR + "\WHERE.TXT") THEN FS.Write(DATADIR + "\WHERE.TXT", GeoDir())
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+' Text that is safe inside one |-separated line, and back again.
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("%", "%25").Replace("|", "%7C").Replace(Chr(13), "").Replace(Chr(10), "%0A")
+END FUNCTION
+
+FUNCTION Unesc (s AS String) AS String
+    RETURN s.Replace("%0A", Chr(10)).Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+' Text that is safe inside a page; Br also keeps the line breaks. Everything a
+' visitor or member typed goes through one of these, except a member's own HTML
+' on their own homepage.
+FUNCTION H (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s)
+END FUNCTION
+
+FUNCTION Br (s AS String) AS String
+    RETURN SERVER.HtmlEncode(s).Replace(Chr(10), "<br>")
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    RETURN SERVER.UrlEncode(s)
+END FUNCTION
+
+FUNCTION OnlyFrom (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' A user name is also a folder name: ~ann. With the ~ it must fit in eight.
+FUNCTION ValidName (u AS String) AS Bool
+    IF u.Length < 3 OR u.Length > 7 THEN RETURN FALSE
+    RETURN OnlyFrom(u, "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION CleanName (u AS String) AS String
+    VAR s AS String
+    s = u.Trim().Lower()
+    IF ValidName(s) THEN RETURN s
+    RETURN ""
+END FUNCTION
+
+' A page's name is its file name: index, links, aliens...
+FUNCTION ValidPage (p AS String) AS Bool
+    IF p.Length < 1 OR p.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(p.Lower(), "abcdefghijklmnopqrstuvwxyz0123456789")
+END FUNCTION
+
+FUNCTION IsNumber (s AS String) AS Bool
+    IF s = "" OR s.Length > 8 THEN RETURN FALSE
+    RETURN OnlyFrom(s, "0123456789")
+END FUNCTION
+
+' Text from a form, trimmed and cut to a length.
+FUNCTION Clip (s AS String, most AS Integer) AS String
+    s = s.Replace(Chr(13), "").Trim()
+    IF s.Length > most THEN s = s.Substring(0, most)
+    RETURN s
+END FUNCTION
+
+' One line of a form: no line breaks.
+FUNCTION OneLine (s AS String, most AS Integer) AS String
+    RETURN Clip(s.Replace(Chr(10), " "), most)
+END FUNCTION
+
+' The line in text (lines of "key|...") that starts with key, or "".
+FUNCTION FindLine (text AS String, key AS String) AS String
+    VAR at AS Integer
+    text = Chr(10) + text
+    at = text.IndexOf(Chr(10) + key + "|")
+    IF at < 0 THEN RETURN ""
+    text = text.Substring(at + 1, text.Length - at - 1)
+    at = text.IndexOf(Chr(10))
+    IF at >= 0 THEN text = text.Substring(0, at)
+    RETURN text
+END FUNCTION
+
+' text with one whole line swapped for another ("" takes it out).
+FUNCTION SwapLine (text AS String, old AS String, new AS String) AS String
+    IF new = "" THEN
+        text = (Chr(10) + text).Replace(Chr(10) + old + Chr(10), Chr(10))
+    ELSE
+        text = (Chr(10) + text).Replace(Chr(10) + old + Chr(10), Chr(10) + new + Chr(10))
+    END IF
+    RETURN text.Substring(1, text.Length - 1)
+END FUNCTION
+
+FUNCTION Stamp () AS String
+    RETURN TIME.Date + " " + TIME.Clock.Substring(0, 5)
+END FUNCTION
+
+' ---------------------------------------------------------------- members
+
+FUNCTION UserPath (u AS String) AS String
+    RETURN DATADIR + "\USERS\" + u + ".TXT"
+END FUNCTION
+
+FUNCTION UserExists (u AS String) AS Bool
+    IF NOT ValidName(u) THEN RETURN FALSE
+    RETURN FS.Exists(UserPath(u))
+END FUNCTION
+
+FUNCTION LoadUser (u AS String) AS Array OF String
+    RETURN FS.Read(UserPath(u)).Lines()
+END FUNCTION
+
+SUB SaveUser (u AS String, rec AS Array OF String)
+    FS.Write(UserPath(u), rec.Join(Chr(10)))
+END SUB
+
+FUNCTION Field (rec AS Array OF String, key AS String) AS String
+    VAR line AS String
+    FOR EACH line IN rec
+        IF line.StartsWith(key + "=") THEN RETURN Unesc(line.Substring(key.Length + 1, line.Length - key.Length - 1))
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB SetField (rec AS Array OF String, key AS String, value AS String)
+    VAR i AS Integer
+    FOR i = 0 TO rec.Count - 1
+        IF rec[i].StartsWith(key + "=") THEN
+            rec[i] = key + "=" + Esc(value)
+            RETURN
+        END IF
+    NEXT
+    rec.Add(key + "=" + Esc(value))
+END SUB
+
+' Not real cryptography - SIM95 has none - but the password itself never
+' touches the disk. Two running hashes over salt + password, kept under 2^31.
+FUNCTION Hash (salt AS String, pw AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    VAR s AS String
+    s = salt + ":" + pw + ":" + salt
+    FOR i = 0 TO s.Length - 1
+        c = Asc(s.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + "-" + Hex(b)
+END FUNCTION
+
+FUNCTION NewToken () AS String
+    RETURN Hex(268435456 + Rnd(1879048191))
+END FUNCTION
+
+FUNCTION CheckPassword (u AS String, pw AS String) AS Bool
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN FALSE
+    rec = LoadUser(u)
+    RETURN Hash(Field(rec, "salt"), pw) = Field(rec, "pass")
+END FUNCTION
+
+' Which homepage is u's: "AREA95|1001", or "".
+FUNCTION HomeOf (u AS String) AS String
+    VAR rec AS Array OF String
+    IF NOT UserExists(u) THEN RETURN ""
+    rec = LoadUser(u)
+    IF Field(rec, "hood") = "" THEN RETURN ""
+    RETURN Field(rec, "hood") + "|" + Field(rec, "num")
+END FUNCTION
+
+' The next free address in a neighborhood: one past the highest taken.
+FUNCTION FreeNumber (hood AS String) AS Integer
+    VAR line AS String
+    VAR most AS Integer
+    most = FIRSTNUM - 1
+    FOR EACH line IN ReadOr(DATADIR + "\HOODS\" + hood + ".TXT", "").Lines()
+        IF line <> "" THEN most = Int(MATH.Max(most, Val(line.Split("|")[0])))
+    NEXT
+    RETURN most + 1
+END FUNCTION
+
+FUNCTION Taken (hood AS String, num AS String) AS Bool
+    RETURN FS.Exists(SiteData(hood, num)) OR FS.Exists(SiteWeb(hood, num))
+END FUNCTION
+
+' Signs somebody up and moves them in: an account, an address, and a first
+' page from a template. Returns "" on success, otherwise what is wrong.
+FUNCTION CreateMember (u AS String, pw AS String, name AS String, hood AS String, num AS String, title AS String, tpl AS String) AS String
+    VAR rec AS Array OF String
+    VAR salt AS String
+    EnsureDisk()
+    hood = hood.Upper()
+    name = OneLine(name, MAXNAME)
+    title = OneLine(title, MAXTITLE)
+    num = num.Trim()
+    IF NOT ValidName(u) THEN RETURN "Pick a member name of 3 to 7 letters or digits."
+    IF FS.Exists(UserPath(u)) OR FS.Exists(GeoDir() + "\~" + u.Upper()) THEN RETURN "Somebody already has the name " + u + "."
+    IF pw.Length < 4 THEN RETURN "Pick a password of at least 4 characters."
+    IF name = "" THEN RETURN "Tell us your name."
+    IF NOT IsHood(hood) THEN RETURN "Pick a neighborhood to live in."
+    IF num = "" THEN num = Str(FreeNumber(hood))
+    IF NOT IsNumber(num) THEN RETURN "An address is a number from " + Str(FIRSTNUM) + " to " + Str(LASTNUM) + "."
+    IF Val(num) < FIRSTNUM OR Val(num) > LASTNUM THEN RETURN "An address is a number from " + Str(FIRSTNUM) + " to " + Str(LASTNUM) + "."
+    num = Str(Int(Val(num)))
+    IF Taken(hood, num) THEN RETURN HoodInfo(hood, 1) + " " + num + " is taken. Try " + Str(FreeNumber(hood)) + "."
+    IF NOT IsTemplate(tpl) THEN tpl = "STARS"
+    IF title = "" THEN title = name + "'s Home Page"
+    salt = NewToken()
+    SetField(rec, "name", name)
+    SetField(rec, "salt", salt)
+    SetField(rec, "pass", Hash(salt, pw))
+    SetField(rec, "hood", hood)
+    SetField(rec, "num", num)
+    SetField(rec, "joined", TIME.Date)
+    SaveUser(u, rec)
+    FS.Append(DATADIR + "\MEMBERS.TXT", u + "|" + hood + "|" + num + Chr(10))
+    FS.Append(DATADIR + "\HOODS\" + hood + ".TXT", num + "|" + u + "|" + Esc(title) + "||" + TIME.Date + Chr(10))
+    FS.Append(DATADIR + "\NEWEST.TXT", hood + "|" + num + Chr(10))
+    MakeSite(hood, num, u)
+    FS.Write(SiteData(hood, num) + "\INDEX.HTM", FillTemplate(tpl, u, hood, num, "INDEX"))
+    RETURN ""
+END FUNCTION
+
+' The folders of a homepage, its front page's ASP and the ~name shortcut.
+SUB MakeSite (hood AS String, num AS String, u AS String)
+    IF NOT FS.Exists(DATADIR + "\SITES\" + hood) THEN FS.MakeDir(DATADIR + "\SITES\" + hood)
+    IF NOT FS.Exists(SiteData(hood, num)) THEN FS.MakeDir(SiteData(hood, num))
+    IF NOT FS.Exists(GeoDir() + "\" + hood) THEN FS.MakeDir(GeoDir() + "\" + hood)
+    IF NOT FS.Exists(SiteWeb(hood, num)) THEN FS.MakeDir(SiteWeb(hood, num))
+    WriteStub(hood, num, "INDEX")
+    WriteAlias(GeoDir(), u, hood, num)
+END SUB
+
+' What is served for each page: the same three lines, which come back to
+' ShowPage. No member's text is ever written into an .ASP file.
+SUB WriteStub (hood AS String, num AS String, pg AS String)
+    FS.Write(SiteWeb(hood, num) + "\" + pg.Upper() + ".ASP", "<%@ import file=""..\..\GEO.SPK"" %>" + Chr(10) + "<% ' A GeoSimies homepage: GEO.SPK finds whose from where this file is." + Chr(10) + "ShowPage() %>" + Chr(10))
+END SUB
+
+' /~ann/ goes to Ann's address.
+SUB WriteAlias (dir AS String, u AS String, hood AS String, num AS String)
+    IF NOT FS.Exists(dir + "\~" + u.Upper()) THEN FS.MakeDir(dir + "\~" + u.Upper())
+    FS.Write(dir + "\~" + u.Upper() + "\INDEX.ASP", "<% ' GeoSimies: the short way to " + u + "'s homepage" + Chr(10) + "RESPONSE.Redirect(""" + WebPath(dir) + SiteLink(hood, num) + """) %>" + Chr(10))
+END SUB
+
+' SimHost moves GeoSimies into a folder of its own (C:\WEB\GEO), with the
+' neighborhoods' folders. The ~name shortcuts aren't on its list, so the
+' front page puts them right the first time it finds itself somewhere new.
+SUB FixUp ()
+    VAR was AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    IF NOT FS.Exists(DATADIR) THEN RETURN
+    was = ReadOr(DATADIR + "\WHERE.TXT", "").Trim()
+    IF was.Upper() = GeoDir().Upper() THEN RETURN
+    FOR EACH line IN ReadOr(DATADIR + "\MEMBERS.TXT", "").Lines()
+        p = line.Split("|")
+        IF p.Count < 3 THEN CONTINUE
+        IF was <> "" AND FS.Exists(was + "\~" + p[0].Upper() + "\INDEX.ASP") THEN
+            FS.Delete(was + "\~" + p[0].Upper() + "\INDEX.ASP")
+            FS.Delete(was + "\~" + p[0].Upper())
+        END IF
+        IF FS.Exists(GeoDir() + "\" + p[1]) THEN WriteAlias(GeoDir(), p[0], p[1], p[2])
+    NEXT
+    FS.Write(DATADIR + "\WHERE.TXT", GeoDir())
+END SUB
+
+' ---------------------------------------------------------------- homepages
+
+' A homepage's line in its neighborhood: number|user|title|description|updated
+FUNCTION FindSite (hood AS String, num AS String) AS String
+    IF NOT IsHood(hood) OR NOT IsNumber(num) THEN RETURN ""
+    RETURN FindLine(ReadOr(DATADIR + "\HOODS\" + hood.Upper() + ".TXT", ""), num)
+END FUNCTION
+
+FUNCTION SiteTitle (site AS String) AS String
+    RETURN Unesc(site.Split("|")[2])
+END FUNCTION
+
+FUNCTION SiteDesc (site AS String) AS String
+    RETURN Unesc(site.Split("|")[3])
+END FUNCTION
+
+SUB UpdateSite (hood AS String, num AS String, title AS String, desc AS String)
+    VAR old AS String
+    VAR path AS String
+    old = FindSite(hood, num)
+    IF old = "" THEN RETURN
+    path = DATADIR + "\HOODS\" + hood.Upper() + ".TXT"
+    FS.Write(path, SwapLine(FS.Read(path), old, num + "|" + old.Split("|")[1] + "|" + Esc(title) + "|" + Esc(desc) + "|" + TIME.Date))
+END SUB
+
+' Saving a page marks the homepage as updated today.
+SUB Touch (hood AS String, num AS String)
+    VAR site AS String
+    site = FindSite(hood, num)
+    IF site <> "" THEN UpdateSite(hood, num, SiteTitle(site), SiteDesc(site))
+END SUB
+
+' The pages of a homepage, index first, as lower-case names.
+FUNCTION Pages (hood AS String, num AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR f AS String
+    out.Add("index")
+    IF NOT FS.Exists(SiteData(hood, num)) THEN RETURN out
+    FOR EACH f IN FS.List(SiteData(hood, num))
+        IF f.EndsWith(".HTM") AND f <> "INDEX.HTM" THEN out.Add(f.Substring(0, f.Length - 4).Lower())
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION HasPage (hood AS String, num AS String, pg AS String) AS Bool
+    IF NOT ValidPage(pg) THEN RETURN FALSE
+    RETURN FS.Exists(SiteData(hood, num) + "\" + pg.Upper() + ".HTM")
+END FUNCTION
+
+' Where a page is, from GeoSimies' own folder.
+FUNCTION PageLink (hood AS String, num AS String, pg AS String) AS String
+    IF pg.Lower() = "index" THEN RETURN SiteLink(hood, num)
+    RETURN SiteLink(hood, num) + pg.Lower() + ".asp"
+END FUNCTION
+
+' "" when the HTML will do, otherwise what is wrong with it. The second limit
+' is for the editor, which shows the page escaped (< is &lt;), and for the
+' request that brings it back: both are single network messages.
+FUNCTION CheckHtml (html AS String) AS String
+    IF html.Trim() = "" THEN RETURN "A page needs something on it. Pick a template if you're stuck!"
+    IF html.Length > MAXHTML THEN RETURN "That page is " + Str(html.Length) + " characters. A GeoSimies page holds " + Str(MAXHTML) + ". Split it into two pages!"
+    IF H(html).Length > MAXSAFE THEN RETURN "That page has too many special characters (< > & "") to fit. Take some out, or split it into two pages."
+    RETURN ""
+END FUNCTION
+
+' Saves a page (draft = FALSE) or a preview of it (draft = TRUE).
+FUNCTION SavePage (hood AS String, num AS String, pg AS String, html AS String, draft AS Bool) AS String
+    VAR problem AS String
+    VAR path AS String
+    html = html.Replace(Chr(13), "")
+    problem = CheckHtml(html)
+    IF problem <> "" THEN RETURN problem
+    IF NOT ValidPage(pg) THEN RETURN "A page name is 1 to 8 letters or digits."
+    path = SiteData(hood, num) + "\" + pg.Upper()
+    IF NOT FS.Exists(path + ".HTM") AND Pages(hood, num).Count >= MAXPAGES THEN RETURN "A homepage has room for " + Str(MAXPAGES) + " pages."
+    IF draft THEN
+        FS.Write(path + ".DRF", html)
+        RETURN ""
+    END IF
+    FS.Write(path + ".HTM", html)
+    IF FS.Exists(path + ".DRF") THEN FS.Delete(path + ".DRF")
+    IF NOT FS.Exists(SiteWeb(hood, num) + "\" + pg.Upper() + ".ASP") THEN WriteStub(hood, num, pg)
+    Touch(hood, num)
+    RETURN ""
+END FUNCTION
+
+FUNCTION NewPage (hood AS String, num AS String, pg AS String, tpl AS String, u AS String) AS String
+    pg = pg.Trim().Lower()
+    IF NOT ValidPage(pg) THEN RETURN "A page name is 1 to 8 letters or digits, like links or aliens."
+    IF HasPage(hood, num, pg) THEN RETURN "You already have a page called " + pg + "."
+    IF NOT IsTemplate(tpl) THEN tpl = "BLANK"
+    RETURN SavePage(hood, num, pg, FillTemplate(tpl, u, hood, num, pg), FALSE)
+END FUNCTION
+
+SUB DeletePage (hood AS String, num AS String, pg AS String)
+    VAR path AS String
+    VAR ext AS String
+    IF pg.Lower() = "index" OR NOT ValidPage(pg) THEN RETURN
+    path = SiteData(hood, num) + "\" + pg.Upper()
+    FOR EACH ext IN [".HTM", ".DRF", ".CNT"]
+        IF FS.Exists(path + ext) THEN FS.Delete(path + ext)
+    NEXT
+    IF FS.Exists(SiteWeb(hood, num) + "\" + pg.Upper() + ".ASP") THEN FS.Delete(SiteWeb(hood, num) + "\" + pg.Upper() + ".ASP")
+END SUB
+
+' ---------------------------------------------------------------- templates
+
+' name|title|what it looks like. Each is <name>.TPL beside this file.
+FUNCTION Templates () AS Array OF String
+    VAR t AS Array OF String
+    t.Add("STARS|Starry Night|Black sky, twinkling stars, a spinning globe and a marquee. Very 1997.")
+    t.Add("CLASSIC|Under Construction|Grey and proud of it: a construction sign, a links list, a counter.")
+    t.Add("SHRINE|Fan Shrine|A tribute page for your favorite band, show or starship.")
+    t.Add("BLANK|Plain Paper|Almost nothing. For people who know their HTML.")
+    RETURN t
+END FUNCTION
+
+FUNCTION IsTemplate (tpl AS String) AS Bool
+    VAR t AS String
+    FOR EACH t IN Templates()
+        IF t.Split("|")[0] = tpl.Upper() AND tpl <> "" THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' A template with the member's details in it. Pages sit two folders below
+' GeoSimies, so its own pages and the clip art are ../../ away.
+FUNCTION FillTemplate (tpl AS String, u AS String, hood AS String, num AS String, pg AS String) AS String
+    VAR text AS String
+    VAR site AS String
+    VAR title AS String
+    VAR who AS String
+    text = ReadOr(GeoDir() + "\" + tpl.Upper() + ".TPL", "<html><body><h1>Welcome to my homepage!!!</h1></body></html>")
+    site = FindSite(hood, num)
+    title = u + "'s Home Page"
+    IF site <> "" THEN title = SiteTitle(site)
+    who = u
+    IF UserExists(u) THEN who = Field(LoadUser(u), "name")
+    IF pg.Lower() <> "index" THEN title = title + ": " + pg
+    RETURN text.Replace("{TITLE}", H(title)).Replace("{NAME}", H(who)).Replace("{USER}", u).Replace("{HOOD}", HoodInfo(hood, 1)).Replace("{KEY}", hood.Lower()).Replace("{NUM}", num).Replace("{ART}", "../../clipart/").Replace("{TOP}", "../../").Replace("{DATE}", TIME.Date)
+END FUNCTION
+
+' ---------------------------------------------------------------- pictures
+
+FUNCTION CheckPicture (pic AS String) AS String
+    VAR size AS Array OF String
+    IF pic = "" THEN RETURN "Choose a .PIC file first."
+    size = pic.Lines()[0].Trim().Split(" ")
+    IF NOT pic.StartsWith("SIM95PIC ") OR size.Count < 3 THEN RETURN "That is not a picture. Save one from Sketch as a .PIC file."
+    IF pic.Length > MAXPIC OR Val(size[1]) > PICSIZE OR Val(size[2]) > PICSIZE THEN RETURN "That picture is " + size[1] + " by " + size[2] + ". Pictures here are up to " + Str(PICSIZE) + " by " + Str(PICSIZE) + " (and " + Str(MAXPIC / 1000) + "K)."
+    RETURN ""
+END FUNCTION
+
+' The pictures of a homepage, as lower-case file names.
+FUNCTION Pictures (hood AS String, num AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR f AS String
+    IF NOT FS.Exists(SiteWeb(hood, num)) THEN RETURN out
+    FOR EACH f IN FS.List(SiteWeb(hood, num))
+        IF f.EndsWith(".PIC") THEN out.Add(f.Lower())
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION SavePicture (hood AS String, num AS String, pname AS String, pic AS String) AS String
+    VAR problem AS String
+    pname = pname.Trim().Lower()
+    IF pname.EndsWith(".pic") THEN pname = pname.Substring(0, pname.Length - 4)
+    IF NOT ValidPage(pname) THEN RETURN "A picture's name is 1 to 8 letters or digits, like me or mydog."
+    problem = CheckPicture(pic)
+    IF problem <> "" THEN RETURN problem
+    IF NOT FS.Exists(SiteWeb(hood, num) + "\" + pname.Upper() + ".PIC") AND Pictures(hood, num).Count >= MAXPICS THEN RETURN "A homepage has room for " + Str(MAXPICS) + " pictures. Delete one first."
+    FS.Write(SiteWeb(hood, num) + "\" + pname.Upper() + ".PIC", pic.Replace(Chr(13), ""))
+    RETURN ""
+END FUNCTION
+
+' The clip art: file|what it is
+FUNCTION ClipArt () AS Array OF String
+    VAR c AS Array OF String
+    c.Add("undercon|Under construction")
+    c.Add("emailme|E-mail me!")
+    c.Add("globe|The globe")
+    c.Add("new|NEW!")
+    c.Add("stars|A strip of stars")
+    c.Add("rainbow|Rainbow line")
+    c.Add("bestview|Best viewed in Simxplorer")
+    c.Add("coolsite|Cool Site of the Day")
+    RETURN c
+END FUNCTION
+
+' ---------------------------------------------------------------- sessions
+
+' A session file holds three lines: who is signed in, the session's form
+' token, and the address the sign-in came from. The cookie names the file.
+' Members' pages share this web server, so a cookie is only good from the
+' machine that signed in, and every change needs the form token too (see
+' RequireToken): another site can't read GeoSimies' pages to learn it.
+
+SUB SignIn (u AS String)
+    VAR id AS String
+    EnsureDisk()
+    id = NewToken()
+    FS.Write(DATADIR + "\SESSIONS\" + id + ".TXT", u + Chr(10) + NewToken() + NewToken() + Chr(10) + REQUEST.From)
+    RESPONSE.SetCookie(COOKIE, id)
+END SUB
+
+FUNCTION SessionPath () AS String
+    VAR id AS String
+    id = REQUEST.Cookie(COOKIE)
+    IF id = "" OR id.Length > 8 THEN RETURN ""
+    IF NOT OnlyFrom(id, "0123456789ABCDEF") THEN RETURN ""
+    RETURN DATADIR + "\SESSIONS\" + id + ".TXT"
+END FUNCTION
+
+SUB SignOut ()
+    VAR path AS String
+    path = SessionPath()
+    IF path <> "" THEN
+        IF FS.Exists(path) THEN FS.Delete(path)
+    END IF
+    RESPONSE.SetCookie(COOKIE, "")
+END SUB
+
+' Who the cookie says is signed in, or "". Also sets formToken.
+FUNCTION CurrentUser () AS String
+    VAR path AS String
+    VAR lines AS Array OF String
+    VAR u AS String
+    path = SessionPath()
+    IF path = "" THEN RETURN ""
+    IF NOT FS.Exists(path) THEN RETURN ""
+    lines = FS.Read(path).Lines()
+    IF lines.Count < 3 THEN RETURN ""
+    u = lines[0].Trim()
+    IF NOT UserExists(u) OR lines[2].Trim() <> REQUEST.From THEN RETURN ""
+    formToken = lines[1].Trim()
+    RETURN u
+END FUNCTION
+
+' The first line of every members-only page.
+SUB RequireLogin ()
+    viewer = CurrentUser()
+    IF viewer = "" THEN RESPONSE.Redirect("index.asp?e=login")
+END SUB
+
+' The second line of every page that changes something.
+SUB RequireToken ()
+    VAR sent AS String
+    sent = REQUEST.Form("t")
+    IF sent = "" THEN sent = REQUEST.Query("t")
+    IF sent = "" OR sent <> formToken THEN RESPONSE.Redirect("edit.asp?why=" + UrlEnc("That did not come from a GeoSimies page, so nothing was changed."))
+END SUB
+
+FUNCTION TokenField () AS String
+    RETURN "<input type=""hidden"" name=""t"" value=""" + formToken + """>"
+END FUNCTION
+
+' ---------------------------------------------------------------- serving a homepage
+
+' The whole of every member's page: C:\WEB\<hood>\<n>\<page>.ASP calls this.
+' It works out whose page it is from its own path, counts the visitor, and
+' sends the member's HTML with the counter, webrings and guestbook added.
+' ?draft=1 shows the owner their preview instead, and counts nobody.
+SUB ShowPage ()
+    VAR parts AS Array OF String
+    VAR hood AS String
+    VAR num AS String
+    VAR pg AS String
+    VAR site AS String
+    VAR path AS String
+    VAR html AS String
+    VAR hits AS Integer
+    VAR preview AS Bool
+    parts = SERVER.ScriptName.Split("\")
+    pg = parts[parts.Count - 1]
+    pg = pg.Substring(0, pg.Length - 4).Lower()
+    num = parts[parts.Count - 2]
+    hood = parts[parts.Count - 3].Upper()
+    site = FindSite(hood, num)
+    path = SiteData(hood, num) + "\" + pg.Upper()
+    IF site = "" OR NOT FS.Exists(path + ".HTM") THEN
+        RESPONSE.Status = "404 Not Found"
+        RESPONSE.Write("<html><head><title>Not here - GeoSimies</title></head><body bgcolor=""#FFFFFF""><h2>This homepage has moved or is gone.</h2><p><a href=""../../"">Back to GeoSimies</a></p></body></html>")
+        RETURN
+    END IF
+    IF REQUEST.Query("draft") <> "" AND FS.Exists(path + ".DRF") THEN
+        viewer = CurrentUser()
+        IF viewer <> "" AND viewer = site.Split("|")[1] THEN preview = TRUE
+    END IF
+    IF preview THEN
+        html = FS.Read(path + ".DRF")
+    ELSE
+        html = FS.Read(path + ".HTM")
+        hits = Int(Val(ReadOr(path + ".CNT", "0"))) + 1
+        FS.Write(path + ".CNT", Str(hits))
+    END IF
+    html = Counted(Defang(html), hits)
+    html = WithHead(html, site)
+    IF preview THEN html = PreviewBar(pg) + html
+    RESPONSE.Write(Before(html, "</body", Footer(hood, num, site)))
+END SUB
+
+' text with more put in front of the first marker (any case), or at the end.
+FUNCTION Before (text AS String, marker AS String, more AS String) AS String
+    VAR at AS Integer
+    at = text.Lower().IndexOf(marker)
+    IF at < 0 THEN RETURN text + more
+    RETURN text.Substring(0, at) + more + text.Substring(at, text.Length - at)
+END FUNCTION
+
+' A title and a description for the search engines, if the page has none.
+FUNCTION WithHead (html AS String, site AS String) AS String
+    VAR low AS String
+    VAR more AS String
+    low = html.Lower()
+    IF NOT low.Contains("<title") THEN more = "<title>" + H(SiteTitle(site)) + "</title>"
+    IF NOT low.Contains("name=""description""") AND SiteDesc(site) <> "" THEN more = more + "<meta name=""description"" content=""" + H(SiteDesc(site)) + """>"
+    IF more = "" THEN RETURN html
+    IF low.Contains("<head>") THEN RETURN html.Substring(0, low.IndexOf("<head>") + 6) + more + html.Substring(low.IndexOf("<head>") + 6, html.Length - low.IndexOf("<head>") - 6)
+    RETURN more + html
+END FUNCTION
+
+' The first <!--COUNTER--> becomes the odometer.
+FUNCTION Counted (html AS String, hits AS Integer) AS String
+    VAR at AS Integer
+    at = html.Lower().IndexOf("<!--counter-->")
+    IF at < 0 THEN RETURN html
+    RETURN html.Substring(0, at) + Odometer(hits) + html.Substring(at + 14, html.Length - at - 14)
+END FUNCTION
+
+' You are visitor #000123, in green digits on black wheels.
+FUNCTION Odometer (hits AS Integer) AS String
+    VAR digits AS String
+    VAR out AS String
+    VAR i AS Integer
+    digits = Str(hits)
+    WHILE digits.Length < 6
+        digits = "0" + digits
+    END WHILE
+    FOR i = 0 TO digits.Length - 1
+        out = out + "<td bgcolor=""#000000""><tt><font color=""#00FF00""><b>" + digits.CharAt(i) + "</b></font></tt></td>"
+    NEXT
+    RETURN "<table cellpadding=""0"" cellspacing=""0""><tr><td><font size=""2""><b>You are visitor #&nbsp;</b></font></td><td><table cellpadding=""3"" cellspacing=""1"" bgcolor=""#808080""><tr>" + out + "</tr></table></td></tr></table>"
+END FUNCTION
+
+' The bar GeoSimies puts at the bottom of every homepage: its webrings, its
+' guestbook, and where it lives.
+FUNCTION Footer (hood AS String, num AS String, site AS String) AS String
+    VAR out AS String
+    VAR id AS String
+    VAR ring AS String
+    VAR q AS String
+    q = "&h=" + hood.Lower() + "&n=" + num
+    FOR EACH id IN RingsOf(hood, num)
+        ring = FindRing(id)
+        IF ring = "" THEN CONTINUE
+        out = out + "<tr><td align=""center"" bgcolor=""#FFFFCC""><font size=""2"">[ <a href=""../../ring.asp?r=" + id + "&go=prev" + q + """>&lt;&lt; Prev</a> | <a href=""../../ring.asp?r=" + id + """><b>" + H(RingName(ring)) + "</b></a> | <a href=""../../ring.asp?r=" + id + "&go=next" + q + """>Next &gt;&gt;</a> | <a href=""../../ring.asp?r=" + id + "&go=rand" + q + """>Random</a> ]</font></td></tr>"
+    NEXT
+    out = out + "<tr><td align=""center""><font size=""2""><a href=""../../guest.asp?h=" + hood.Lower() + "&n=" + num + "#sign"">Sign my Guestbook</a> | <a href=""../../guest.asp?h=" + hood.Lower() + "&n=" + num + """>View my Guestbook</a></font></td></tr>"
+    out = out + "<tr><td align=""center""><font size=""1"">This free homepage lives at " + HoodInfo(hood, 1) + " " + num + ", in <a href=""../../hood.asp?h=" + hood.Lower() + """>" + HoodInfo(hood, 1) + "</a> at <a href=""../../"">GeoSimies</a>. Get your own!</font></td></tr>"
+    RETURN "<br clear=""all""><hr><table width=""100%"" cellpadding=""2"" cellspacing=""0"">" + out + "</table>"
+END FUNCTION
+
+FUNCTION PreviewBar (pg AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""6"" bgcolor=""#FFFF00""><tr><td><font color=""#000000""><b>PREVIEW</b> - this is how your page will look. Nobody else can see it yet.</font></td>" _
+         + "<td align=""right""><form action=""../../edit.asp"" method=""post"">" + TokenField() + "<input type=""hidden"" name=""p"" value=""" + pg + """><input type=""hidden"" name=""do"" value=""publish""><input type=""submit"" value=""Publish it!""></form></td>" _
+         + "<td align=""right""><a href=""../../edit.asp?p=" + pg + """>Keep editing</a></td></tr></table>"
+END FUNCTION
+
+' Members write their own HTML, and it is served from the same machine as
+' everybody's sign-ins (and, on a SimHost machine, SimBook's and ColdMail's
+' too). Voyager runs only SPARK page scripts, which see nothing but the page.
+' Simxplorer runs JavaScript, which could read the cookies. So JavaScript is
+' switched off on homepages: every <script> becomes a SPARK one, an onclick
+' (or any on...) that isn't just the name of a SUB is renamed so it does
+' nothing, and a tag with javascript: (or an &#entity hiding it) is dropped.
+' Tags are cut out the way Simxplorer cuts them: from < to the next >.
+FUNCTION Defang (html AS String) AS String
+    VAR parts AS Array OF String
+    VAR i AS Integer
+    VAR p AS String
+    VAR stop AS Integer
+    parts = html.Split("<")
+    FOR i = 1 TO parts.Count - 1
+        p = parts[i]
+        stop = p.IndexOf(">")
+        IF stop < 0 THEN stop = p.Length
+        parts[i] = SafeTag(p.Substring(0, stop)) + p.Substring(stop, p.Length - stop)
+    NEXT
+    RETURN parts.Join("<")
+END FUNCTION
+
+FUNCTION SafeTag (tag AS String) AS String
+    VAR low AS String
+    VAR squeezed AS String
+    VAR at AS Integer
+    VAR i AS Integer
+    VAR c AS String
+    VAR v AS String
+    low = " " + tag.Lower().Replace(Chr(10), " ").Replace(Chr(13), " ").Replace(Chr(9), " ")
+    squeezed = low.Replace(" ", "")
+    IF squeezed.Contains("script:") OR squeezed.Contains("&#") OR squeezed.Contains("&colon") OR squeezed.Contains("&tab") OR squeezed.Contains("&newline") THEN RETURN "!-- GeoSimies took a script out here --"
+    IF TagWord(low) = "script" THEN RETURN "script type=""spark"""
+    at = low.IndexOf("on")
+    WHILE at > 0
+        c = low.CharAt(at - 1)
+        IF NOT "abcdefghijklmnopqrstuvwxyz0123456789_-".Contains(c) THEN
+            ' the attribute's name, then = and its value
+            i = at + 2
+            WHILE i < low.Length AND "abcdefghijklmnopqrstuvwxyz".Contains(low.CharAt(i))
+                i = i + 1
+            END WHILE
+            WHILE i < low.Length AND low.CharAt(i) = " "
+                i = i + 1
+            END WHILE
+            IF i < low.Length AND low.CharAt(i) = "=" THEN
+                v = AttrValue(low, i + 1)
+                IF v = "" OR NOT OnlyFrom(v, "abcdefghijklmnopqrstuvwxyz0123456789_") THEN tag = tag.Substring(0, at - 1) + "no" + tag.Substring(at + 1, tag.Length - at - 1)
+            END IF
+        END IF
+        IF low.Substring(at + 1, low.Length - at - 1).IndexOf("on") < 0 THEN BREAK
+        at = at + 1 + low.Substring(at + 1, low.Length - at - 1).IndexOf("on")
+    END WHILE
+    RETURN tag
+END FUNCTION
+
+' The tag's name: "a" for " a href=...", "/a" for " /a".
+FUNCTION TagWord (low AS String) AS String
+    VAR i AS Integer
+    low = low.Trim()
+    i = 0
+    IF low.StartsWith("/") THEN i = 1
+    WHILE i < low.Length AND "abcdefghijklmnopqrstuvwxyz0123456789".Contains(low.CharAt(i))
+        i = i + 1
+    END WHILE
+    RETURN low.Substring(0, i)
+END FUNCTION
+
+' The value of an attribute whose = is just before from, trimmed.
+FUNCTION AttrValue (low AS String, from AS Integer) AS String
+    VAR q AS String
+    VAR rest AS String
+    rest = low.Substring(from, low.Length - from).Trim()
+    IF rest = "" THEN RETURN ""
+    q = rest.CharAt(0)
+    IF q = """" OR q = "'" THEN
+        rest = rest.Substring(1, rest.Length - 1)
+        IF rest.IndexOf(q) >= 0 THEN rest = rest.Substring(0, rest.IndexOf(q))
+        RETURN rest.Trim()
+    END IF
+    IF rest.IndexOf(" ") >= 0 THEN rest = rest.Substring(0, rest.IndexOf(" "))
+    RETURN rest
+END FUNCTION
+
+FUNCTION PageHits (hood AS String, num AS String, pg AS String) AS Integer
+    RETURN Int(Val(ReadOr(SiteData(hood, num) + "\" + pg.Upper() + ".CNT", "0")))
+END FUNCTION
+
+' ---------------------------------------------------------------- guestbooks
+
+' C:\GEODATA\SITES\<hood>\<n>\GUEST.TXT, oldest first:
+'   number|date time|name|where from|message
+FUNCTION GuestPath (hood AS String, num AS String) AS String
+    RETURN SiteData(hood, num) + "\GUEST.TXT"
+END FUNCTION
+
+FUNCTION SignGuestbook (hood AS String, num AS String, name AS String, from AS String, text AS String) AS String
+    VAR lines AS Array OF String
+    VAR keep AS Array OF String
+    VAR i AS Integer
+    VAR last AS Integer
+    name = OneLine(name, 1000)
+    from = OneLine(from, 1000)
+    text = Clip(text, 100000)
+    IF FindSite(hood, num) = "" THEN RETURN "There is no homepage there."
+    IF name = "" THEN RETURN "Tell us your name!"
+    IF text = "" THEN RETURN "Write something in the guestbook!"
+    IF name.Length > MAXNAME THEN RETURN "Keep your name under " + Str(MAXNAME) + " characters."
+    IF from.Length > MAXFROM THEN RETURN "Keep where you're from under " + Str(MAXFROM) + " characters."
+    IF text.Length > MAXSIGN THEN RETURN "Keep your message under " + Str(MAXSIGN) + " characters."
+    lines = ReadOr(GuestPath(hood, num), "").Lines()
+    FOR i = 0 TO lines.Count - 1
+        IF lines[i] = "" THEN CONTINUE
+        last = Int(Val(lines[i].Split("|")[0]))
+        IF i >= lines.Count - GUESTKEEP THEN keep.Add(lines[i])
+    NEXT
+    keep.Add(Str(last + 1) + "|" + Stamp() + "|" + Esc(name) + "|" + Esc(from) + "|" + Esc(text))
+    FS.Write(GuestPath(hood, num), keep.Join(Chr(10)) + Chr(10))
+    RETURN ""
+END FUNCTION
+
+FUNCTION GuestEntries (hood AS String, num AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(GuestPath(hood, num), "").Lines()
+        IF line <> "" THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+SUB DeleteEntry (hood AS String, num AS String, id AS String)
+    VAR line AS String
+    IF NOT IsNumber(id) THEN RETURN
+    line = FindLine(ReadOr(GuestPath(hood, num), ""), id)
+    IF line <> "" THEN FS.Write(GuestPath(hood, num), SwapLine(FS.Read(GuestPath(hood, num)), line, ""))
+END SUB
+
+' ---------------------------------------------------------------- webrings
+
+' C:\GEODATA\RINGS.TXT: id|owner hood/number|name|description
+' C:\GEODATA\RINGS\<id>.TXT: one member (hood/number) per line, in ring order
+FUNCTION FindRing (id AS String) AS String
+    IF NOT IsNumber(id) THEN RETURN ""
+    RETURN FindLine(ReadOr(DATADIR + "\RINGS.TXT", ""), id)
+END FUNCTION
+
+FUNCTION RingName (ring AS String) AS String
+    RETURN Unesc(ring.Split("|")[2])
+END FUNCTION
+
+FUNCTION RingDesc (ring AS String) AS String
+    RETURN Unesc(ring.Split("|")[3])
+END FUNCTION
+
+FUNCTION RingMembers (id AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\RINGS\" + id + ".TXT", "").Lines()
+        IF line.Trim() <> "" THEN out.Add(line.Trim())
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION RingsOf (hood AS String, num AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR id AS String
+    FOR EACH id IN ReadOr(SiteData(hood, num) + "\RINGS.TXT", "|").Split("|")
+        IF id <> "" THEN out.Add(id)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION InRing (hood AS String, num AS String, id AS String) AS Bool
+    RETURN ReadOr(SiteData(hood, num) + "\RINGS.TXT", "|").Contains("|" + id + "|")
+END FUNCTION
+
+FUNCTION CreateRing (hood AS String, num AS String, name AS String, desc AS String) AS String
+    VAR id AS Integer
+    name = OneLine(name, 1000)
+    desc = OneLine(desc, 1000)
+    IF name = "" THEN RETURN "Give your webring a name."
+    IF name.Length > MAXRINGNAME THEN RETURN "Keep the name under " + Str(MAXRINGNAME) + " characters."
+    IF desc.Length > MAXDESC THEN RETURN "Keep the description under " + Str(MAXDESC) + " characters."
+    IF RingsOf(hood, num).Count >= MAXRINGS THEN RETURN "A homepage can be in " + Str(MAXRINGS) + " webrings at most."
+    EnsureDisk()
+    id = Int(Val(ReadOr(DATADIR + "\RINGID.TXT", "0"))) + 1
+    FS.Write(DATADIR + "\RINGID.TXT", Str(id))
+    FS.Append(DATADIR + "\RINGS.TXT", Str(id) + "|" + hood.Lower() + "/" + num + "|" + Esc(name) + "|" + Esc(desc) + Chr(10))
+    RETURN JoinRing(hood, num, Str(id))
+END FUNCTION
+
+FUNCTION JoinRing (hood AS String, num AS String, id AS String) AS String
+    IF FindRing(id) = "" THEN RETURN "There is no such webring."
+    IF InRing(hood, num, id) THEN RETURN "You're already in that webring."
+    IF RingsOf(hood, num).Count >= MAXRINGS THEN RETURN "A homepage can be in " + Str(MAXRINGS) + " webrings at most."
+    FS.Append(DATADIR + "\RINGS\" + id + ".TXT", hood.Lower() + "/" + num + Chr(10))
+    FS.Write(SiteData(hood, num) + "\RINGS.TXT", ReadOr(SiteData(hood, num) + "\RINGS.TXT", "|") + id + "|")
+    RETURN ""
+END FUNCTION
+
+SUB LeaveRing (hood AS String, num AS String, id AS String)
+    VAR path AS String
+    IF NOT InRing(hood, num, id) THEN RETURN
+    path = DATADIR + "\RINGS\" + id + ".TXT"
+    FS.Write(path, SwapLine(ReadOr(path, ""), hood.Lower() + "/" + num, ""))
+    FS.Write(SiteData(hood, num) + "\RINGS.TXT", ReadOr(SiteData(hood, num) + "\RINGS.TXT", "|").Replace("|" + id + "|", "|"))
+END SUB
+
+' Where << Prev, Next >> or Random goes from hood/number: another member,
+' going round (the last one's Next is the first). "" for an empty ring.
+FUNCTION RingStep (id AS String, here AS String, way AS String) AS String
+    VAR members AS Array OF String
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR j AS Integer
+    members = RingMembers(id)
+    n = members.Count
+    IF n = 0 THEN RETURN ""
+    i = members.IndexOf(here.Lower())
+    IF way = "next" THEN RETURN members[(i + 1) MOD n]
+    IF way = "prev" THEN
+        IF i < 0 THEN RETURN members[n - 1]
+        RETURN members[(i - 1 + n) MOD n]
+    END IF
+    ' Random: anybody but here
+    IF n = 1 THEN RETURN members[0]
+    IF i < 0 THEN RETURN members[Rnd(n)]
+    j = Rnd(n - 1)
+    IF j >= i THEN j = j + 1
+    RETURN members[j]
+END FUNCTION
+
+' ---------------------------------------------------------------- the directory
+
+' Every homepage, as hood|number|user|title|description|updated
+FUNCTION AllSites () AS Array OF String
+    VAR out AS Array OF String
+    VAR entry AS String
+    VAR line AS String
+    FOR EACH entry IN Hoods()
+        FOR EACH line IN ReadOr(DATADIR + "\HOODS\" + entry.Split("|")[0] + ".TXT", "").Lines()
+            IF line <> "" THEN out.Add(entry.Split("|")[0] + "|" + line)
+        NEXT
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION SiteCount (hood AS String) AS Integer
+    VAR n AS Integer
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\HOODS\" + hood + ".TXT", "").Lines()
+        IF line <> "" THEN n = n + 1
+    NEXT
+    RETURN n
+END FUNCTION
+
+' Cool Site of the Day: a different homepage every day, the same one all day.
+FUNCTION CoolSite () AS String
+    VAR all AS Array OF String
+    all = AllSites()
+    IF all.Count = 0 THEN RETURN ""
+    RETURN all[(Int(TIME.Now / 86400) * 7919) MOD all.Count]
+END FUNCTION
+
+' One homepage as a row of the directory, from a hood|number|user|title|... line.
+FUNCTION SiteRow (line AS String) AS String
+    VAR p AS Array OF String
+    p = line.Split("|")
+    IF p.Count < 6 THEN RETURN ""
+    RETURN "<tr><td valign=""top""><font size=""2""><b>" + HoodInfo(p[0], 1) + " " + p[1] + "</b></font></td><td><font size=""2""><a href=""" + SiteLink(p[0], p[1]) + """><b>" + H(Unesc(p[3])) + "</b></a> <font color=""#808080"">by ~" + p[2] + "</font><br>" + H(Unesc(p[4])) + "</font></td></tr>"
+END FUNCTION
+
+' ---------------------------------------------------------------- page furniture
+
+FUNCTION Top (title AS String, desc AS String) AS String
+    VAR s AS String
+    s = "<html><head><title>" + H(title) + " - GeoSimies</title>" _
+      + "<meta name=""description"" content=""" + H(desc) + """>" _
+      + "<meta name=""keywords"" content=""free homepage, free web hosting, home page, personal web page, geocities, geosimies, neighborhood, homesteading, web ring, webring, guestbook, hit counter, under construction"">" _
+      + "</head><body bgcolor=""#FFFFFF"" text=""#000000"" link=""#0000CC"" vlink=""#660099"">" _
+      + "<table width=""100%"" cellpadding=""4"" cellspacing=""0"" bgcolor=""#000080""><tr>" _
+      + "<td bgcolor=""#FFFFFF"" width=""104""><a href=""index.asp""><img src=""clipart/geologo.pic"" alt=""GeoSimies"" width=""100"" height=""24""></a></td>" _
+      + "<td><font color=""#FFFF00"" size=""2""><b>Free homepages for the whole SIM95 network!</b></font></td>" _
+      + "<td align=""right""><font color=""#FFFFFF"" size=""2"">" _
+      + "<a href=""index.asp""><font color=""#FFFFFF"">Home</font></a> | " _
+      + "<a href=""hood.asp""><font color=""#FFFFFF"">Neighborhoods</font></a> | " _
+      + "<a href=""rings.asp""><font color=""#FFFFFF"">Webrings</font></a> | "
+    IF viewer <> "" THEN
+        s = s + "<a href=""edit.asp""><font color=""#FFFFFF"">My Homepage</font></a> | " _
+              + "<a href=""logout.asp?t=" + formToken + """><font color=""#FFFFFF"">Log out</font></a>"
+    ELSE
+        s = s + "<a href=""signup.asp""><font color=""#FFFFFF"">Get a FREE Homepage</font></a> | " _
+              + "<a href=""index.asp""><font color=""#FFFFFF"">Log in</font></a>"
+    END IF
+    RETURN s + "</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Bottom () AS String
+    RETURN "<hr><center><font size=""1"" color=""#808080"">GeoSimies on " + H(SERVER.Name) + " &middot; " + TIME.Date + " &middot; <a href=""geosimie.htm"">About GeoSimies</a><br><a href=""geosimie.htm""><img src=""clipart/bestview.pic"" alt=""Best viewed in Simxplorer"" width=""88"" height=""31""></a></font></center></body></html>"
+END FUNCTION
+
+FUNCTION BoxTop (title AS String, colour AS String) AS String
+    RETURN "<table width=""100%"" cellpadding=""3"" cellspacing=""0""><tr><td bgcolor=""" + colour + """><font color=""#FFFFFF"" size=""2""><b>" + title + "</b></font></td></tr></table>"
+END FUNCTION
+
+FUNCTION Notice (text AS String) AS String
+    IF text = "" THEN RETURN ""
+    RETURN "<table width=""100%"" cellpadding=""4""><tr><td bgcolor=""#FFFFCC""><font size=""2"">" + H(text) + "</font></td></tr></table>"
+END FUNCTION
+
+FUNCTION HoodOptions (current AS String) AS String
+    VAR out AS String
+    VAR entry AS String
+    VAR p AS Array OF String
+    FOR EACH entry IN Hoods()
+        p = entry.Split("|")
+        IF p[0] = current.Upper() THEN
+            out = out + "<option value=""" + p[0] + """ selected>" + p[1] + "</option>"
+        ELSE
+            out = out + "<option value=""" + p[0] + """>" + p[1] + "</option>"
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION TemplateOptions () AS String
+    VAR out AS String
+    VAR t AS String
+    FOR EACH t IN Templates()
+        out = out + "<option value=""" + t.Split("|")[0] + """>" + t.Split("|")[1] + "</option>"
+    NEXT
+    RETURN out
+END FUNCTION
+
+' A text box that counts down as you type, and the page script that does the
+' counting (as in SimBook). Voyager sends a whole form as one 64K message and a
+' text area has no maxlength, so this greys out the button (id="go") while a
+' box holds too much. The server checks again anyway.
+FUNCTION LimitedBox (name AS String, value AS String, rows AS Integer, cols AS Integer, most AS Integer) AS String
+    RETURN "<textarea name=""" + name + """ id=""" + name + """ rows=""" + Str(rows) + """ cols=""" + Str(cols) + """ onchange=""Limits_Check"">" + H(value) + "</textarea><br>" _
+         + "<font size=""1"" color=""#808080"" id=""" + name + "_n"">up to " + Str(most) + " characters</font>"
+END FUNCTION
+
+FUNCTION LimitScript (names AS String, limits AS String) AS String
+    RETURN "<script type=""spark"">" + Chr(10) _
+         + "SUB Limits_Check ()" + Chr(10) _
+         + "    VAR names AS Array OF String" + Chr(10) _
+         + "    VAR limits AS Array OF String" + Chr(10) _
+         + "    VAR i AS Integer" + Chr(10) _
+         + "    VAR n AS Integer" + Chr(10) _
+         + "    VAR most AS Integer" + Chr(10) _
+         + "    VAR fits AS Bool = TRUE" + Chr(10) _
+         + "    names = """ + names + """.Split("","")" + Chr(10) _
+         + "    limits = """ + limits + """.Split("","")" + Chr(10) _
+         + "    FOR i = 0 TO names.Count - 1" + Chr(10) _
+         + "        n = PAGE.Get(names[i]).Value.Length" + Chr(10) _
+         + "        most = Int(Val(limits[i]))" + Chr(10) _
+         + "        IF n > most THEN" + Chr(10) _
+         + "            PAGE.Get(names[i] + ""_n"").Text = Str(n - most) + "" characters too many""" + Chr(10) _
+         + "            fits = FALSE" + Chr(10) _
+         + "        ELSE" + Chr(10) _
+         + "            PAGE.Get(names[i] + ""_n"").Text = Str(most - n) + "" characters left""" + Chr(10) _
+         + "        END IF" + Chr(10) _
+         + "    NEXT" + Chr(10) _
+         + "    PAGE.Get(""go"").Enabled = fits" + Chr(10) _
+         + "END SUB" + Chr(10) _
+         + "</script>"
+END FUNCTION
