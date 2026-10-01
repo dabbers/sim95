@@ -1,10 +1,15 @@
 <%@ import file="ASK.SPK" %>
 <%
-' CACHE.ASP?id=N - the page as the crawler last saw it, under a banner. Handy
+' CACHE.ASP?id=N (or ?url=...) - the page as the crawler last saw it, under a banner. Handy
 ' when the machine it lives on has gone away.
 VAR id AS String
 VAR doc AS Array OF String
 id = REQUEST.Query("id")
+' CACHE.ASP?url=http://... finds the page by its address
+IF id = "" AND REQUEST.Query("url") <> "" THEN
+    id = DocIdOf(REQUEST.Query("url"))
+    IF id = "" THEN RESPONSE.Redirect("index.asp?q=" + UrlEnc("site:" + REQUEST.Query("url").Replace("http://", "").Split("/")[0]))
+END IF
 IF DocLine(id) = "" OR id.Contains("\") OR id.Contains(".") THEN RESPONSE.Redirect("index.asp")
 doc = DocLine(id).Split("|")
 %><meta name="robots" content="noindex,nofollow">

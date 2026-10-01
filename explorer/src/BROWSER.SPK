@@ -1,0 +1,2197 @@
+' BROWSER.SPK - Microsoft Internet Explorer for SIM95: the window, fetching,
+' and the glue between pages and the JavaScript engine (JSCRIPT.SPK). The
+' builder joins the two into C:\PROGRAMS\IEXPLORE.SPK.
+'
+' How a page is shown:
+'   1. It is fetched with HTTP/1.0, the way Voyager does (same cookie jar).
+'   2. Its <script> blocks come out (SPARK ones are left to Voyager).
+'   3. Forms and event attributes are rewritten so the page talks to us:
+'      every form field gets an id, onclick="code" becomes onclick="js:N"
+'      (N indexes the code here), and every form's action becomes
+'      "iesubmit:N" so a sent form comes back to us first, for its onsubmit.
+'   4. The scripts run in order, and what they document.write() takes their
+'      place. Then the page is drawn, and <body onload> runs.
+'
+' Everything that waits on the network starts from a timer tick of its own,
+' inside a TRY with an empty CATCH: see the note in SIM95-NOTES.md.
+'
+' Files: C:\SYSTEM\IEXPLORE.INI (home, search, mail), C:\SYSTEM\FAVORITE.TXT
+' (title|url), C:\SYSTEM\HISTORY.TXT (when|title|url), and Voyager's
+' C:\SYSTEM\COOKIES.TXT (HOST|name|value).
+
+CONST IETITLE = "Microsoft Internet Explorer"
+CONST IEAGENT = "Mozilla/2.0 (compatible; MSIE 3.02; SIM95)"
+CONST IEPATH = "C:\PROGRAMS\IEXPLORE.SPK"
+CONST INIFILE = "C:\SYSTEM\IEXPLORE.INI"
+CONST FAVFILE = "C:\SYSTEM\FAVORITE.TXT"
+CONST HISTFILE = "C:\SYSTEM\HISTORY.TXT"
+CONST JARFILE = "C:\SYSTEM\COOKIES.TXT"
+CONST BOOKFILE = "C:\SYSTEM\BOOKMARK.TXT"
+CONST PATIENCE = 6000          ' milliseconds to wait for a server, as Voyager does
+CONST TICKMS = 50                ' the clock: fetches, timers, the spinning logo
+CONST MAXIMAGES = 40           ' pictures kept for the next page
+
+VAR EOL AS String
+
+' ---------------------------------------------------------------- the window
+VAR win AS GUI_Window
+VAR bar AS GUI_Menu
+VAR bBack AS GUI_Button
+VAR bForward AS GUI_Button
+VAR bStop AS GUI_Button
+VAR bRefresh AS GUI_Button
+VAR bHome AS GUI_Button
+VAR bSearch AS GUI_Button
+VAR bFavorites AS GUI_Button
+VAR bHistory AS GUI_Button
+VAR bMail AS GUI_Button
+VAR throb AS GUI_Canvas
+VAR lblAddress AS GUI_Label
+VAR address AS GUI_TextBox
+VAR bGo AS GUI_Button
+VAR view AS GUI_HtmlView
+VAR progress AS GUI_ProgressBar
+VAR zone AS GUI_Label
+VAR clock AS GUI_Timer
+VAR web AS NET_Socket
+VAR favMenu AS Array OF String     ' the Favorites items as they are in the menu
+
+' ---------------------------------------------------------------- settings
+VAR optHome AS String
+VAR optSearch AS String            ' with %s where the words go
+VAR optMail AS String
+
+' ---------------------------------------------------------------- where we are
+VAR hist AS Array OF String        ' Back and Forward
+VAR histPos AS Integer = -1
+VAR curUrl AS String
+VAR curSource AS String            ' the page as it came, for View Source
+VAR curTitle AS String
+VAR curStatus AS String = "Done"
+VAR referrer AS String
+VAR throbStep AS Integer
+
+' ---------------------------------------------------------------- fetching
+' One fetch at a time: the page first, then its pictures.
+VAR pPending AS Bool               ' a page is wanted
+VAR pUrl AS String
+VAR pBody AS String                ' POST body, or "" for GET
+VAR pPost AS Bool
+VAR pHist AS Bool                  ' add it to Back/Forward
+VAR pHops AS Integer               ' redirects followed so far
+VAR imgWant AS Array OF String     ' absolute URLs still to fetch
+VAR imgSrc AS Array OF String      ' the src the page used for each
+VAR imgUrls AS Array OF String     ' pictures already here
+VAR imgData AS Array OF String
+
+VAR fetching AS Bool
+VAR fKind AS String                ' "page" or "img"
+VAR fUrl AS String
+VAR fSrc AS String
+VAR fNumber AS Integer
+VAR fParts AS Array OF String
+VAR fDone AS Bool
+VAR fSince AS Integer
+VAR fError AS String
+VAR fStatus AS Integer
+VAR fHeaders AS Array OF String    ' "name: value", names in lower case
+VAR fBodyText AS String
+
+' ---------------------------------------------------------------- the page's scripts
+VAR busy AS Bool                   ' the engine or the page is in use: events wait
+VAR rendered AS Bool               ' the HtmlView has the page
+VAR scriptsOn AS Bool              ' FALSE once the user says No to a script error
+VAR sparkSubs AS String            ' "|name|" for every SUB in a SPARK script (Voyager's)
+VAR scCode AS Array OF String      ' the page's JavaScript blocks, in order
+VAR scLine AS Array OF Integer     ' the line each starts on
+VAR hCode AS Array OF String       ' js:N handlers: the code
+VAR hHref AS Array OF String       ' for a link, where it goes afterwards
+VAR hAfter AS Array OF String      ' "submit:form:field" to send a form afterwards
+VAR hThis AS Array OF String       ' the element's id, for this
+VAR fmAction AS Array OF String
+VAR fmMethod AS Array OF String
+VAR fmName AS Array OF String
+VAR fmSubmit AS Array OF String    ' onsubmit code
+VAR fmObj AS Array OF Integer      ' its object in the engine (0 until registered)
+VAR fdForm AS Array OF Integer
+VAR fdName AS Array OF String
+VAR fdId AS Array OF String
+VAR fdType AS Array OF String
+VAR fdValue AS Array OF String
+VAR shKey AS Array OF String       ' "id|Prop" for elements the view does not have (yet)
+VAR shVal AS Array OF String
+VAR shDirty AS Array OF String     ' shKey entries a script changed before the page was drawn
+VAR inForm AS Integer = -1
+VAR autoIds AS Integer             ' ids given to elements that had none
+VAR bodyOnload AS String
+VAR refreshAt AS Integer
+VAR refreshUrl AS String
+VAR tmId AS Array OF Integer       ' setTimeout / setInterval
+VAR tmDue AS Array OF Integer
+VAR tmCode AS Array OF String
+VAR tmFn AS Array OF String
+VAR tmEvery AS Array OF Integer
+VAR tmNext AS Integer = 1
+
+' ================================================================ start
+
+SUB Main ()
+    VAR first AS String
+    EOL = Chr(10)
+    LoadSettings()
+    win = GUI_Window.New(IETITLE, 720, 480)
+    win.Icon = "voyager"
+    win.Resizable = TRUE
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    win.onKey = Win_OnKey
+
+    bar = GUI_Menu.New(win)
+    bar.onSelect = Menu_OnSelect
+    bar.AddMenu("&File")
+    bar.AddItem("&File", "&New Window" + Chr(9) + "Ctrl+N")
+    bar.AddItem("&File", "&Open..." + Chr(9) + "Ctrl+O")
+    bar.AddItem("&File", "Save &As File...")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "&Close")
+    bar.AddMenu("&View")
+    bar.AddItem("&View", "&Stop" + Chr(9) + "Esc")
+    bar.AddItem("&View", "&Refresh" + Chr(9) + "F5")
+    bar.AddItem("&View", "Sour&ce")
+    bar.AddSeparator("&View")
+    bar.AddItem("&View", "&Options...")
+    bar.AddMenu("&Go")
+    bar.AddItem("&Go", "&Back" + Chr(9) + "Alt+Left")
+    bar.AddItem("&Go", "&Forward" + Chr(9) + "Alt+Right")
+    bar.AddSeparator("&Go")
+    bar.AddItem("&Go", "&Start Page")
+    bar.AddItem("&Go", "Search the &Web")
+    bar.AddItem("&Go", "Read &Mail")
+    bar.AddSeparator("&Go")
+    bar.AddItem("&Go", "Open &History Folder")
+    bar.AddMenu("F&avorites")
+    BuildFavoritesMenu()
+    bar.AddMenu("&Help")
+    bar.AddItem("&Help", "&About Internet Explorer")
+
+    bBack = ToolButton("&Back")
+    bBack.onClick = Back_Click
+    bForward = ToolButton("&Forward")
+    bForward.onClick = Forward_Click
+    bStop = ToolButton("Stop")
+    bStop.onClick = Stop_Click
+    bRefresh = ToolButton("&Refresh")
+    bRefresh.onClick = Refresh_Click
+    bHome = ToolButton("&Home")
+    bHome.onClick = Home_Click
+    bSearch = ToolButton("&Search")
+    bSearch.onClick = Search_Click
+    bFavorites = ToolButton("Fa&vorites")
+    bFavorites.onClick = Favorites_Click
+    bHistory = ToolButton("H&istory")
+    bHistory.onClick = History_Click
+    bMail = ToolButton("&Mail")
+    bMail.onClick = Mail_Click
+    throb = GUI_Canvas.New(win)
+    throb.onDraw = Throb_OnDraw
+    throb.onMouseDown = Throb_OnMouseDown
+    lblAddress = GUI_Label.New(win)
+    lblAddress.Text = "A&ddress"
+    address = GUI_TextBox.New(win)
+    address.onEnter = Address_OnEnter
+    bGo = GUI_Button.New(win)
+    bGo.Text = "Go"
+    bGo.onClick = Go_Click
+    view = GUI_HtmlView.New(win)
+    view.onNavigate = View_OnNavigate
+    view.onSubmit = View_OnSubmit
+    view.onScript = View_OnScript
+    view.onStatus = View_OnStatus
+    view.onImage = View_OnImage
+    progress = GUI_ProgressBar.New(win)
+    progress.Max = 100
+    zone = GUI_Label.New(win)
+    zone.Align = "right"
+    Win_OnResize()
+
+    web = NET_Socket.New()
+    web.onMessage = Web_OnMessage
+    web.onClose = Web_OnClose
+    clock = GUI_Timer.New(win)
+    clock.Interval = TICKMS
+    clock.onTick = Clock_OnTick
+    clock.Start()
+
+    JsReset()
+    Buttons()
+    win.Status = "Done"
+    win.Show()
+    first = optHome
+    IF SYS.Args.Count > 0 THEN
+        IF SYS.Args[0].Trim() <> "" THEN first = SYS.Args[0]
+    END IF
+    IF first = "" THEN first = "about:blank"
+    Go(Typed(first))
+END SUB
+
+FUNCTION ToolButton (text AS String) AS GUI_Button
+    VAR b AS GUI_Button
+    b = GUI_Button.New(win)
+    b.Text = text
+    RETURN b
+END FUNCTION
+
+SUB Win_OnResize ()
+    VAR w AS Integer
+    w = win.Width
+    bBack.SetBounds(4, 3, 62, 24)
+    bForward.SetBounds(68, 3, 62, 24)
+    bStop.SetBounds(132, 3, 62, 24)
+    bRefresh.SetBounds(196, 3, 62, 24)
+    bHome.SetBounds(260, 3, 62, 24)
+    bSearch.SetBounds(324, 3, 62, 24)
+    bFavorites.SetBounds(388, 3, 62, 24)
+    bHistory.SetBounds(452, 3, 62, 24)
+    bMail.SetBounds(516, 3, 62, 24)
+    throb.SetBounds(w - 44, 2, 42, 50)
+    lblAddress.SetBounds(6, 35, 50, 14)
+    address.SetBounds(58, 31, w - 140, 21)
+    bGo.SetBounds(w - 80, 31, 32, 21)
+    view.SetBounds(2, 56, w - 4, win.Height - 78)
+    progress.SetBounds(w - 260, win.Height - 19, 120, 16)
+    zone.SetBounds(w - 136, win.Height - 18, 132, 14)
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+SUB Win_OnKey (key AS String)
+    SELECT CASE key
+        CASE "Alt+ArrowLeft"
+            Back_Click()
+        CASE "Alt+ArrowRight"
+            Forward_Click()
+        CASE "Escape"
+            Stop_Click()
+        CASE "F5"
+            Refresh_Click()
+        CASE "Ctrl+N"
+            Menu_OnSelect("New Window")
+        CASE "Ctrl+O", "Ctrl+L"
+            Menu_OnSelect("Open...")
+        CASE "Ctrl+D"
+            AddFavorite()
+    END SELECT
+END SUB
+
+' ---------------------------------------------------------------- settings
+
+SUB LoadSettings ()
+    VAR line AS String
+    VAR here AS String
+    here = "http://" + NET.HostName.Lower() + "/"
+    IF NOT FS.Exists(INIFILE) THEN
+        ' First run: home is this machine, and the search engine and mail are
+        ' this machine's AskSim and ColdMail when it has them.
+        optHome = here
+        IF FS.Exists("C:\WEB\ASK.SPK") THEN optSearch = here + "index.asp?q=%s"
+        IF FS.Exists("C:\WEB\MAIL.SPK") THEN optMail = here
+        SaveSettings()
+        IF NOT FS.Exists(FAVFILE) THEN ImportBookmarks()
+        RETURN
+    END IF
+    FOR EACH line IN FS.Read(INIFILE).Lines()
+        IF line.StartsWith("home=") THEN optHome = line.Substring(5, line.Length - 5).Trim()
+        IF line.StartsWith("search=") THEN optSearch = line.Substring(7, line.Length - 7).Trim()
+        IF line.StartsWith("mail=") THEN optMail = line.Substring(5, line.Length - 5).Trim()
+    NEXT
+END SUB
+
+SUB SaveSettings ()
+    TRY
+        FS.Write(INIFILE, "[Internet Explorer]" + EOL + "home=" + optHome + EOL + "search=" + optSearch + EOL + "mail=" + optMail + EOL)
+    CATCH err
+    END TRY
+END SUB
+
+' Internet Explorer imports your Netscape bookmarks; this one, Voyager's.
+SUB ImportBookmarks ()
+    VAR out AS String
+    IF FS.Exists(BOOKFILE) THEN out = FS.Read(BOOKFILE)
+    IF out <> "" AND NOT out.EndsWith(EOL) THEN out = out + EOL
+    TRY
+        FS.Write(FAVFILE, out)
+    CATCH err
+    END TRY
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+' ---------------------------------------------------------------- addresses
+
+FUNCTION HasScheme (u AS String) AS Bool
+    VAR c AS Integer
+    c = u.IndexOf(":")
+    IF c < 2 THEN RETURN FALSE
+    RETURN OnlyChars(u.Substring(0, c).Lower(), "abcdefghijklmnopqrstuvwxyz")
+END FUNCTION
+
+' "bravo/x.htm" -> "http://bravo/x.htm"; host in lower case, a path always.
+FUNCTION Normal (u AS String) AS String
+    VAR rest AS String
+    VAR host AS String
+    VAR path AS String
+    u = u.Trim()
+    IF NOT HasScheme(u) THEN u = "http://" + u
+    IF NOT u.Lower().StartsWith("http://") THEN RETURN u
+    rest = u.Substring(7, u.Length - 7)
+    IF rest.Contains("/") THEN
+        host = rest.Substring(0, rest.IndexOf("/"))
+        path = rest.Substring(rest.IndexOf("/"), rest.Length - rest.IndexOf("/"))
+    ELSE
+        host = rest
+        path = "/"
+        IF host.Contains("?") THEN
+            path = "/" + host.Substring(host.IndexOf("?"), host.Length - host.IndexOf("?"))
+            host = host.Substring(0, host.IndexOf("?"))
+        END IF
+    END IF
+    IF host.EndsWith(":80") THEN host = host.Substring(0, host.Length - 3)
+    RETURN "http://" + host.Lower() + Dots(path)
+END FUNCTION
+
+' Takes out ./ and dir/../ from a path (the query is left alone).
+FUNCTION Dots (path AS String) AS String
+    VAR query AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR p AS String
+    IF path.Contains("?") THEN
+        query = path.Substring(path.IndexOf("?"), path.Length - path.IndexOf("?"))
+        path = path.Substring(0, path.IndexOf("?"))
+    END IF
+    IF NOT path.Contains("./") THEN RETURN path + query
+    parts = path.Split("/")
+    FOR EACH p IN parts
+        IF p = ".." THEN
+            IF out.Count > 1 THEN out.RemoveAt(out.Count - 1)
+        ELSEIF p <> "." THEN
+            out.Add(p)
+        END IF
+    NEXT
+    p = out.Join("/")
+    IF path.EndsWith("/.") OR path.EndsWith("/..") THEN p = p + "/"
+    IF NOT p.StartsWith("/") THEN p = "/" + p
+    RETURN p + query
+END FUNCTION
+
+FUNCTION HostOf (u AS String) AS String
+    VAR rest AS String
+    IF NOT u.Lower().StartsWith("http://") THEN RETURN ""
+    rest = u.Substring(7, u.Length - 7)
+    IF rest.Contains("/") THEN rest = rest.Substring(0, rest.IndexOf("/"))
+    IF rest.Contains(":") THEN rest = rest.Substring(0, rest.IndexOf(":"))
+    RETURN rest
+END FUNCTION
+
+FUNCTION PortOf (u AS String) AS Integer
+    VAR rest AS String
+    rest = u.Substring(7, u.Length - 7)
+    IF rest.Contains("/") THEN rest = rest.Substring(0, rest.IndexOf("/"))
+    IF NOT rest.Contains(":") THEN RETURN 80
+    RETURN Int(Val(rest.Substring(rest.IndexOf(":") + 1, rest.Length - rest.IndexOf(":") - 1)))
+END FUNCTION
+
+' The path and query, without any #fragment.
+FUNCTION PathOf (u AS String) AS String
+    VAR rest AS String
+    rest = u.Substring(7, u.Length - 7)
+    IF rest.Contains("#") THEN rest = rest.Substring(0, rest.IndexOf("#"))
+    IF NOT rest.Contains("/") THEN RETURN "/"
+    RETURN rest.Substring(rest.IndexOf("/"), rest.Length - rest.IndexOf("/"))
+END FUNCTION
+
+' A link on the page at base, as a full address.
+FUNCTION Absolute (base AS String, href AS String) AS String
+    VAR h AS String
+    VAR origin AS String
+    VAR path AS String
+    h = href.Trim()
+    IF h = "" THEN RETURN base
+    IF HasScheme(h) THEN
+        IF h.Lower().StartsWith("http:") THEN RETURN Normal(h)
+        RETURN h
+    END IF
+    IF base.Lower().StartsWith("file:") THEN
+        IF h.Contains(":\") THEN RETURN "file:" + h
+        RETURN base.Substring(0, LastAt(base, "\") + 1) + h.Replace("/", "\")
+    END IF
+    IF NOT base.Lower().StartsWith("http://") THEN RETURN Normal(h)
+    IF h.StartsWith("//") THEN RETURN Normal("http:" + h)
+    origin = "http://" + base.Substring(7, base.Length - 7).Split("/")[0]
+    path = PathOf(base)
+    IF h.StartsWith("/") THEN RETURN Normal(origin + h)
+    IF h.StartsWith("?") THEN
+        IF path.Contains("?") THEN path = path.Substring(0, path.IndexOf("?"))
+        RETURN Normal(origin + path + h)
+    END IF
+    IF h.StartsWith("#") THEN RETURN Normal(origin + path) + h
+    IF path.Contains("?") THEN path = path.Substring(0, path.IndexOf("?"))
+    RETURN Normal(origin + Folder(path) + h)
+END FUNCTION
+
+FUNCTION LastAt (s AS String, part AS String) AS Integer
+    VAR at AS Integer
+    VAR found AS Integer = -1
+    at = s.IndexOf(part)
+    WHILE at >= 0
+        found = found + at + 1
+        s = s.Substring(at + 1, s.Length - at - 1)
+        at = s.IndexOf(part)
+    END WHILE
+    RETURN found
+END FUNCTION
+
+' "/a/b.htm" -> "/a/"
+FUNCTION Folder (path AS String) AS String
+    VAR parts AS Array OF String
+    parts = path.Split("/")
+    RETURN path.Substring(0, path.Length - parts[parts.Count - 1].Length)
+END FUNCTION
+
+' What was typed in the Address box: an address, or (IE's AutoSearch) words
+' to look up: "? chess", "go chess", "find chess clubs", or any words at all.
+FUNCTION Typed (t AS String) AS String
+    VAR low AS String
+    t = t.Trim()
+    low = t.Lower()
+    IF t = "" THEN RETURN ""
+    IF low.StartsWith("? ") THEN RETURN SearchUrl(t.Substring(2, t.Length - 2))
+    IF low.StartsWith("go ") THEN RETURN SearchUrl(t.Substring(3, t.Length - 3))
+    IF low.StartsWith("find ") THEN RETURN SearchUrl(t.Substring(5, t.Length - 5))
+    IF HasScheme(t) THEN
+        IF low.StartsWith("http:") THEN RETURN Normal(t)
+        RETURN t
+    END IF
+    IF t.Contains(" ") THEN RETURN SearchUrl(t)
+    IF t.Contains(":\") THEN RETURN "file:" + t
+    RETURN Normal(t)
+END FUNCTION
+
+FUNCTION SearchUrl (words AS String) AS String
+    IF optSearch = "" THEN RETURN "about:search?" + UrlEnc(words.Trim())
+    RETURN optSearch.Replace("%s", UrlEnc(words.Trim()))
+END FUNCTION
+
+FUNCTION UrlEnc (s AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR c AS String
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i)
+        IF c = " " THEN
+            out = out + "+"
+        ELSEIF OnlyChars(c, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.*") THEN
+            out = out + c
+        ELSEIF Asc(c) < 16 THEN
+            out = out + "%0" + Hex(Asc(c))
+        ELSEIF Asc(c) < 256 THEN
+            out = out + "%" + Hex(Asc(c))
+        ELSE
+            out = out + "%3F"
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION UrlDec (s AS String) AS String
+    RETURN JsUnescape(s.Replace("+", " "))
+END FUNCTION
+
+' Text safe to put in a page.
+FUNCTION Esc (s AS String) AS String
+    RETURN s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("""", "&quot;")
+END FUNCTION
+
+FUNCTION Unentity (s AS String) AS String
+    RETURN s.Replace("&quot;", """").Replace("&#39;", "'").Replace("&lt;", "<").Replace("&gt;", ">").Replace("&nbsp;", " ").Replace("&amp;", "&")
+END FUNCTION
+
+' ================================================================ going places
+
+' Asks for a page. It is fetched on the next tick, never in the middle of a
+' script or an event.
+SUB Go (url AS String)
+    GoWith(url, "", FALSE, TRUE)
+END SUB
+
+SUB GoWith (url AS String, body AS String, post AS Bool, addHist AS Bool)
+    IF url = "" THEN RETURN
+    pUrl = url
+    pBody = body
+    pPost = post
+    pHist = addHist
+    pHops = 0
+    pPending = TRUE
+    ' a page that is still arriving is forgotten
+    IF fetching AND fKind = "page" THEN CancelFetch()
+    imgWant.Clear()
+    imgSrc.Clear()
+    Buttons()
+END SUB
+
+SUB CancelFetch ()
+    fetching = FALSE
+    fNumber = fNumber + 1
+    TRY
+        web.Close()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Buttons ()
+    bBack.Enabled = histPos > 0
+    bForward.Enabled = histPos < hist.Count - 1
+    bStop.Enabled = pPending OR fetching
+END SUB
+
+SUB Back_Click ()
+    IF histPos > 0 THEN
+        histPos = histPos - 1
+        GoWith(hist[histPos], "", FALSE, FALSE)
+    END IF
+END SUB
+
+SUB Forward_Click ()
+    IF histPos < hist.Count - 1 THEN
+        histPos = histPos + 1
+        GoWith(hist[histPos], "", FALSE, FALSE)
+    END IF
+END SUB
+
+SUB Stop_Click ()
+    pPending = FALSE
+    IF fetching THEN CancelFetch()
+    imgWant.Clear()
+    imgSrc.Clear()
+    refreshAt = 0
+    progress.Value = 0
+    SetStatus("Done")
+    Buttons()
+    DrawThrob()
+END SUB
+
+SUB Refresh_Click ()
+    IF curUrl <> "" THEN GoWith(curUrl, "", FALSE, FALSE)
+END SUB
+
+SUB Home_Click ()
+    IF optHome = "" THEN
+        Go("about:blank")
+    ELSE
+        Go(Typed(optHome))
+    END IF
+END SUB
+
+SUB Search_Click ()
+    IF optSearch = "" THEN
+        Go("about:search")
+    ELSE
+        Go(optSearch.Replace("%s", "").Replace("?q=", "").Replace("&q=", ""))
+    END IF
+END SUB
+
+SUB Mail_Click ()
+    IF optMail = "" THEN
+        Go("about:mail")
+    ELSE
+        Go(Typed(optMail))
+    END IF
+END SUB
+
+SUB Favorites_Click ()
+    Go("about:favorites")
+END SUB
+
+SUB History_Click ()
+    Go("about:history")
+END SUB
+
+SUB Address_OnEnter ()
+    Go(Typed(address.Text))
+END SUB
+
+SUB Go_Click ()
+    Go(Typed(address.Text))
+END SUB
+
+SUB SetStatus (text AS String)
+    curStatus = text
+    win.Status = text
+END SUB
+
+' ================================================================ the clock
+
+SUB Clock_OnTick ()
+    ' Nothing may come after this TRY: a tick whose Connect failed is
+    ' spoiled (see SIM95-NOTES.md), and this is how it ends quietly.
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
+    throbStep = throbStep + 1
+    IF (pPending OR fetching) AND throbStep MOD 2 = 0 THEN DrawThrob()
+    IF NOT busy THEN
+        TRY
+            IF fetching AND (fDone OR SYS.Ticks - fSince > PATIENCE) THEN Arrived()
+            IF pPending AND NOT fetching AND NOT pUrl.Lower().StartsWith("http:") THEN ShowLocal()
+            IF NOT busy THEN RunTimers()
+            IF refreshAt > 0 AND SYS.Ticks >= refreshAt AND NOT pPending AND NOT busy THEN
+                refreshAt = 0
+                GoWith(refreshUrl, "", FALSE, refreshUrl <> curUrl)
+            END IF
+        CATCH problem
+            busy = FALSE
+            fetching = FALSE
+            Oops(problem)
+        END TRY
+    END IF
+    ' Last of all, because it may be spoiled: start the next fetch.
+    IF NOT fetching AND NOT busy THEN
+        IF pPending THEN
+            StartFetch("page", pUrl, "")
+        ELSEIF imgWant.Count > 0 THEN
+            fSrc = imgSrc[0]
+            imgSrc.RemoveAt(0)
+            fUrl = imgWant[0]
+            imgWant.RemoveAt(0)
+            StartFetch("img", fUrl, fSrc)
+        END IF
+    END IF
+END SUB
+
+SUB Oops (problem AS String)
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = IETITLE
+    box.Kind = "error"
+    box.Text = "Internet Explorer has run into a problem of its own:" + EOL + EOL + problem
+    box.Show()
+END SUB
+
+' ================================================================ fetching
+
+' Opens the connection and sends the request, as Voyager does. What comes back
+' arrives through Web_OnMessage until the server closes.
+SUB StartFetch (kind AS String, url AS String, src AS String)
+    VAR conn AS NET_Connection
+    VAR request AS String
+    VAR cookie AS String
+    fetching = TRUE
+    fKind = kind
+    fUrl = url
+    fSrc = src
+    fNumber = fNumber + 1
+    fParts.Clear()
+    fDone = FALSE
+    fSince = SYS.Ticks
+    fError = ""
+    IF kind = "page" THEN
+        pPending = FALSE
+        progress.Value = 10
+        SetStatus("Finding site: " + HostOf(url))
+        Buttons()
+        request = "GET"
+        IF pPost THEN request = "POST"
+    ELSE
+        request = "GET"
+    END IF
+    request = request + " " + PathOf(url) + " HTTP/1.0" + EOL + "Host: " + HostOf(url) + EOL + "User-Agent: " + IEAGENT + EOL + "Accept: */*"
+    IF kind = "page" AND referrer.StartsWith("http:") THEN request = request + EOL + "Referer: " + referrer
+    cookie = CookieHeader(HostOf(url))
+    IF cookie <> "" THEN request = request + EOL + "Cookie: " + cookie
+    IF kind = "page" AND pPost THEN
+        request = request + EOL + "Content-Type: application/x-www-form-urlencoded" + EOL + "Content-Length: " + Str(pBody.Length) + EOL + EOL + pBody
+    ELSE
+        request = request + EOL
+    END IF
+    IF request.Length > 65000 THEN
+        fError = "Message too long: the form is too big to send."
+        fDone = TRUE
+        RETURN
+    END IF
+    TRY
+        conn = web.Connect(HostOf(url), PortOf(url))
+        conn.Tag = Str(fNumber)
+        IF kind = "page" THEN
+            progress.Value = 40
+            SetStatus("Web site found. Waiting for reply...")
+        END IF
+        conn.Send(request)
+    CATCH err
+        fError = err
+        fDone = TRUE
+    END TRY
+    ' Nothing else may wait in this tick.
+END SUB
+
+SUB Web_OnMessage (conn AS NET_Connection, message AS String)
+    IF conn.Tag = Str(fNumber) AND fetching AND NOT fDone THEN
+        fParts.Add(message)
+        IF fKind = "page" THEN progress.Value = 70
+    END IF
+END SUB
+
+SUB Web_OnClose (conn AS NET_Connection)
+    IF conn.Tag = Str(fNumber) THEN fDone = TRUE
+END SUB
+
+' The response is in: fStatus (0 when there was none), fHeaders, fBodyText.
+SUB ReadResponse ()
+    VAR raw AS String
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR line AS String
+    VAR body AS Array OF String
+    fStatus = 0
+    fHeaders.Clear()
+    fBodyText = ""
+    raw = fParts.Join(EOL)
+    IF fError <> "" THEN RETURN
+    IF raw = "" THEN
+        fError = "Connection timed out"
+        RETURN
+    END IF
+    IF NOT raw.StartsWith("HTTP/") THEN
+        ' an old-fashioned server that sends just the page
+        fStatus = 200
+        fBodyText = raw
+        RETURN
+    END IF
+    lines = raw.Split(EOL)
+    fStatus = Int(Val(lines[0].Split(" ")[1]))
+    i = 1
+    WHILE i < lines.Count
+        line = lines[i].Replace(Chr(13), "")
+        i = i + 1
+        IF line.Trim() = "" THEN BREAK
+        IF line.Contains(":") THEN fHeaders.Add(line.Substring(0, line.IndexOf(":")).Trim().Lower() + ": " + line.Substring(line.IndexOf(":") + 1, line.Length - line.IndexOf(":") - 1).Trim())
+    END WHILE
+    WHILE i < lines.Count
+        body.Add(lines[i])
+        i = i + 1
+    END WHILE
+    fBodyText = body.Join(EOL)
+END SUB
+
+FUNCTION Header (name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN fHeaders
+        IF line.StartsWith(name + ": ") THEN RETURN line.Substring(name.Length + 2, line.Length - name.Length - 2)
+    NEXT
+    RETURN ""
+END FUNCTION
+
+SUB Arrived ()
+    VAR line AS String
+    VAR moved AS String
+    fetching = FALSE
+    TRY
+        web.Close()
+    CATCH err
+    END TRY
+    ReadResponse()
+    FOR EACH line IN fHeaders
+        IF line.StartsWith("set-cookie: ") THEN TakeCookie(HostOf(fUrl), line.Substring(12, line.Length - 12))
+    NEXT
+    IF fKind = "img" THEN
+        IF fStatus = 200 AND fBodyText.StartsWith("SIM95PIC") THEN
+            KeepImage(fUrl, fBodyText)
+            view.SetImage(fSrc, fBodyText)
+            ' the same picture may be on the page more than once
+            WHILE imgWant.IndexOf(fUrl) >= 0
+                view.SetImage(imgSrc[imgWant.IndexOf(fUrl)], fBodyText)
+                imgSrc.RemoveAt(imgWant.IndexOf(fUrl))
+                imgWant.RemoveAt(imgWant.IndexOf(fUrl))
+            END WHILE
+        END IF
+        IF imgWant.Count = 0 AND NOT pPending THEN
+            progress.Value = 0
+            DrawThrob()
+        END IF
+        RETURN
+    END IF
+    moved = Header("location")
+    IF fStatus >= 300 AND fStatus < 400 AND moved <> "" AND pHops < 5 THEN
+        pUrl = Absolute(fUrl, moved)
+        pPost = FALSE
+        pBody = ""
+        pHops = pHops + 1
+        pPending = TRUE
+        RETURN
+    END IF
+    IF fStatus = 0 THEN
+        CannotOpen(fUrl, fError)
+        RETURN
+    END IF
+    IF fStatus >= 400 AND fBodyText.Trim() = "" THEN
+        ShowPage(fUrl, FriendlyError(fStatus, fUrl), pHist)
+    ELSEIF fBodyText.StartsWith("SIM95PIC") THEN
+        KeepImage(fUrl, fBodyText)
+        ShowPage(fUrl, "<html><head><title>" + Esc(fUrl) + "</title></head><body><img src=""" + Esc(fUrl) + """></body></html>", pHist)
+    ELSEIF Header("content-type").StartsWith("text/plain") THEN
+        ShowPage(fUrl, "<html><body><pre>" + Esc(fBodyText) + "</pre></body></html>", pHist)
+    ELSE
+        ShowPage(fUrl, fBodyText, pHist)
+    END IF
+END SUB
+
+' Internet Explorer 3 said so in a box, and stayed where it was. This one
+' also offers AskSim's cached copy, if there is a search engine to ask.
+SUB CannotOpen (url AS String, why AS String)
+    VAR box AS GUI_MessageBox
+    VAR reason AS String
+    progress.Value = 0
+    SetStatus("Done")
+    Buttons()
+    DrawThrob()
+    reason = why
+    IF why.Contains("refused") THEN reason = "A connection with the server could not be established."
+    IF why.Contains("Unknown host") THEN reason = "The server name or address could not be resolved."
+    IF why.Contains("timed out") THEN reason = "The operation timed out."
+    box = GUI_MessageBox.New(win)
+    box.Title = IETITLE
+    box.Text = "Internet Explorer cannot open the Internet site " + url + "." + EOL + EOL + reason
+    IF optSearch <> "" AND optSearch.StartsWith("http:") THEN
+        box.Kind = "confirm"
+        box.Buttons = "yesno"
+        box.Text = box.Text + EOL + EOL + "AskSim may have kept a copy of this page. Would you like to see it?"
+        IF box.Show() THEN Go(SearchHome() + "cache.asp?url=" + UrlEnc(url))
+    ELSE
+        box.Kind = "error"
+        box.Show()
+    END IF
+    IF curUrl = "" THEN ShowPage("about:blank", "", FALSE)
+END SUB
+
+' The search engine's own folder: "http://asksim/index.asp?q=%s" -> "http://asksim/"
+FUNCTION SearchHome () AS String
+    VAR u AS String
+    u = optSearch
+    IF u.Contains("?") THEN u = u.Substring(0, u.IndexOf("?"))
+    RETURN Absolute(u, "./")
+END FUNCTION
+
+FUNCTION FriendlyError (status AS Integer, url AS String) AS String
+    VAR what AS String
+    what = "The page cannot be displayed"
+    IF status = 404 THEN what = "The page cannot be found"
+    IF status = 403 THEN what = "You are not authorized to view this page"
+    IF status >= 500 THEN what = "The page cannot be displayed"
+    RETURN "<html><head><title>" + what + "</title></head><body bgcolor=""#FFFFFF"">" _
+         + "<h3>" + what + "</h3><p>The page you are looking for might have been removed, had its name changed, or is temporarily unavailable.</p><hr>" _
+         + "<p>Please try the following:</p><ul><li>If you typed the page address in the Address bar, make sure that it is spelled correctly.</li>" _
+         + "<li>Open the <a href=""" + Esc(Absolute(url, "/")) + """>" + Esc(HostOf(url)) + "</a> home page, and then look for links to the information you want.</li>" _
+         + "<li>Click the <b>Back</b> button to try another link.</li></ul>" _
+         + "<p><font size=""2"">HTTP " + Str(status) + " - Internet Explorer</font></p></body></html>"
+END FUNCTION
+
+' ---------------------------------------------------------------- pictures
+
+SUB View_OnImage (src AS String)
+    VAR url AS String
+    VAR i AS Integer
+    url = Absolute(curUrl, src)
+    i = imgUrls.IndexOf(url)
+    IF i >= 0 THEN
+        view.SetImage(src, imgData[i])
+        RETURN
+    END IF
+    IF url.Lower().StartsWith("file:") THEN
+        TRY
+            view.SetImage(src, FS.Read(url.Substring(5, url.Length - 5)))
+        CATCH err
+        END TRY
+        RETURN
+    END IF
+    IF NOT url.StartsWith("http:") THEN RETURN
+    imgWant.Add(url)
+    imgSrc.Add(src)
+END SUB
+
+SUB KeepImage (url AS String, data AS String)
+    IF imgUrls.IndexOf(url) >= 0 THEN RETURN
+    imgUrls.Add(url)
+    imgData.Add(data)
+    IF imgUrls.Count > MAXIMAGES THEN
+        imgUrls.RemoveAt(0)
+        imgData.RemoveAt(0)
+    END IF
+END SUB
+
+' ---------------------------------------------------------------- cookies (Voyager's jar)
+
+FUNCTION CookieHeader (host AS String) AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR out AS Array OF String
+    FOR EACH line IN ReadOr(JARFILE, "").Lines()
+        p = line.Split("|")
+        IF p.Count >= 3 THEN
+            IF p[0] = host.Upper() THEN out.Add(p[1] + "=" + p[2])
+        END IF
+    NEXT
+    RETURN out.Join("; ")
+END FUNCTION
+
+' One Set-Cookie (or document.cookie = "..."): name=value; the rest is ignored.
+SUB TakeCookie (host AS String, cookie AS String)
+    VAR pair AS String
+    VAR name AS String
+    VAR value AS String
+    VAR line AS String
+    VAR out AS Array OF String
+    VAR found AS Bool
+    pair = cookie.Split(";")[0]
+    IF NOT pair.Contains("=") OR host = "" THEN RETURN
+    name = pair.Substring(0, pair.IndexOf("=")).Trim()
+    value = pair.Substring(pair.IndexOf("=") + 1, pair.Length - pair.IndexOf("=") - 1).Trim().Replace("|", "").Replace(Chr(13), "")
+    IF name = "" THEN RETURN
+    FOR EACH line IN ReadOr(JARFILE, "").Lines()
+        IF line = "" THEN CONTINUE
+        IF line.StartsWith(host.Upper() + "|" + name + "|") THEN
+            found = TRUE
+            IF value <> "" THEN out.Add(host.Upper() + "|" + name + "|" + value)
+        ELSE
+            out.Add(line)
+        END IF
+    NEXT
+    IF NOT found AND value <> "" THEN out.Add(host.Upper() + "|" + name + "|" + value)
+    TRY
+        FS.Write(JARFILE, out.Join(EOL))
+    CATCH err
+    END TRY
+END SUB
+
+' ================================================================ preparing a page
+
+' Attributes of a tag (the text between < and >), in any case, quoted or not.
+FUNCTION AttrAt (tag AS String, name AS String) AS Integer
+    VAR low AS String
+    VAR at AS Integer
+    VAR c AS String
+    low = " " + tag.Lower().Replace(Chr(10), " ").Replace(Chr(13), " ").Replace(Chr(9), " ")
+    at = low.IndexOf(" " + name)
+    WHILE at >= 0
+        c = low.Substring(at + name.Length + 1, 1)
+        IF c = "=" OR c = " " OR c = "" OR c = "/" THEN RETURN at
+        IF low.Substring(at + 1, low.Length - at - 1).IndexOf(" " + name) < 0 THEN RETURN -1
+        at = at + 1 + low.Substring(at + 1, low.Length - at - 1).IndexOf(" " + name)
+    END WHILE
+    RETURN -1
+END FUNCTION
+
+FUNCTION HasAttr (tag AS String, name AS String) AS Bool
+    RETURN AttrAt(tag, name) >= 0
+END FUNCTION
+
+' Where an attribute's text ends (one past it), from where it starts.
+FUNCTION AttrEnd (tag AS String, at AS Integer, name AS String) AS Integer
+    VAR i AS Integer
+    VAR q AS String
+    i = at + name.Length
+    WHILE i < tag.Length AND tag.CharAt(i) = " "
+        i = i + 1
+    END WHILE
+    IF i >= tag.Length OR tag.CharAt(i) <> "=" THEN RETURN at + name.Length
+    i = i + 1
+    WHILE i < tag.Length AND tag.CharAt(i) = " "
+        i = i + 1
+    END WHILE
+    IF i >= tag.Length THEN RETURN i
+    q = tag.CharAt(i)
+    IF q = """" OR q = "'" THEN
+        IF tag.Substring(i + 1, tag.Length - i - 1).IndexOf(q) < 0 THEN RETURN tag.Length
+        RETURN i + 2 + tag.Substring(i + 1, tag.Length - i - 1).IndexOf(q)
+    END IF
+    WHILE i < tag.Length AND NOT " >".Contains(tag.CharAt(i))
+        i = i + 1
+    END WHILE
+    RETURN i
+END FUNCTION
+
+FUNCTION Attr (tag AS String, name AS String) AS String
+    VAR at AS Integer
+    VAR v AS String
+    at = AttrAt(tag, name)
+    IF at < 0 THEN RETURN ""
+    v = tag.Substring(at, AttrEnd(tag, at, name) - at)
+    IF NOT v.Contains("=") THEN RETURN ""
+    v = v.Substring(v.IndexOf("=") + 1, v.Length - v.IndexOf("=") - 1).Trim()
+    IF v.StartsWith("""") OR v.StartsWith("'") THEN
+        v = v.Substring(1, v.Length - 1)
+        IF v.EndsWith("""") OR v.EndsWith("'") THEN v = v.Substring(0, v.Length - 1)
+    END IF
+    RETURN Unentity(v)
+END FUNCTION
+
+FUNCTION WithoutAttr (tag AS String, name AS String) AS String
+    VAR at AS Integer
+    VAR stop AS Integer
+    at = AttrAt(tag, name)
+    IF at < 0 THEN RETURN tag
+    ' (at is the space before the name in " " + tag, so the name starts at "at"
+    ' in tag; the space before it goes too)
+    stop = AttrEnd(tag, at, name)
+    IF at > 0 THEN at = at - 1
+    RETURN tag.Substring(0, at) + tag.Substring(stop, tag.Length - stop)
+END FUNCTION
+
+FUNCTION WithAttr (tag AS String, name AS String, value AS String) AS String
+    tag = WithoutAttr(tag, name).Trim()
+    IF tag.EndsWith("/") THEN RETURN tag.Substring(0, tag.Length - 1).Trim() + " " + name + "=""" + Esc(value) + """ /"
+    RETURN tag + " " + name + "=""" + Esc(value) + """"
+END FUNCTION
+
+FUNCTION TagName (tag AS String) AS String
+    VAR t AS String
+    t = tag.Replace(Chr(10), " ").Replace(Chr(13), " ").Replace(Chr(9), " ")
+    IF t.Contains(" ") THEN t = t.Substring(0, t.IndexOf(" "))
+    IF t.EndsWith("/") AND t.Length > 1 THEN t = t.Substring(0, t.Length - 1)
+    RETURN t.Lower()
+END FUNCTION
+
+FUNCTION LinesIn (s AS String) AS Integer
+    RETURN s.Split(EOL).Count - 1
+END FUNCTION
+
+' Step 2: the <script> blocks come out. JavaScript ones are kept in scCode
+' and leave a marker (Chr(1) n Chr(2)) where their output goes; SPARK ones
+' (Voyager's) are noted and dropped, and so is <noscript>.
+FUNCTION ExtractScripts (html AS String) AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR p AS String
+    VAR tag AS String
+    VAR code AS String
+    VAR after AS String
+    VAR line AS Integer
+    VAR lang AS String
+    VAR name AS String
+    VAR word AS String
+    parts = html.Split("<")
+    out.Add(parts[0])
+    line = 1 + LinesIn(parts[0])
+    i = 1
+    WHILE i < parts.Count
+        p = parts[i]
+        name = TagName(p.Split(">")[0])
+        IF name = "script" AND p.Contains(">") THEN
+            tag = p.Substring(0, p.IndexOf(">"))
+            code = p.Substring(p.IndexOf(">") + 1, p.Length - p.IndexOf(">") - 1)
+            j = i + 1
+            WHILE j < parts.Count AND NOT parts[j].Lower().StartsWith("/script")
+                code = code + "<" + parts[j]
+                j = j + 1
+            END WHILE
+            after = ""
+            IF j < parts.Count THEN
+                IF parts[j].Contains(">") THEN after = parts[j].Substring(parts[j].IndexOf(">") + 1, parts[j].Length - parts[j].IndexOf(">") - 1)
+            END IF
+            lang = (Attr(tag, "language") + " " + Attr(tag, "type")).Lower()
+            IF lang.Contains("spark") OR (NOT lang.Contains("java") AND NOT lang.Contains("jscript") AND (code.Upper().Contains(EOL + "END SUB") OR code.Upper().Trim().StartsWith("SUB "))) THEN
+                FOR EACH word IN code.Replace(Chr(13), "").Split(EOL)
+                    IF word.Trim().Upper().StartsWith("SUB ") THEN sparkSubs = sparkSubs + "|" + word.Trim().Substring(4, word.Trim().Length - 4).Split("(")[0].Trim().Lower() + "|"
+                NEXT
+            ELSEIF lang.Contains("vbs") THEN
+                ' VBScript: not in this edition
+            ELSEIF Attr(tag, "src") = "" THEN
+                ' HTML comments around a script were how old browsers were kept
+                ' out: they become JavaScript comments (lines stay where they are)
+                IF code.Trim().StartsWith("<!--") THEN code = code.Substring(0, code.IndexOf("<!--")) + "//" + code.Substring(code.IndexOf("<!--") + 4, code.Length - code.IndexOf("<!--") - 4)
+                IF code.Trim().EndsWith("-->") THEN code = code.Substring(0, LastAt(code, "-->")) + code.Substring(LastAt(code, "-->") + 3, code.Length - LastAt(code, "-->") - 3)
+                scCode.Add(code)
+                scLine.Add(line)
+                out.Add(Chr(1) + Str(scCode.Count - 1) + Chr(2))
+            END IF
+            FOR i = i TO Int(MATH.Min(j, parts.Count - 1))
+                line = line + LinesIn(parts[i])
+            NEXT
+            out.Add(after)
+            CONTINUE
+        END IF
+        IF name = "noscript" THEN
+            j = i + 1
+            WHILE j < parts.Count AND NOT parts[j].Lower().StartsWith("/noscript")
+                j = j + 1
+            END WHILE
+            FOR i = i TO Int(MATH.Min(j, parts.Count - 1))
+                line = line + LinesIn(parts[i])
+            NEXT
+            IF j < parts.Count THEN
+                IF parts[j].Contains(">") THEN out.Add(parts[j].Substring(parts[j].IndexOf(">") + 1, parts[j].Length - parts[j].IndexOf(">") - 1))
+            END IF
+            CONTINUE
+        END IF
+        out.Add("<" + p)
+        line = line + LinesIn(p)
+        i = i + 1
+    END WHILE
+    RETURN out.Join("")
+END FUNCTION
+
+' A js:N handler for an element.
+FUNCTION Handler (code AS String, href AS String, after AS String, thisId AS String) AS String
+    hCode.Add(code)
+    hHref.Add(href)
+    hAfter.Add(after)
+    hThis.Add(thisId)
+    RETURN "js:" + Str(hCode.Count - 1)
+END FUNCTION
+
+' Is an event attribute JavaScript, or the name of a Voyager SPARK SUB?
+FUNCTION IsSpark (code AS String) AS Bool
+    RETURN sparkSubs <> "" AND sparkSubs.Contains("|" + code.Trim().Lower() + "|")
+END FUNCTION
+
+' Step 3: forms and event attributes, for a piece of page (the page itself,
+' or what a script wrote).
+FUNCTION ProcessTags (html AS String) AS String
+    VAR parts AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR p AS String
+    VAR tag AS String
+    VAR rest AS String
+    VAR name AS String
+    VAR id AS String
+    VAR kind AS String
+    VAR ev AS String
+    VAR code AS String
+    VAR after AS String
+    VAR f AS Integer
+    VAR content AS String
+    parts = html.Split("<")
+    out.Add(parts[0])
+    FOR i = 1 TO parts.Count - 1
+        p = parts[i]
+        IF NOT p.Contains(">") THEN
+            out.Add("<" + p)
+            CONTINUE
+        END IF
+        tag = p.Substring(0, p.IndexOf(">"))
+        rest = p.Substring(p.IndexOf(">") + 1, p.Length - p.IndexOf(">") - 1)
+        name = TagName(tag)
+        id = Attr(tag, "id")
+        after = ""
+        SELECT CASE name
+            CASE "form"
+                fmAction.Add(Attr(tag, "action"))
+                fmMethod.Add(Attr(tag, "method").Lower())
+                fmName.Add(Attr(tag, "name"))
+                code = Attr(tag, "onsubmit")
+                IF IsSpark(code) THEN code = ""
+                fmSubmit.Add(code)
+                fmObj.Add(0)
+                inForm = fmAction.Count - 1
+                tag = WithAttr(WithoutAttr(tag, "onsubmit"), "action", "iesubmit:" + Str(inForm))
+            CASE "/form"
+                inForm = -1
+            CASE "input", "select", "textarea", "button"
+                kind = Attr(tag, "type").Lower()
+                IF name = "select" THEN kind = "select"
+                IF name = "textarea" THEN kind = "textarea"
+                IF name = "button" AND kind = "" THEN kind = "submit"
+                IF name = "input" AND kind = "" THEN kind = "text"
+                IF id = "" THEN
+                    autoIds = autoIds + 1
+                    id = "ief" + Str(autoIds)
+                    tag = WithAttr(tag, "id", id)
+                END IF
+                IF inForm >= 0 THEN
+                    fdForm.Add(inForm)
+                    fdName.Add(Attr(tag, "name"))
+                    fdId.Add(id)
+                    fdType.Add(kind)
+                    IF kind = "textarea" THEN
+                        content = rest
+                        IF content.Lower().Contains("</textarea") THEN content = content.Substring(0, content.Lower().IndexOf("</textarea"))
+                        fdValue.Add(Unentity(content))
+                    ELSE
+                        fdValue.Add(Attr(tag, "value"))
+                    END IF
+                    Shadow(id, "Value", fdValue[fdValue.Count - 1])
+                    Shadow(id, "Text", fdValue[fdValue.Count - 1])
+                    Shadow(id, "Checked", Str(HasAttr(tag, "checked")))
+                    Shadow(id, "TagName", name.Upper())
+                    Shadow(id, "Id", id)
+                    ' a submit button that runs script first sends its form itself
+                    IF (kind = "submit" OR kind = "image") AND Attr(tag, "onclick") <> "" AND NOT IsSpark(Attr(tag, "onclick")) THEN
+                        after = "submit:" + Str(inForm) + ":" + Str(fdId.Count - 1)
+                        tag = WithAttr(tag, "type", "button")
+                        IF kind = "image" THEN tag = WithAttr(WithoutAttr(tag, "src"), "value", Attr(tag, "alt"))
+                    END IF
+                END IF
+            CASE "body"
+                IF bodyOnload = "" AND NOT IsSpark(Attr(tag, "onload")) THEN bodyOnload = Attr(tag, "onload")
+                IF NOT IsSpark(Attr(tag, "onload")) THEN tag = WithoutAttr(tag, "onload")
+            CASE "meta"
+                IF Attr(tag, "http-equiv").Lower() = "refresh" THEN
+                    code = Attr(tag, "content")
+                    refreshAt = SYS.Ticks + Int(Val(code.Split(";")[0])) * 1000 + 1
+                    refreshUrl = curUrl
+                    IF code.Lower().Contains("url=") THEN refreshUrl = Absolute(curUrl, code.Substring(code.Lower().IndexOf("url=") + 4, code.Length - code.Lower().IndexOf("url=") - 4).Trim())
+                END IF
+        END SELECT
+        FOR EACH ev IN ["onclick", "onchange", "onenter"]
+            code = Attr(tag, ev)
+            IF code <> "" AND NOT IsSpark(code) THEN
+                IF id = "" THEN
+                    autoIds = autoIds + 1
+                    id = "iee" + Str(autoIds)
+                    tag = WithAttr(tag, "id", id)
+                END IF
+                IF name = "a" THEN
+                    tag = WithAttr(tag, ev, Handler(code, Attr(tag, "href"), "", id))
+                ELSEIF ev = "onclick" THEN
+                    tag = WithAttr(tag, ev, Handler(code, "", after, id))
+                ELSE
+                    tag = WithAttr(tag, ev, Handler(code, "", "", id))
+                END IF
+            ELSEIF ev = "onclick" AND after <> "" THEN
+                tag = WithAttr(tag, ev, Handler("", "", after, id))
+            END IF
+        NEXT
+        out.Add("<" + tag + ">" + rest)
+    NEXT
+    RETURN out.Join("")
+END FUNCTION
+
+' ---------------------------------------------------------------- elements the view has not got
+
+SUB Shadow (id AS String, prop AS String, value AS String)
+    VAR i AS Integer
+    i = shKey.IndexOf(id + "|" + prop)
+    IF i < 0 THEN
+        shKey.Add(id + "|" + prop)
+        shVal.Add(value)
+    ELSE
+        shVal[i] = value
+    END IF
+END SUB
+
+FUNCTION Shadowed (id AS String, prop AS String) AS String
+    VAR i AS Integer
+    i = shKey.IndexOf(id + "|" + prop)
+    IF i < 0 THEN RETURN ""
+    RETURN shVal[i]
+END FUNCTION
+
+' ================================================================ showing a page
+
+SUB NewPage ()
+    JsReset()
+    scCode.Clear()
+    scLine.Clear()
+    hCode.Clear()
+    hHref.Clear()
+    hAfter.Clear()
+    hThis.Clear()
+    fmAction.Clear()
+    fmMethod.Clear()
+    fmName.Clear()
+    fmSubmit.Clear()
+    fmObj.Clear()
+    fdForm.Clear()
+    fdName.Clear()
+    fdId.Clear()
+    fdType.Clear()
+    fdValue.Clear()
+    shKey.Clear()
+    shVal.Clear()
+    shDirty.Clear()
+    tmId.Clear()
+    tmDue.Clear()
+    tmCode.Clear()
+    tmFn.Clear()
+    tmEvery.Clear()
+    sparkSubs = ""
+    bodyOnload = ""
+    refreshAt = 0
+    inForm = -1
+    autoIds = 0
+    rendered = FALSE
+    scriptsOn = TRUE
+END SUB
+
+' Forms the engine has not heard of yet: document.forms, form.field.
+SUB RegisterForms ()
+    VAR f AS Integer
+    VAR k AS Integer
+    FOR f = 0 TO fmAction.Count - 1
+        IF fmObj[f] = 0 THEN
+            fmObj[f] = JsAddForm(fmName[f], f)
+            FOR k = 0 TO fdForm.Count - 1
+                IF fdForm[k] = f THEN JsAddField(fmObj[f], fdName[k], fdId[k])
+            NEXT
+        END IF
+    NEXT
+END SUB
+
+SUB ShowPage (url AS String, html AS String, addHist AS Bool)
+    VAR pageHtml AS String
+    VAR k AS Integer
+    VAR err AS String
+    VAR written AS String
+    VAR i AS Integer
+    VAR title AS String
+    busy = TRUE
+    NewPage()
+    referrer = curUrl
+    curUrl = url
+    curSource = html
+    IF addHist THEN
+        WHILE hist.Count > histPos + 1
+            hist.RemoveAt(hist.Count - 1)
+        END WHILE
+        hist.Add(url)
+        histPos = hist.Count - 1
+    END IF
+    address.Text = url
+    title = TitleOf(html)
+    curTitle = title
+    SetTitle(title)
+    IF url.StartsWith("http:") THEN
+        zone.Text = "Internet zone"
+    ELSE
+        zone.Text = "My Computer"
+    END IF
+    progress.Value = 90
+    SetStatus("Opening page " + url + "...")
+    pageHtml = ProcessTags(ExtractScripts(html))
+    RegisterForms()
+    ' the scripts, in order; what each writes goes where it was
+    FOR k = 0 TO scCode.Count - 1
+        written = ""
+        IF scriptsOn THEN
+            jsOut = ""
+            err = JsRun(scCode[k], scLine[k])
+            written = jsOut
+            jsOut = ""
+            IF err <> "" THEN ScriptError(err)
+            IF written <> "" THEN
+                written = ProcessTags(written)
+                RegisterForms()
+            END IF
+        END IF
+        pageHtml = pageHtml.Replace(Chr(1) + Str(k) + Chr(2), written)
+    NEXT
+    view.Base = url
+    view.Html = pageHtml
+    rendered = TRUE
+    ' what scripts did to fields before there were any
+    FOR EACH err IN shDirty
+        i = err.IndexOf("|")
+        HostSet(err.Substring(0, i), err.Substring(i + 1, err.Length - i - 1), Shadowed(err.Substring(0, i), err.Substring(i + 1, err.Length - i - 1)))
+    NEXT
+    shDirty.Clear()
+    IF url.StartsWith("http:") THEN RememberVisit(url, title)
+    progress.Value = 100
+    SetStatus("Done")
+    IF scCode.Count > 0 AND NOT scriptsOn THEN SetStatus("Done, but with errors on page.")
+    IF sparkSubs <> "" THEN SetStatus("Done (this page's SPARK scripts are for Voyager)")
+    Buttons()
+    busy = FALSE
+    IF bodyOnload <> "" AND scriptsOn THEN RunCode(bodyOnload, "", "")
+    IF imgWant.Count = 0 THEN progress.Value = 0
+    DrawThrob()
+END SUB
+
+FUNCTION TitleOf (html AS String) AS String
+    VAR low AS String
+    VAR a AS Integer
+    VAR b AS Integer
+    low = html.Lower()
+    a = low.IndexOf("<title")
+    IF a < 0 THEN RETURN ""
+    a = a + low.Substring(a, low.Length - a).IndexOf(">") + 1
+    b = low.Substring(a, low.Length - a).IndexOf("</title")
+    IF b < 0 THEN RETURN ""
+    RETURN Unentity(html.Substring(a, b).Replace(EOL, " ").Trim())
+END FUNCTION
+
+SUB SetTitle (title AS String)
+    IF title = "" THEN
+        win.Title = IETITLE
+    ELSE
+        win.Title = title + " - " + IETITLE
+    END IF
+END SUB
+
+' After the page is up, document.write starts a new one (as it did in 1996).
+SUB Rewrite (html AS String)
+    VAR keepUrl AS String
+    keepUrl = curUrl
+    busy = FALSE
+    ShowPage(keepUrl, html, FALSE)
+    referrer = keepUrl
+END SUB
+
+' Pages that are not on the network: about: and file:
+SUB ShowLocal ()
+    VAR url AS String
+    VAR html AS String
+    url = pUrl
+    pPending = FALSE
+    IF url.Lower().StartsWith("javascript:") THEN
+        RunJavaScriptUrl(url)
+        RETURN
+    END IF
+    IF url.Lower().StartsWith("file:") THEN
+        IF NOT FS.Exists(url.Substring(5, url.Length - 5)) THEN
+            CannotOpen(url, "The file could not be found.")
+            RETURN
+        END IF
+        html = FS.Read(url.Substring(5, url.Length - 5))
+        IF NOT url.Lower().EndsWith(".htm") AND NOT url.Lower().EndsWith(".html") AND NOT url.Lower().EndsWith(".asp") THEN
+            IF html.StartsWith("SIM95PIC") THEN
+                html = "<html><body><img src=""" + Esc(url) + """></body></html>"
+            ELSE
+                html = "<html><body><pre>" + Esc(html) + "</pre></body></html>"
+            END IF
+        END IF
+        ShowPage(url, html, pHist)
+        RETURN
+    END IF
+    IF url.Lower().StartsWith("about:") THEN
+        ShowPage(url, AboutPage(url.Substring(6, url.Length - 6)), pHist)
+        RETURN
+    END IF
+    CannotOpen(url, "Internet Explorer does not know how to open " + url.Split(":")[0] + ": addresses.")
+END SUB
+
+' ---------------------------------------------------------------- script errors
+
+' "line|message" from the engine, as Internet Explorer 3 showed it.
+SUB ScriptError (err AS String)
+    VAR box AS GUI_MessageBox
+    VAR line AS String
+    VAR message AS String
+    line = err.Substring(0, err.IndexOf("|"))
+    message = err.Substring(err.IndexOf("|") + 1, err.Length - err.IndexOf("|") - 1)
+    IF message = "@aborted" THEN
+        scriptsOn = FALSE
+        RETURN
+    END IF
+    box = GUI_MessageBox.New(win)
+    box.Title = "Internet Explorer Script Error"
+    box.Kind = "warn"
+    box.Buttons = "yesno"
+    box.Text = "An error has occurred in the script on this page." + EOL + EOL + "Line:  " + line + EOL + "Char:  1" + EOL + "Error:  " + message + EOL + "Code:  0" + EOL + "URL:  " + curUrl + EOL + EOL + "Do you want to continue running scripts on this page?"
+    IF NOT box.Show() THEN scriptsOn = FALSE
+    SetStatus("Done, but with errors on page.")
+END SUB
+
+' ---------------------------------------------------------------- events from the page
+
+' Runs a piece of script for the page: a handler, onload, a timer. Returns
+' FALSE when it said "return false".
+' thisVal is what this is: "" for window.
+FUNCTION RunCode (code AS String, thisVal AS String, fn AS String) AS Bool
+    VAR err AS String
+    VAR written AS String
+    IF NOT scriptsOn OR busy THEN RETURN TRUE
+    busy = TRUE
+    jsOut = ""
+    IF thisVal = "" THEN thisVal = JsO(jsGlobal)
+    IF fn <> "" THEN
+        err = JsCallValue(fn)
+    ELSE
+        err = JsHandlerOn(code, thisVal)
+    END IF
+    written = jsOut
+    jsOut = ""
+    busy = FALSE
+    IF err <> "" THEN
+        ScriptError(err)
+        RETURN TRUE
+    END IF
+    IF written <> "" THEN
+        Rewrite(written)
+        RETURN FALSE
+    END IF
+    RETURN jsRet <> "f"
+END FUNCTION
+
+SUB View_OnScript (ev AS String, code AS String)
+    VAR n AS Integer
+    VAR parts AS Array OF String
+    IF busy OR NOT code.StartsWith("js:") THEN RETURN
+    n = Int(Val(code.Substring(3, code.Length - 3)))
+    IF n < 0 OR n >= hCode.Count THEN RETURN
+    IF hCode[n] <> "" AND scriptsOn THEN
+        IF hThis[n] = "" THEN
+            IF NOT RunCode(hCode[n], "", "") THEN RETURN
+        ELSE
+            IF NOT RunCode(hCode[n], JsElement(hThis[n]), "") THEN RETURN
+        END IF
+    END IF
+    IF n >= hCode.Count THEN RETURN
+    IF hHref[n] <> "" AND NOT hHref[n].StartsWith("#") THEN FollowLink(hHref[n])
+    IF hAfter[n].StartsWith("submit:") THEN
+        parts = hAfter[n].Split(":")
+        SendForm(Int(Val(parts[1])), Int(Val(parts[2])), TRUE)
+    END IF
+END SUB
+
+SUB View_OnNavigate (url AS String)
+    IF busy THEN RETURN
+    IF url.Contains("iesubmit:") THEN
+        url = url.Substring(url.IndexOf("iesubmit:") + 9, url.Length - url.IndexOf("iesubmit:") - 9)
+        IF url.Contains("?") THEN
+            FormSent(Int(Val(url.Split("?")[0])), url.Substring(url.IndexOf("?") + 1, url.Length - url.IndexOf("?") - 1), "")
+        ELSE
+            FormSent(Int(Val(url)), "", "")
+        END IF
+        RETURN
+    END IF
+    FollowLink(url)
+END SUB
+
+SUB FollowLink (href AS String)
+    IF href.Lower().StartsWith("javascript:") THEN
+        RunJavaScriptUrl(href)
+        RETURN
+    END IF
+    IF href.StartsWith("#") THEN RETURN
+    IF href.Lower().StartsWith("mailto:") THEN
+        IF optMail <> "" THEN Go(Typed(optMail) + "compose.asp?to=" + UrlEnc(href.Substring(7, href.Length - 7)))
+        RETURN
+    END IF
+    Go(Absolute(curUrl, href))
+END SUB
+
+SUB RunJavaScriptUrl (url AS String)
+    IF NOT scriptsOn THEN RETURN
+    RunCode(UrlDec(url.Substring(11, url.Length - 11)), "", "")
+END SUB
+
+SUB View_OnSubmit (url AS String, body AS String, files AS String)
+    IF busy THEN RETURN
+    IF url.Contains("iesubmit:") THEN
+        FormSent(Int(Val(url.Substring(url.IndexOf("iesubmit:") + 9, url.Length - url.IndexOf("iesubmit:") - 9))), body, files)
+        RETURN
+    END IF
+    GoWith(Absolute(curUrl, url), body, TRUE, TRUE)
+END SUB
+
+SUB View_OnStatus (text AS String)
+    IF text = "" THEN
+        win.Status = curStatus
+    ELSEIF text.StartsWith("js:") THEN
+        win.Status = ""
+    ELSE
+        win.Status = "Shortcut to " + text
+    END IF
+END SUB
+
+' ---------------------------------------------------------------- forms
+
+' The view sent form f (data is what it collected). onsubmit has its say first.
+SUB FormSent (f AS Integer, data AS String, files AS String)
+    VAR line AS String
+    VAR path AS String
+    IF f < 0 OR f >= fmAction.Count THEN RETURN
+    IF fmSubmit[f] <> "" AND scriptsOn THEN
+        IF NOT RunCode(fmSubmit[f], JsO(fmObj[f]), "") THEN RETURN
+    END IF
+    ' scripts may have changed fields (hidden ones too): collect them again
+    IF scCode.Count > 0 OR hCode.Count > 0 THEN data = FormData(f, -1, data)
+    ' file fields: the file itself goes, as Voyager sends it
+    FOR EACH line IN files.Lines()
+        IF NOT line.Contains("=") THEN CONTINUE
+        path = line.Substring(line.IndexOf("=") + 1, line.Length - line.IndexOf("=") - 1)
+        TRY
+            data = data + "&" + UrlEnc(line.Split("=")[0]) + "=" + UrlEnc(FS.Read(path)) + "&" + UrlEnc(line.Split("=")[0] + ".filename") + "=" + UrlEnc(path.Substring(LastAt(path, "\") + 1, path.Length - LastAt(path, "\") - 1))
+        CATCH err
+        END TRY
+    NEXT
+    Send(f, data)
+END SUB
+
+' form.submit(), or a submit button that ran script first.
+SUB SendForm (f AS Integer, field AS Integer, runOnSubmit AS Bool)
+    IF f < 0 OR f >= fmAction.Count THEN RETURN
+    IF runOnSubmit AND fmSubmit[f] <> "" AND scriptsOn THEN
+        IF NOT RunCode(fmSubmit[f], JsO(fmObj[f]), "") THEN RETURN
+    END IF
+    Send(f, FormData(f, field, ""))
+END SUB
+
+SUB Send (f AS Integer, data AS String)
+    VAR action AS String
+    action = Absolute(curUrl, fmAction[f])
+    IF fmMethod[f] = "post" THEN
+        GoWith(action, data, TRUE, TRUE)
+    ELSE
+        IF action.Contains("?") THEN action = action.Substring(0, action.IndexOf("?"))
+        Go(action + "?" + data)
+    END IF
+END SUB
+
+' name=value&... for form f as it is now. field is the button that sent it
+' (-1: none). Fields the view does not draw (hidden ones) come from fallback.
+FUNCTION FormData (f AS Integer, field AS Integer, fallback AS String) AS String
+    VAR out AS Array OF String
+    VAR k AS Integer
+    VAR kind AS String
+    FOR k = 0 TO fdForm.Count - 1
+        IF fdForm[k] <> f OR fdName[k] = "" THEN CONTINUE
+        kind = fdType[k]
+        IF kind = "submit" OR kind = "image" OR kind = "button" OR kind = "reset" THEN
+            IF k = field AND kind <> "button" THEN out.Add(UrlEnc(fdName[k]) + "=" + UrlEnc(fdValue[k]))
+            ' the button the view says was pressed
+            IF field < 0 AND ("&" + fallback + "&").Contains("&" + UrlEnc(fdName[k]) + "=" + UrlEnc(fdValue[k]) + "&") THEN out.Add(UrlEnc(fdName[k]) + "=" + UrlEnc(fdValue[k]))
+            CONTINUE
+        END IF
+        IF kind = "file" THEN CONTINUE
+        IF kind = "checkbox" OR kind = "radio" THEN
+            IF HostGet(fdId[k], "Checked") = "True" THEN
+                IF fdValue[k] = "" THEN
+                    out.Add(UrlEnc(fdName[k]) + "=on")
+                ELSE
+                    out.Add(UrlEnc(fdName[k]) + "=" + UrlEnc(fdValue[k]))
+                END IF
+            END IF
+            CONTINUE
+        END IF
+        out.Add(UrlEnc(fdName[k]) + "=" + UrlEnc(HostGet(fdId[k], "Value")))
+    NEXT
+    RETURN out.Join("&")
+END FUNCTION
+
+' ---------------------------------------------------------------- timers
+
+SUB RunTimers ()
+    VAR i AS Integer
+    VAR code AS String
+    VAR fn AS String
+    VAR now AS Integer
+    now = SYS.Ticks
+    FOR i = 0 TO tmId.Count - 1
+        IF tmDue[i] <= now THEN
+            code = tmCode[i]
+            fn = tmFn[i]
+            IF tmEvery[i] > 0 THEN
+                tmDue[i] = now + tmEvery[i]
+            ELSE
+                tmId.RemoveAt(i)
+                tmDue.RemoveAt(i)
+                tmCode.RemoveAt(i)
+                tmFn.RemoveAt(i)
+                tmEvery.RemoveAt(i)
+            END IF
+            RunCode(code, "", fn)
+            ' one a tick, so a busy page still lets the browser breathe
+            RETURN
+        END IF
+    NEXT
+END SUB
+
+' ================================================================ the engine's way to the page
+
+SUB HostAlert (text AS String)
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = IETITLE
+    box.Kind = "warn"
+    box.Text = text
+    box.Show()
+END SUB
+
+FUNCTION HostConfirm (text AS String) AS Bool
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = IETITLE
+    box.Kind = "confirm"
+    box.Buttons = "okcancel"
+    box.Text = text
+    RETURN box.Show()
+END FUNCTION
+
+' The Explorer User Prompt: a little window of our own, since a message box
+' cannot be typed into. Chr(0) means Cancel.
+VAR askWin AS GUI_Window
+VAR askBox AS GUI_TextBox
+VAR askDone AS Bool
+VAR askOk AS Bool
+
+FUNCTION HostPrompt (text AS String, initial AS String) AS String
+    VAR lbl AS GUI_Label
+    VAR ok AS GUI_Button
+    VAR cancel AS GUI_Button
+    VAR t AS Integer
+    askWin = GUI_Window.New("Explorer User Prompt", 380, 120)
+    askWin.Modal = TRUE
+    askWin.Icon = "question"
+    askWin.onClose = Ask_Cancel
+    lbl = GUI_Label.New(askWin)
+    lbl.Text = "JavaScript Prompt:" + EOL + text
+    lbl.SetBounds(10, 8, 270, 50)
+    ok = GUI_Button.New(askWin)
+    ok.Text = "OK"
+    ok.Default = TRUE
+    ok.SetBounds(292, 8, 78, 24)
+    ok.onClick = Ask_Ok
+    cancel = GUI_Button.New(askWin)
+    cancel.Text = "Cancel"
+    cancel.Cancel = TRUE
+    cancel.SetBounds(292, 36, 78, 24)
+    cancel.onClick = Ask_Cancel
+    askBox = GUI_TextBox.New(askWin)
+    askBox.Text = initial
+    askBox.SetBounds(10, 84, 360, 22)
+    askBox.onEnter = Ask_Ok
+    askDone = FALSE
+    askOk = FALSE
+    askWin.Center()
+    askWin.Show()
+    askBox.Focus()
+    askBox.SelectAll()
+    t = SYS.Ticks
+    WHILE NOT askDone
+        SYS.Sleep(30)
+    END WHILE
+    text = askBox.Text
+    TRY
+        askWin.Destroy()
+    CATCH err
+    END TRY
+    IF askOk THEN RETURN text
+    RETURN Chr(0)
+END FUNCTION
+
+SUB Ask_Ok ()
+    askOk = TRUE
+    askDone = TRUE
+END SUB
+
+SUB Ask_Cancel ()
+    askDone = TRUE
+END SUB
+
+SUB HostStatus (text AS String)
+    curStatus = text
+    win.Status = text
+END SUB
+
+SUB HostNavigate (url AS String)
+    IF url.Lower().StartsWith("javascript:") THEN
+        ' runs once this script is done
+        pUrl = url
+        pPending = TRUE
+        RETURN
+    END IF
+    Go(Absolute(curUrl, url))
+END SUB
+
+FUNCTION HostHas (id AS String) AS Bool
+    IF rendered THEN
+        IF view.HasElement(id) THEN RETURN TRUE
+    END IF
+    RETURN shKey.IndexOf(id + "|Id") >= 0
+END FUNCTION
+
+FUNCTION HostGet (id AS String, prop AS String) AS String
+    IF rendered THEN
+        IF view.HasElement(id) THEN RETURN Str(view.GetElement(id, prop))
+    END IF
+    IF prop = "Visible" OR prop = "Enabled" THEN
+        IF shKey.IndexOf(id + "|" + prop) < 0 THEN RETURN "True"
+    END IF
+    RETURN Shadowed(id, prop)
+END FUNCTION
+
+SUB HostSet (id AS String, prop AS String, value AS String)
+    IF rendered THEN
+        IF view.HasElement(id) THEN
+            IF prop = "Checked" OR prop = "Visible" OR prop = "Enabled" THEN
+                view.SetElement(id, prop, value = "True")
+            ELSE
+                view.SetElement(id, prop, value)
+            END IF
+            RETURN
+        END IF
+    END IF
+    Shadow(id, prop, value)
+    IF prop = "Value" THEN Shadow(id, "Text", value)
+    IF NOT rendered AND shDirty.IndexOf(id + "|" + prop) < 0 THEN shDirty.Add(id + "|" + prop)
+END SUB
+
+FUNCTION HostInfo (key AS String) AS String
+    SELECT CASE key
+        CASE "location"
+            RETURN curUrl
+        CASE "title"
+            RETURN curTitle
+        CASE "cookie"
+            RETURN CookieHeader(HostOf(curUrl))
+        CASE "status"
+            RETURN curStatus
+        CASE "referrer"
+            RETURN referrer
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+SUB HostSetInfo (key AS String, value AS String)
+    SELECT CASE key
+        CASE "title"
+            curTitle = value
+            SetTitle(value)
+        CASE "cookie"
+            TakeCookie(HostOf(curUrl), value)
+        CASE "status"
+            HostStatus(value)
+    END SELECT
+END SUB
+
+FUNCTION HostTimeout (code AS String, fn AS String, ms AS Integer, again AS Bool) AS Integer
+    tmId.Add(tmNext)
+    tmDue.Add(SYS.Ticks + MATH.Max(10, ms))
+    tmCode.Add(code)
+    tmFn.Add(fn)
+    IF again THEN
+        tmEvery.Add(MATH.Max(10, ms))
+    ELSE
+        tmEvery.Add(0)
+    END IF
+    tmNext = tmNext + 1
+    RETURN tmNext - 1
+END FUNCTION
+
+SUB HostClearTimeout (id AS Integer)
+    VAR i AS Integer
+    i = tmId.IndexOf(id)
+    IF i < 0 THEN RETURN
+    tmId.RemoveAt(i)
+    tmDue.RemoveAt(i)
+    tmCode.RemoveAt(i)
+    tmFn.RemoveAt(i)
+    tmEvery.RemoveAt(i)
+END SUB
+
+' history.length (n = 0), or history.go(n)
+FUNCTION HostHistory (n AS Integer) AS Integer
+    IF n = 0 THEN RETURN hist.Count
+    IF histPos + n >= 0 AND histPos + n < hist.Count THEN
+        histPos = histPos + n
+        GoWith(hist[histPos], "", FALSE, FALSE)
+    END IF
+    RETURN hist.Count
+END FUNCTION
+
+SUB HostOpen (url AS String)
+    IF url = "" THEN url = "about:blank"
+    SYS.Start(IEPATH, Absolute(curUrl, url))
+END SUB
+
+SUB HostSubmit (form AS Integer)
+    SendForm(form, -1, FALSE)
+END SUB
+
+SUB HostYield ()
+    SYS.Sleep(0)
+END SUB
+
+FUNCTION HostSlow () AS Bool
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = IETITLE
+    box.Kind = "warn"
+    box.Buttons = "yesno"
+    box.Text = "A script on this page is causing Internet Explorer to run slowly. If it continues to run, your computer may become unresponsive." + EOL + EOL + "Do you want to abort the script?"
+    RETURN box.Show()
+END FUNCTION
+
+' ================================================================ favorites and history
+
+FUNCTION Favorites () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(FAVFILE, "").Lines()
+        IF line.Contains("|") THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION MenuText (title AS String) AS String
+    RETURN title.Replace("&", "and").Replace(Chr(9), " ")
+END FUNCTION
+
+SUB BuildFavoritesMenu ()
+    VAR line AS String
+    bar.AddItem("F&avorites", "&Add To Favorites..." + Chr(9) + "Ctrl+D")
+    bar.AddItem("F&avorites", "&Organize Favorites...")
+    favMenu.Clear()
+    FOR EACH line IN Favorites()
+        IF favMenu.Count = 0 THEN bar.AddSeparator("F&avorites")
+        bar.AddItem("F&avorites", MenuText(line.Split("|")[0]))
+        favMenu.Add(line)
+    NEXT
+END SUB
+
+SUB AddFavorite ()
+    VAR name AS String
+    IF curUrl = "" OR curUrl.StartsWith("about:") THEN RETURN
+    name = curTitle
+    IF name = "" THEN name = curUrl
+    name = HostPrompt("Internet Explorer will add this page to your Favorites." + EOL + "Name:", name)
+    IF name = Chr(0) OR name.Trim() = "" THEN RETURN
+    name = name.Replace("|", "-").Trim()
+    TRY
+        FS.Append(FAVFILE, name + "|" + curUrl + EOL)
+    CATCH err
+        RETURN
+    END TRY
+    IF favMenu.Count = 0 THEN bar.AddSeparator("F&avorites")
+    bar.AddItem("F&avorites", MenuText(name))
+    favMenu.Add(name + "|" + curUrl)
+    SetStatus("Added to Favorites: " + name)
+END SUB
+
+SUB RememberVisit (url AS String, title AS String)
+    VAR lines AS Array OF String
+    IF title = "" THEN title = url
+    TRY
+        FS.Append(HISTFILE, TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|" + title.Replace("|", "-") + "|" + url + EOL)
+        IF FS.Size(HISTFILE) > 30000 THEN
+            lines = FS.Read(HISTFILE).Lines()
+            WHILE lines.Count > 150
+                lines.RemoveAt(0)
+            END WHILE
+            FS.Write(HISTFILE, lines.Join(EOL) + EOL)
+        END IF
+    CATCH err
+    END TRY
+END SUB
+
+' ================================================================ about: pages
+
+FUNCTION AboutTop (title AS String) AS String
+    RETURN "<html><head><title>" + Esc(title) + "</title></head><body bgcolor=""#FFFFFF"">" _
+         + "<table width=""100%"" cellpadding=""6"" cellspacing=""0""><tr><td bgcolor=""#000080""><font color=""#FFFFFF"" size=""4""><b>" + Esc(title) + "</b></font></td></tr></table>"
+END FUNCTION
+
+FUNCTION AboutPage (what AS String) AS String
+    VAR query AS String
+    VAR out AS String
+    VAR line AS String
+    VAR lines AS Array OF String
+    VAR p AS Array OF String
+    VAR i AS Integer
+    VAR day AS String
+    VAR pair AS String
+    IF what.Contains("?") THEN
+        query = what.Substring(what.IndexOf("?") + 1, what.Length - what.IndexOf("?") - 1)
+        what = what.Substring(0, what.IndexOf("?"))
+    END IF
+    SELECT CASE what.Lower()
+        CASE "blank"
+            RETURN ""
+        CASE "history"
+            IF query.Contains("clear=1") THEN
+                TRY
+                    FS.Write(HISTFILE, "")
+                CATCH err
+                END TRY
+            END IF
+            out = AboutTop("History")
+            lines = ReadOr(HISTFILE, "").Lines()
+            IF lines.Count = 0 OR ReadOr(HISTFILE, "").Trim() = "" THEN out = out + "<p>You have not visited any pages yet.</p>"
+            FOR i = lines.Count - 1 TO 0 STEP -1
+                p = lines[i].Split("|")
+                IF p.Count < 3 THEN CONTINUE
+                IF p[0].Substring(0, 10) <> day THEN
+                    IF day <> "" THEN out = out + "</ul>"
+                    day = p[0].Substring(0, 10)
+                    out = out + "<h4>" + Esc(day) + "</h4><ul>"
+                END IF
+                out = out + "<li><font size=""2"">" + Esc(p[0].Substring(11, p[0].Length - 11)) + "</font> <a href=""" + Esc(p[2]) + """>" + Esc(p[1]) + "</a>"
+                IF out.Length > 40000 THEN BREAK
+            NEXT
+            IF day <> "" THEN out = out + "</ul>"
+            RETURN out + "<hr><p><a href=""about:history?clear=1"">Clear History</a></p></body></html>"
+        CASE "favorites"
+            out = AboutTop("Favorites")
+            lines = Favorites()
+            IF lines.Count = 0 THEN out = out + "<p>You have no Favorites yet. When you find a page you like, choose <b>Add To Favorites</b> from the Favorites menu.</p>"
+            out = out + "<ul>"
+            FOR EACH line IN lines
+                out = out + "<li><a href=""" + Esc(line.Split("|")[1]) + """>" + Esc(line.Split("|")[0]) + "</a>"
+            NEXT
+            RETURN out + "</ul></body></html>"
+        CASE "options"
+            IF query <> "" THEN
+                FOR EACH pair IN query.Split("&")
+                    IF pair.StartsWith("home=") THEN optHome = UrlDec(pair.Substring(5, pair.Length - 5)).Trim()
+                    IF pair.StartsWith("search=") THEN optSearch = UrlDec(pair.Substring(7, pair.Length - 7)).Trim()
+                    IF pair.StartsWith("mail=") THEN optMail = UrlDec(pair.Substring(5, pair.Length - 5)).Trim()
+                    IF pair = "cookies=1" THEN
+                        TRY
+                            FS.Write(JARFILE, "")
+                        CATCH err
+                        END TRY
+                    END IF
+                NEXT
+                IF optSearch <> "" AND NOT optSearch.Contains("%s") THEN optSearch = Typed(optSearch) + "index.asp?q=%s"
+                SaveSettings()
+            END IF
+            out = AboutTop("Options")
+            IF query <> "" THEN out = out + "<p><font color=""#008000""><b>Your settings have been saved.</b></font></p>"
+            RETURN out + "<form action=""about:options"" method=""get""><table cellpadding=""4"">" _
+                 + "<tr><td>Start page:</td><td><input name=""home"" size=""40"" value=""" + Esc(optHome) + """></td></tr>" _
+                 + "<tr><td>Search page:</td><td><input name=""search"" size=""40"" value=""" + Esc(optSearch) + """></td></tr>" _
+                 + "<tr><td></td><td><font size=""2"">%s is where your words go, as in http://asksim/index.asp?q=%s. The Address bar searches there too: type <tt>? chess</tt> or <tt>go chess</tt>.</font></td></tr>" _
+                 + "<tr><td>Mail:</td><td><input name=""mail"" size=""40"" value=""" + Esc(optMail) + """></td></tr>" _
+                 + "<tr><td></td><td><input type=""submit"" value=""OK""></td></tr></table></form>" _
+                 + "<hr><p><a href=""about:options?cookies=1"">Delete all cookies</a> &middot; <a href=""about:history?clear=1"">Clear History</a></p></body></html>"
+        CASE "search"
+            out = AboutTop("Search the Web")
+            out = out + "<p>Internet Explorer does not know a search engine on this network yet.</p>" _
+                + "<p>Find a machine that runs <b>AskSim</b> and type its address below; Internet Explorer will search there from now on, from the Search button and from the Address bar.</p>" _
+                + "<form action=""about:options"" method=""get""><input type=""hidden"" name=""home"" value=""" + Esc(optHome) + """><input type=""hidden"" name=""mail"" value=""" + Esc(optMail) + """>" _
+                + "Search engine: <input name=""search"" size=""30"" value=""http://""> <input type=""submit"" value=""Use it""></form>"
+            IF query <> "" THEN out = out + "<p>(You were looking for <b>" + Esc(UrlDec(query)) + "</b>.)</p>"
+            RETURN out + "</body></html>"
+        CASE "mail"
+            RETURN AboutTop("Mail") + "<p>Internet Explorer does not know where your mail is.</p><p>If a machine on the network runs <b>ColdMail</b>, put its address in <a href=""about:options"">Options</a>.</p></body></html>"
+    END SELECT
+    RETURN AboutTop("Internet Explorer") + "<p>Internet Explorer does not have a page called about:" + Esc(what) + ".</p></body></html>"
+END FUNCTION
+
+' ================================================================ menus
+
+SUB Menu_OnSelect (item AS String)
+    VAR box AS GUI_MessageBox
+    VAR dlg AS GUI_FileDialog
+    VAR path AS String
+    VAR line AS String
+    SELECT CASE item
+        CASE "New Window"
+            SYS.Start(IEPATH, curUrl)
+        CASE "Open..."
+            address.Focus()
+            address.SelectAll()
+        CASE "Save As File..."
+            dlg = GUI_FileDialog.New(win)
+            dlg.Title = "Save As"
+            dlg.Filter = "*.HTM"
+            dlg.Path = "C:\MYFILES"
+            path = dlg.ShowSave()
+            IF path <> "" THEN FS.Write(path, curSource)
+        CASE "Close"
+            win.Close()
+        CASE "Stop"
+            Stop_Click()
+        CASE "Refresh"
+            Refresh_Click()
+        CASE "Source"
+            path = "C:\MYFILES\VIEWSRC.HTM"
+            FS.Write(path, curSource)
+            SYS.Start("C:\PROGRAMS\NOTES.SPK", path)
+        CASE "Options..."
+            Go("about:options")
+        CASE "Back"
+            Back_Click()
+        CASE "Forward"
+            Forward_Click()
+        CASE "Start Page"
+            Home_Click()
+        CASE "Search the Web"
+            Search_Click()
+        CASE "Read Mail"
+            Mail_Click()
+        CASE "Open History Folder"
+            History_Click()
+        CASE "Add To Favorites..."
+            AddFavorite()
+        CASE "Organize Favorites..."
+            IF NOT FS.Exists(FAVFILE) THEN FS.Write(FAVFILE, "")
+            SYS.Start("C:\PROGRAMS\NOTES.SPK", FAVFILE)
+        CASE "About Internet Explorer"
+            box = GUI_MessageBox.New(win)
+            box.Title = "About Internet Explorer"
+            box.Kind = "info"
+            box.Text = "Microsoft (R) Internet Explorer" + EOL + "Version 3.02 for SIM95" + EOL + EOL _
+                + "With JScript, a JavaScript interpreter written in SPARK: functions, objects, arrays, Date and Math, forms, alert, confirm and prompt, setTimeout, document.write and cookies." + EOL + EOL _
+                + "Extras of this edition: AutoSearch from the Address bar (type ? chess), AskSim's cached copy when a site is down, and Voyager's cookies and bookmarks." + EOL + EOL _
+                + "Pages with SPARK scripts are for Voyager; Internet Explorer shows them without."
+            box.Show()
+        CASE ELSE
+            FOR EACH line IN favMenu
+                IF MenuText(line.Split("|")[0]) = item THEN
+                    Go(line.Split("|")[1])
+                    RETURN
+                END IF
+            NEXT
+    END SELECT
+END SUB
+
+' ================================================================ the logo
+
+' The "e", with a swoosh round it that spins while a page is coming.
+SUB DrawThrob ()
+    VAR i AS Integer
+    VAR a AS Real
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR spin AS Bool
+    spin = pPending OR fetching OR imgWant.Count > 0
+    throb.SetColor(15)
+    throb.FillRect(0, 0, 42, 50)
+    throb.SetColor(8)
+    throb.Rect(0, 0, 42, 50)
+    throb.SetColor(12)
+    throb.FillCircle(21, 25, 12)
+    throb.SetColor(15)
+    throb.FillCircle(21, 25, 7)
+    throb.SetColor(12)
+    throb.FillRect(10, 23, 23, 4)
+    throb.SetColor(15)
+    throb.FillRect(23, 28, 11, 5)
+    FOR i = 0 TO 17
+        a = i * 20 * MATH.Pi / 180
+        x = Int(21 + 18 * MATH.Cos(a) * 0.94 - 6 * MATH.Sin(a) * 0.34)
+        y = Int(25 + 18 * MATH.Cos(a) * -0.34 + 6 * MATH.Sin(a) * 0.94)
+        throb.SetColor(3)
+        throb.Pixel(x, y)
+    NEXT
+    IF spin THEN
+        FOR i = 0 TO 2
+            a = ((throbStep / 2) * 40 + i * 14) * MATH.Pi / 180
+            x = Int(21 + 18 * MATH.Cos(a) * 0.94 - 6 * MATH.Sin(a) * 0.34)
+            y = Int(25 + 18 * MATH.Cos(a) * -0.34 + 6 * MATH.Sin(a) * 0.94)
+            throb.SetColor(11)
+            throb.FillCircle(x, y, Int(2 - i / 2))
+        NEXT
+    END IF
+END SUB
+
+SUB Throb_OnDraw (canvas AS GUI_Canvas)
+    DrawThrob()
+END SUB
+
+' Clicking the logo, like clicking IE's, goes home
+SUB Throb_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    Home_Click()
+END SUB

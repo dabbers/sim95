@@ -246,6 +246,23 @@ SUB File1 ()
     t = t + "    RETURN FindLine(ReadOr(DATADIR + ""\DOCS.TXT"", """"), id)" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
+    t = t + "' The id of the page AskSim knows at this address ("""" if none), for" + NL
+    t = t + "' cache.asp?url=... (Internet Explorer asks for it when a site is down)." + NL
+    t = t + "FUNCTION DocIdOf (url AS String) AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    VAR want AS String" + NL
+    t = t + "    want = url.Trim().Lower()" + NL
+    t = t + "    IF NOT want.StartsWith(""http://"") THEN want = ""http://"" + want" + NL
+    t = t + "    IF want.Contains(""#"") THEN want = want.Substring(0, want.IndexOf(""#""))" + NL
+    t = t + "    IF want.Substring(7, want.Length - 7).IndexOf(""/"") < 0 THEN want = want + ""/""" + NL
+    t = t + "    FOR EACH line IN ReadOr(DATADIR + ""\DOCS.TXT"", """").Lines()" + NL
+    t = t + "        IF line.Split(""|"").Count < 2 THEN CONTINUE" + NL
+    t = t + "        IF line.Split(""|"")[1] = want THEN RETURN line.Split(""|"")[0]" + NL
+    t = t + "        IF want.EndsWith(""/"") AND (line.Split(""|"")[1] = want + ""index.htm"" OR line.Split(""|"")[1] = want + ""index.asp"") THEN RETURN line.Split(""|"")[0]" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
     t = t + "' A few lines of the page around the first of your words, with your words in bold." + NL
     t = t + "FUNCTION Snippet (id AS String, words AS Array OF String) AS String" + NL
     t = t + "    VAR text AS String" + NL
@@ -347,11 +364,16 @@ SUB File3 ()
     t = ""
     t = t + "<%@ import file=""ASK.SPK"" %>" + NL
     t = t + "<%" + NL
-    t = t + "' CACHE.ASP?id=N - the page as the crawler last saw it, under a banner. Handy" + NL
+    t = t + "' CACHE.ASP?id=N (or ?url=...) - the page as the crawler last saw it, under a banner. Handy" + NL
     t = t + "' when the machine it lives on has gone away." + NL
     t = t + "VAR id AS String" + NL
     t = t + "VAR doc AS Array OF String" + NL
     t = t + "id = REQUEST.Query(""id"")" + NL
+    t = t + "' CACHE.ASP?url=http://... finds the page by its address" + NL
+    t = t + "IF id = """" AND REQUEST.Query(""url"") <> """" THEN" + NL
+    t = t + "    id = DocIdOf(REQUEST.Query(""url""))" + NL
+    t = t + "    IF id = """" THEN RESPONSE.Redirect(""index.asp?q="" + UrlEnc(""site:"" + REQUEST.Query(""url"").Replace(""http://"", """").Split(""/"")[0]))" + NL
+    t = t + "END IF" + NL
     t = t + "IF DocLine(id) = """" OR id.Contains(""\"") OR id.Contains(""."") THEN RESPONSE.Redirect(""index.asp"")" + NL
     t = t + "doc = DocLine(id).Split(""|"")" + NL
     t = t + "%><meta name=""robots"" content=""noindex,nofollow"">" + NL

@@ -64,6 +64,7 @@ class Widget {
     return this.props[p];
   }
   set(p, v) {
+    if (this.type === "HtmlView" && p === "Html") { this.props.Html = v; this.elements = htmlElements(String(v)); this.images = new Map(); return; }
     if (p === "Items") this.items = [...v];
     else if (this.type === "Window" && (p === "Title" || p === "Text")) this.props.Title = v;
     else this.props[p] = v;
@@ -71,6 +72,24 @@ class Widget {
     if (this.type === "Timer" && p === "Interval" && this.timer) { clearInterval(this.timer); this.timer = setInterval(() => this.fire("onTick"), Math.max(1, v)); }
   }
   call(m, ...a) {
+    if (this.type === "MessageBox" && m === "Show") {
+      // A dialog: noted in ui.dialogs, answered from ui.answers (OK/Yes when empty)
+      const d = { pid: this.pid, kind: this.props.Kind || "info", buttons: this.props.Buttons || "ok", title: this.props.Title, text: this.props.Text };
+      this.ui.dialogs.push(d);
+      const answer = this.ui.answers.length ? this.ui.answers.shift() : true;
+      return Promise.resolve(d.buttons === "ok" ? true : answer);
+    }
+    if (this.type === "HtmlView") {
+      const els = this.elements || new Map();
+      switch (m) {
+        case "HasElement": return els.has(String(a[0]));
+        case "GetElement": { const e = els.get(String(a[0])); if (!e) throw new Error("No element with id " + a[0]); return e[a[1]]; }
+        case "SetElement": { const e = els.get(String(a[0])); if (!e) throw new Error("No element with id " + a[0]); e[a[1]] = a[2]; if (a[1] === "Value" || a[1] === "Text") e.Value = e.Text = String(a[2]); return; }
+        case "SetImage": (this.images ||= new Map()).set(String(a[0]), String(a[1])); return;
+        default: return;
+      }
+    }
+    if (this.type === "Menu" && m === "AddItem") { this.items.push(String(a[1]).split("\t")[0].replace("&", "")); return; }
     switch (m) {
       case "Show": this.props.Visible = true; return;
       case "Hide": this.props.Visible = false; return;
@@ -100,13 +119,34 @@ class Widget {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    for (const w of this.ui.widgets) if (w.parent === this) w.destroy(); // a window takes its controls with it
     if (this.timer) this.call("Stop");
     if (this.type === "Window") this.ui.resource(this.pid, "window", -1);
   }
 }
 
+// What a page's elements hold, as GUI_HtmlView keeps them: the ones with an
+// id. Hidden inputs are not drawn, so they are not elements.
+function htmlElements(html) {
+  const els = new Map();
+  const attr = (a, n) => { const m = new RegExp(`\\s${n}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(a); return m ? (m[2] ?? m[3] ?? m[4]).replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") : undefined; };
+  for (const m of html.matchAll(/<(\w+)(\s[^>]*)>/g)) {
+    const tag = m[1].toUpperCase(), a = m[2], id = attr(a, "id");
+    if (!id || (tag === "INPUT" && (attr(a, "type") || "").toLowerCase() === "hidden")) continue;
+    const after = html.slice(m.index + m[0].length);
+    const close = after.search(new RegExp(`</${m[1]}>`, "i"));
+    const inner = close >= 0 ? after.slice(0, close) : "";
+    let value = attr(a, "value") ?? "";
+    if (tag === "TEXTAREA") value = inner;
+    else if (tag === "SELECT") { const o = [...inner.matchAll(/<option([^>]*)>([^<]*)/gi)]; const sel = o.find((x) => /selected/i.test(x[1])) || o[0]; value = sel ? (attr(sel[1], "value") ?? sel[2].trim()) : ""; }
+    else if (tag !== "INPUT" && tag !== "BUTTON") value = inner.replace(/<[^>]*>/g, "");
+    els.set(id, { Id: id, TagName: tag, Value: value, Text: value, Checked: /\schecked/i.test(a), Visible: true, Enabled: !/\sdisabled/i.test(a), attrs: a });
+  }
+  return els;
+}
+
 class UI {
-  constructor() { this.widgets = []; this.kernel = null; this.dialogs = []; }
+  constructor() { this.widgets = []; this.kernel = null; this.dialogs = []; this.answers = []; }
   resource(pid, kind, n) { this.kernel?.proc(pid)?.sys.resource(kind, n); }
   registryFor(pid) {
     return { create: (type, parent, ...args) => new Widget(this, pid, type, parent, args), spec() {}, types: () => [] };

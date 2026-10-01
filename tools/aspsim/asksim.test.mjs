@@ -146,6 +146,14 @@ await test("a machine that goes away stays findable, marked, with its cached cop
   r = ok(await visitor.get(`/cache.asp?id=${doc("http://charlie/club.htm").split("|")[0]}`));
   assert.match(r.body, /The real page has not answered since/);
   assert.match(r.body, /Bring your own chess board/);
+  // Internet Explorer asks by address when a site is down
+  r = ok(await visitor.get("/cache.asp?url=" + encodeURIComponent("http://charlie/club.htm")));
+  assert.match(r.body, /The real page has not answered since/);
+  r = ok(await visitor.get("/cache.asp?url=charlie"));
+  assert.match(r.body, /copy of <a href="http:\/\/charlie\/">/);
+  r = await alpha.request("GET", "/cache.asp?url=" + encodeURIComponent("http://nowhere/x.htm"));
+  assert.equal(r.status, "302 Found");
+  assert.ok(r.headers.includes("Location: index.asp?q=site%3Anowhere"), r.headers.join(","));
 });
 
 await test("a submitted site is visited on the next crawl", async () => {

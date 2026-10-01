@@ -1445,7 +1445,10 @@ FUNCTION JsHostGet (id AS Integer, name AS String) AS String
             RETURN JsB(HostGet(el, "Checked") = "True")
         CASE "disabled"
             RETURN JsB(HostGet(el, "Enabled") <> "True")
-        CASE "id", "name"
+        CASE "id"
+            RETURN JsS(HostGet(el, "Id"))
+        CASE "name"
+            IF JsOwn(id, "name") >= 0 THEN RETURN JsGetProp(id, "name")
             RETURN JsS(HostGet(el, "Id"))
         CASE "tagName", "nodeName"
             RETURN JsS(HostGet(el, "TagName"))
@@ -1561,6 +1564,8 @@ SUB JsAddField (form AS Integer, name AS String, elementId AS String)
     VAR el AS String
     VAR list AS Integer
     el = JsElement(elementId)
+    JsPutOwn(JsId(el), "name", JsS(name))
+    JsPutOwn(JsId(el), "form", JsO(form))
     ' fields hide the form's own properties (a field called "name" wins), but
     ' the first of several fields with one name keeps it
     IF name <> "" THEN
@@ -2432,7 +2437,7 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
             IF JsCallable(a) THEN
                 RETURN JsN(HostTimeout("", a, JsInt(JsArg(args, 1)), name = "setInterval"))
             END IF
-            RETURN JsN(HostTimeout(JsStr(a), "u", JsInt(JsArg(args, 1)), name = "setInterval"))
+            RETURN JsN(HostTimeout(JsStr(a), "", JsInt(JsArg(args, 1)), name = "setInterval"))
         CASE "clearTimeout", "clearInterval"
             HostClearTimeout(JsInt(a))
             RETURN "u"
@@ -3134,6 +3139,8 @@ FUNCTION JsRun (source AS String, firstLine AS Integer) AS String
     VAR prog AS Integer
     jsSig = ""
     jsDepth = 0
+    jsSteps = 0
+    jsLimit = JSSTEPLIMIT
     jsThrown = ""
     jsRet = "u"
     jsLineBase = firstLine
@@ -3154,11 +3161,37 @@ FUNCTION JsHandler (code AS String) AS String
     RETURN JsRun(code, 1)
 END FUNCTION
 
+' An event handler on an element: a function body whose this is the element
+' (thisVal), so onclick="check(this.form)" works. Its vars are its own.
+FUNCTION JsHandlerOn (code AS String, thisVal AS String) AS String
+    VAR prog AS Integer
+    VAR scope AS Integer
+    jsSig = ""
+    jsDepth = 0
+    jsSteps = 0
+    jsLimit = JSSTEPLIMIT
+    jsThrown = ""
+    jsRet = "u"
+    jsLineBase = 1
+    TRY
+        prog = JsParse(code)
+        scope = JsNewScope(jsGlobal, thisVal)
+        JsHoist(prog, scope)
+        JsExec(prog, scope)
+    CATCH err
+        RETURN JsTidyError(err)
+    END TRY
+    jsSig = ""
+    RETURN ""
+END FUNCTION
+
 ' Calls a function value (for setTimeout(f, ms)). Returns "" or an error.
 FUNCTION JsCallValue (fn AS String) AS String
     VAR none AS Array OF String
     jsSig = ""
     jsDepth = 0
+    jsSteps = 0
+    jsLimit = JSSTEPLIMIT
     jsThrown = ""
     TRY
         jsRet = JsCall(fn, JsO(jsGlobal), none)

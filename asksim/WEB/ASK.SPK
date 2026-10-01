@@ -166,6 +166,23 @@ FUNCTION DocLine (id AS String) AS String
     RETURN FindLine(ReadOr(DATADIR + "\DOCS.TXT", ""), id)
 END FUNCTION
 
+' The id of the page AskSim knows at this address ("" if none), for
+' cache.asp?url=... (Internet Explorer asks for it when a site is down).
+FUNCTION DocIdOf (url AS String) AS String
+    VAR line AS String
+    VAR want AS String
+    want = url.Trim().Lower()
+    IF NOT want.StartsWith("http://") THEN want = "http://" + want
+    IF want.Contains("#") THEN want = want.Substring(0, want.IndexOf("#"))
+    IF want.Substring(7, want.Length - 7).IndexOf("/") < 0 THEN want = want + "/"
+    FOR EACH line IN ReadOr(DATADIR + "\DOCS.TXT", "").Lines()
+        IF line.Split("|").Count < 2 THEN CONTINUE
+        IF line.Split("|")[1] = want THEN RETURN line.Split("|")[0]
+        IF want.EndsWith("/") AND (line.Split("|")[1] = want + "index.htm" OR line.Split("|")[1] = want + "index.asp") THEN RETURN line.Split("|")[0]
+    NEXT
+    RETURN ""
+END FUNCTION
+
 ' A few lines of the page around the first of your words, with your words in bold.
 FUNCTION Snippet (id AS String, words AS Array OF String) AS String
     VAR text AS String
