@@ -109,3 +109,17 @@ FUNCTION HostSlow () AS Bool
     hostLog.Add("slow")
     RETURN TRUE
 END FUNCTION
+
+' XMLHttpRequest: requests are noted in hostXhr ("req|object|method|url|headers|body"),
+' for the test to answer with JsXhrUpdate.
+VAR hostXhr AS Array OF String
+
+FUNCTION HostXhrSend (method AS String, url AS String, headers AS String, body AS String, obj AS Integer) AS Integer
+    hostXhr.Add(Str(hostXhr.Count + 1) + "|" + Str(obj) + "|" + method + "|" + url + "|" + headers.Replace(Chr(10), ";") + "|" + body)
+    hostLog.Add("xhr:" + method + " " + url + " [" + headers.Replace(Chr(10), ";") + "] " + body)
+    RETURN hostXhr.Count
+END FUNCTION
+
+SUB HostXhrAbort (req AS Integer)
+    hostLog.Add("xhrabort:" + Str(req))
+END SUB

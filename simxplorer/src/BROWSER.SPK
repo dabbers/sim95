@@ -91,6 +91,39 @@ VAR fStatus AS Integer
 VAR fHeaders AS Array OF String    ' "name: value", names in lower case
 VAR fBodyText AS String
 
+' ---------------------------------------------------------------- XMLHttpRequest
+' What the page's scripts asked for, each on a connection of its own (xweb),
+' several at once. Like everything else they start from a timer tick, one a
+' tick. A request is forgotten when its page goes.
+VAR xweb AS NET_Socket
+VAR xSerial AS Array OF Integer    ' its number; its connection's Tag is "x" + it
+VAR xObj AS Array OF Integer       ' the XMLHttpRequest in the engine
+VAR xMethod AS Array OF String
+VAR xUrl AS Array OF String
+VAR xHeaders AS Array OF String    ' the script's own, one "Name: value" a line
+VAR xBody AS Array OF String
+VAR xState AS Array OF String      ' "wait" (to be sent), "sent", "done" (in, or failed)
+VAR xRaw AS Array OF String        ' what came back so far, the messages joined
+VAR xGot AS Array OF Integer       ' how many messages that is
+VAR xError AS Array OF String
+VAR xSince AS Array OF Integer
+VAR xShown AS Array OF Integer     ' the readyState the page has been told
+VAR xCount AS Integer              ' numbers handed out so far
+VAR xLast AS Integer               ' when the last one started
+VAR hpStatus AS Integer            ' a response taken apart by XhrParse
+VAR hpReason AS String
+VAR hpHeaders AS String
+VAR hpBody AS String
+
+' ---------------------------------------------------------------- names
+' Two lookups of one name at once lose the first for good (SIM95-NOTES.md),
+' so they go one at a time, and an address found is kept for a while.
+VAR resolving AS Bool
+VAR dnsName AS Array OF String
+VAR dnsAddr AS Array OF String
+VAR dnsAt AS Array OF Integer
+CONST DNSKEEP = 30000          ' milliseconds an address is kept
+
 ' ---------------------------------------------------------------- the page's scripts
 VAR busy AS Bool                   ' the engine or the page is in use: events wait
 VAR rendered AS Bool               ' the HtmlView has the page
@@ -216,6 +249,9 @@ SUB Main ()
     web = NET_Socket.New()
     web.onMessage = Web_OnMessage
     web.onClose = Web_OnClose
+    xweb = NET_Socket.New()
+    xweb.onMessage = Xhr_OnMessage
+    xweb.onClose = Xhr_OnClose
     clock = GUI_Timer.New(win)
     clock.Interval = TICKMS
     clock.onTick = Clock_OnTick
@@ -644,6 +680,7 @@ SUB Tick ()
             IF fetching AND (fDone OR SYS.Ticks - fSince > PATIENCE) THEN Arrived()
             IF pPending AND NOT fetching AND NOT pUrl.Lower().StartsWith("http:") THEN ShowLocal()
             IF NOT busy THEN RunTimers()
+            IF NOT busy AND xSerial.Count > 0 THEN XhrPump()
             IF changeWait >= 0 AND SYS.Ticks >= changeAt AND NOT busy THEN FlushChange()
             IF refreshAt > 0 AND SYS.Ticks >= refreshAt AND NOT pPending AND NOT busy THEN
                 refreshAt = 0
@@ -655,11 +692,22 @@ SUB Tick ()
             Oops(problem)
         END TRY
     END IF
-    ' Last of all, because it may be spoiled: start the next fetch.
+    ' Last of all, because it may be spoiled: start the next fetch. Only one
+    ' Connect a tick: the page, else a script's request, else a picture.
+    IF resolving THEN RETURN
+    IF NOT fetching AND NOT busy AND pPending THEN
+        StartFetch("page", pUrl, "")
+        RETURN
+    END IF
+    ' (spaced out even when ticks come late and all at once: answers that
+    ' arrive together can lose their last message, see SIM95-NOTES.md)
+    IF xState.IndexOf("wait") >= 0 AND SYS.Ticks - xLast >= TICKMS THEN
+        xLast = SYS.Ticks
+        StartXhr(xSerial[xState.IndexOf("wait")])
+        RETURN
+    END IF
     IF NOT fetching AND NOT busy THEN
-        IF pPending THEN
-            StartFetch("page", pUrl, "")
-        ELSEIF imgWant.Count > 0 THEN
+        IF imgWant.Count > 0 THEN
             fSrc = imgSrc[0]
             imgSrc.RemoveAt(0)
             fUrl = imgWant[0]
@@ -680,10 +728,35 @@ END SUB
 
 ' ================================================================ fetching
 
+' The address of a host. Only one lookup is ever under way (the tick waits
+' for it); an address found is kept for DNSKEEP. "" when nobody has the name.
+FUNCTION Lookup (host AS String) AS String
+    VAR i AS Integer
+    VAR addr AS String
+    i = dnsName.IndexOf(host.Upper())
+    IF i >= 0 THEN
+        IF SYS.Ticks - dnsAt[i] < DNSKEEP THEN RETURN dnsAddr[i]
+        dnsName.RemoveAt(i)
+        dnsAddr.RemoveAt(i)
+        dnsAt.RemoveAt(i)
+    END IF
+    resolving = TRUE
+    addr = NET.Resolve(host)
+    resolving = FALSE
+    IF addr <> "" AND dnsName.IndexOf(host.Upper()) < 0 THEN
+        dnsName.Add(host.Upper())
+        dnsAddr.Add(addr)
+        dnsAt.Add(SYS.Ticks)
+    END IF
+    RETURN addr
+END FUNCTION
+
 ' Opens the connection and sends the request, as Voyager does. What comes back
 ' arrives through Web_OnMessage until the server closes.
 SUB StartFetch (kind AS String, url AS String, src AS String)
     VAR conn AS NET_Connection
+    VAR addr AS String
+    VAR mine AS Integer
     VAR request AS String
     VAR cookie AS String
     fetching = TRUE
@@ -719,8 +792,17 @@ SUB StartFetch (kind AS String, url AS String, src AS String)
         fDone = TRUE
         RETURN
     END IF
+    mine = fNumber
+    addr = Lookup(HostOf(url))
+    ' (Stop, or another page, while we looked)
+    IF mine <> fNumber THEN RETURN
+    IF addr = "" THEN
+        fError = "Unknown host: " + HostOf(url)
+        fDone = TRUE
+        RETURN
+    END IF
     TRY
-        conn = web.Connect(HostOf(url), PortOf(url))
+        conn = web.Connect(addr, PortOf(url))
         conn.Tag = Str(fNumber)
         IF kind = "page" THEN
             progress.Value = 40
@@ -896,6 +978,258 @@ FUNCTION FriendlyError (status AS Integer, url AS String) AS String
          + "<li>Click the <b>Back</b> button to try another link.</li></ul>" _
          + "<p><font size=""2"">HTTP " + Str(status) + " - Simxplorer</font></p></body></html>"
 END FUNCTION
+
+' ---------------------------------------------------------------- the scripts' requests
+
+SUB XhrForget (i AS Integer)
+    xSerial.RemoveAt(i)
+    xObj.RemoveAt(i)
+    xMethod.RemoveAt(i)
+    xUrl.RemoveAt(i)
+    xHeaders.RemoveAt(i)
+    xBody.RemoveAt(i)
+    xState.RemoveAt(i)
+    xRaw.RemoveAt(i)
+    xGot.RemoveAt(i)
+    xError.RemoveAt(i)
+    xSince.RemoveAt(i)
+    xShown.RemoveAt(i)
+END SUB
+
+' Opens a request's connection and sends it, with this machine's cookies for
+' that server and our User-Agent, as a page fetch does. Nothing may wait
+' after the Connect in this tick (see StartFetch).
+SUB StartXhr (serial AS Integer)
+    VAR conn AS NET_Connection
+    VAR addr AS String
+    VAR i AS Integer
+    VAR url AS String
+    VAR path AS String
+    VAR request AS String
+    VAR cookie AS String
+    VAR line AS String
+    VAR hasType AS Bool
+    i = xSerial.IndexOf(serial)
+    url = xUrl[i]
+    xState[i] = "sent"
+    xSince[i] = SYS.Ticks
+    ' a page on this disk may read files next to it
+    IF url.Lower().StartsWith("file:") THEN
+        path = url.Substring(5, url.Length - 5)
+        IF FS.Exists(path) AND NOT FS.IsDir(path) THEN
+            xRaw[i] = "HTTP/1.0 200 OK" + EOL + EOL + FS.Read(path)
+        ELSE
+            xRaw[i] = "HTTP/1.0 404 Not Found" + EOL + EOL
+        END IF
+        xGot[i] = 1
+        xState[i] = "done"
+        RETURN
+    END IF
+    IF NOT url.Lower().StartsWith("http://") THEN
+        xError[i] = "Simxplorer cannot fetch " + url
+        xState[i] = "done"
+        RETURN
+    END IF
+    request = xMethod[i] + " " + PathOf(url) + " HTTP/1.0" + EOL + "Host: " + HostOf(url) + EOL + "User-Agent: " + APPAGENT + EOL + "Accept: */*"
+    IF curUrl.StartsWith("http:") THEN request = request + EOL + "Referer: " + curUrl
+    cookie = CookieHeader(HostOf(url))
+    IF cookie <> "" THEN request = request + EOL + "Cookie: " + cookie
+    FOR EACH line IN xHeaders[i].Split(EOL)
+        IF NOT line.Contains(":") THEN CONTINUE
+        ' the browser says these itself
+        IF "|host|user-agent|cookie|content-length|referer|".Contains("|" + line.Substring(0, line.IndexOf(":")).Trim().Lower() + "|") THEN CONTINUE
+        IF line.Lower().StartsWith("content-type:") THEN hasType = TRUE
+        request = request + EOL + line
+    NEXT
+    IF xBody[i] <> "" OR xMethod[i] = "POST" THEN
+        IF NOT hasType THEN request = request + EOL + "Content-Type: application/x-www-form-urlencoded"
+        request = request + EOL + "Content-Length: " + Str(xBody[i].Length) + EOL + EOL + xBody[i]
+    ELSE
+        request = request + EOL
+    END IF
+    IF request.Length > 65000 THEN
+        xError[i] = "Message too long"
+        xState[i] = "done"
+        RETURN
+    END IF
+    addr = Lookup(HostOf(url))
+    i = xSerial.IndexOf(serial)
+    IF i < 0 THEN RETURN
+    IF addr = "" THEN
+        xError[i] = "Unknown host: " + HostOf(url)
+        xState[i] = "done"
+        RETURN
+    END IF
+    TRY
+        conn = xweb.Connect(addr, PortOf(url))
+        conn.Tag = "x" + Str(serial)
+        conn.Send(request)
+    CATCH err
+        ' (the page may have gone while we waited)
+        i = xSerial.IndexOf(serial)
+        IF i >= 0 THEN
+            xError[i] = err
+            xState[i] = "done"
+        END IF
+    END TRY
+    ' Nothing else may wait in this tick.
+END SUB
+
+FUNCTION XhrOf (conn AS NET_Connection) AS Integer
+    IF NOT conn.Tag.StartsWith("x") THEN RETURN -1
+    RETURN xSerial.IndexOf(Int(Val(conn.Tag.Substring(1, conn.Tag.Length - 1))))
+END FUNCTION
+
+SUB Xhr_OnMessage (conn AS NET_Connection, message AS String)
+    VAR i AS Integer
+    i = XhrOf(conn)
+    IF i < 0 THEN RETURN
+    IF xState[i] <> "sent" THEN RETURN
+    IF xGot[i] = 0 THEN
+        xRaw[i] = message
+    ELSE
+        xRaw[i] = xRaw[i] + EOL + message
+    END IF
+    xGot[i] = xGot[i] + 1
+END SUB
+
+SUB Xhr_OnClose (conn AS NET_Connection)
+    VAR i AS Integer
+    i = XhrOf(conn)
+    IF i < 0 THEN RETURN
+    IF xState[i] = "sent" THEN xState[i] = "done"
+END SUB
+
+' Tells the page about one request a tick: one that is in (or failed, or
+' took too long), or one that has started to arrive.
+SUB XhrPump ()
+    VAR i AS Integer
+    FOR i = 0 TO xSerial.Count - 1
+        IF xState[i] = "sent" AND SYS.Ticks - xSince[i] > PATIENCE THEN
+            IF xGot[i] = 0 THEN xError[i] = "The operation timed out."
+            xState[i] = "done"
+        END IF
+        IF xState[i] = "done" THEN
+            XhrReport(xSerial[i])
+            RETURN
+        END IF
+        IF xState[i] = "sent" AND xGot[i] > 0 AND xShown[i] < 3 THEN
+            XhrParse(xRaw[i], "")
+            IF hpStatus > 0 THEN
+                XhrReport(xSerial[i])
+                RETURN
+            END IF
+        END IF
+    NEXT
+END SUB
+
+' readyState 2 and 3 when the answer starts to come, 4 when it is all in:
+' status 0 then if nothing came. Set-Cookie is kept, as for a page.
+SUB XhrReport (serial AS Integer)
+    VAR i AS Integer
+    VAR obj AS Integer
+    VAR done AS Bool
+    VAR state AS Integer
+    VAR line AS String
+    VAR status AS Integer
+    VAR reason AS String
+    VAR headers AS String
+    VAR body AS String
+    i = xSerial.IndexOf(serial)
+    obj = xObj[i]
+    done = xState[i] = "done"
+    ' (kept here: another tick may parse another while a handler waits)
+    XhrParse(xRaw[i], xError[i])
+    status = hpStatus
+    reason = hpReason
+    headers = hpHeaders
+    body = hpBody
+    IF done THEN
+        IF status > 0 THEN
+            FOR EACH line IN headers.Split(EOL)
+                IF line.Lower().StartsWith("set-cookie:") THEN TakeCookie(HostOf(xUrl[i]), line.Substring(11, line.Length - 11).Trim())
+            NEXT
+        END IF
+        state = xShown[i]
+        XhrForget(i)
+        ' (an answer that never arrived goes straight to 4)
+        IF status > 0 THEN
+            WHILE state < 3
+                state = state + 1
+                XhrFire(obj, serial, state, status, reason, headers, body)
+            END WHILE
+        END IF
+        XhrFire(obj, serial, 4, status, reason, headers, body)
+        RETURN
+    END IF
+    state = xShown[i]
+    xShown[i] = 3
+    WHILE state < 3
+        state = state + 1
+        XhrFire(obj, serial, state, status, reason, headers, body)
+        IF xSerial.IndexOf(serial) < 0 THEN RETURN
+    END WHILE
+END SUB
+
+' Runs the page's handlers for a request's news, as RunCode runs others.
+SUB XhrFire (obj AS Integer, serial AS Integer, state AS Integer, status AS Integer, reason AS String, headers AS String, body AS String)
+    VAR err AS String
+    VAR written AS String
+    IF NOT scriptsOn OR busy THEN RETURN
+    busy = TRUE
+    jsOut = ""
+    err = JsXhrUpdate(obj, serial, state, status, reason, headers, body)
+    written = jsOut
+    jsOut = ""
+    busy = FALSE
+    IF err <> "" THEN
+        ScriptError(err)
+        RETURN
+    END IF
+    IF written <> "" THEN Rewrite(written)
+END SUB
+
+' A response taken apart: hpStatus (0 when there was none), hpReason,
+' hpHeaders (as they came, a line each) and hpBody.
+SUB XhrParse (raw AS String, failure AS String)
+    VAR lines AS Array OF String
+    VAR i AS Integer
+    VAR line AS String
+    VAR head AS Array OF String
+    VAR body AS Array OF String
+    VAR first AS Array OF String
+    hpStatus = 0
+    hpReason = ""
+    hpHeaders = ""
+    hpBody = ""
+    IF failure <> "" OR raw = "" THEN RETURN
+    IF NOT raw.StartsWith("HTTP/") THEN
+        hpStatus = 200
+        hpReason = "OK"
+        hpBody = raw
+        RETURN
+    END IF
+    lines = raw.Split(EOL)
+    first = lines[0].Replace(Chr(13), "").Split(" ")
+    IF first.Count > 1 THEN hpStatus = Int(Val(first[1]))
+    FOR i = 2 TO first.Count - 1
+        IF hpReason <> "" THEN hpReason = hpReason + " "
+        hpReason = hpReason + first[i]
+    NEXT
+    i = 1
+    WHILE i < lines.Count
+        line = lines[i].Replace(Chr(13), "")
+        i = i + 1
+        IF line.Trim() = "" THEN BREAK
+        IF line.Contains(":") THEN head.Add(line)
+    END WHILE
+    WHILE i < lines.Count
+        body.Add(lines[i])
+        i = i + 1
+    END WHILE
+    hpHeaders = head.Join(EOL)
+    hpBody = body.Join(EOL)
+END SUB
 
 ' ---------------------------------------------------------------- pictures
 
@@ -1324,6 +1658,10 @@ SUB NewPage ()
     tmCode.Clear()
     tmFn.Clear()
     tmEvery.Clear()
+    ' the old page's requests: whatever still comes back is let go
+    WHILE xSerial.Count > 0
+        XhrForget(0)
+    END WHILE
     sparkSubs = ""
     bodyOnload = ""
     refreshAt = 0
@@ -1951,6 +2289,28 @@ SUB HostSubmit (form AS Integer)
     SendForm(form, -1, FALSE)
 END SUB
 
+' xhr.send(): the request waits for a tick of its own. Returns its number.
+FUNCTION HostXhrSend (method AS String, url AS String, headers AS String, body AS String, obj AS Integer) AS Integer
+    xCount = xCount + 1
+    xSerial.Add(xCount)
+    xObj.Add(obj)
+    xMethod.Add(method)
+    xUrl.Add(Absolute(curUrl, url))
+    xHeaders.Add(headers)
+    xBody.Add(body)
+    xState.Add("wait")
+    xRaw.Add("")
+    xGot.Add(0)
+    xError.Add("")
+    xSince.Add(SYS.Ticks)
+    xShown.Add(1)
+    RETURN xCount
+END FUNCTION
+
+SUB HostXhrAbort (req AS Integer)
+    IF xSerial.IndexOf(req) >= 0 THEN XhrForget(xSerial.IndexOf(req))
+END SUB
+
 SUB HostYield ()
     SYS.Sleep(0)
 END SUB
@@ -2474,7 +2834,7 @@ SUB MenuCommand (item AS String)
             box.Title = "About Simxplorer"
             box.Kind = "info"
             box.Text = "Simxplorer" + EOL + "Version 3.02 for SIM95" + EOL + EOL _
-                + "With a JavaScript interpreter written in SPARK: functions, objects, arrays, Date and Math, forms, alert, confirm and prompt, setTimeout, document.write and cookies." + EOL + EOL _
+                + "With a JavaScript interpreter written in SPARK: functions, objects, arrays, Date and Math, forms, alert, confirm and prompt, setTimeout, document.write, cookies, and XMLHttpRequest for pages that talk to their server in the background." + EOL + EOL _
                 + "Extras of this edition: AutoSearch from the Address bar (type ? chess), AskSim's cached copy when a site is down, and Voyager's cookies and bookmarks." + EOL + EOL _
                 + "Pages with SPARK scripts are for Voyager; Simxplorer shows them without."
             box.Show()

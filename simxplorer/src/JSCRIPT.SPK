@@ -23,10 +23,16 @@
 ' The page it runs in is reached through Host... functions, which the browser
 ' defines: HostAlert, HostConfirm, HostPrompt, HostStatus, HostNavigate,
 ' HostGet, HostSet, HostHas, HostInfo, HostSetInfo, HostTimeout,
-' HostClearTimeout, HostHistory, HostOpen, HostSubmit, HostYield, HostSlow.
+' HostClearTimeout, HostHistory, HostOpen, HostSubmit, HostYield, HostSlow,
+' and HostXhrSend and HostXhrAbort for XMLHttpRequest.
 '
 ' JsReset() starts a fresh page. JsRun(source) runs a script and returns ""
 ' or an error ("line|message"). What document.write wrote is in jsOut.
+'
+' XMLHttpRequest (and IE's ActiveXObject("Microsoft.XMLHTTP")): send() hands
+' the request to HostXhrSend and returns at once. The browser fetches it and
+' reports back through JsXhrUpdate, which runs onreadystatechange. fetch()
+' rides on the same machinery and returns a small promise (then and catch).
 
 ' ---------------------------------------------------------------- state
 
@@ -65,6 +71,8 @@ VAR jsDateProto AS Integer
 VAR jsDocument AS Integer
 VAR jsLocation AS Integer
 VAR jsFormsArray AS Integer
+VAR jsXhrProto AS Integer
+VAR jsPromiseProto AS Integer
 VAR jsHostCache AS Array OF String   ' "id|object" for page elements already wrapped
 
 VAR jsSig AS String                  ' "" or "b" break, "c" continue, "r" return
@@ -113,7 +121,7 @@ SUB JsLex (src AS String)
     jtText.Clear()
     jtLine.Clear()
     jtNl.Clear()
-    ops = ["===", "!==", "==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%=", "+", "-", "*", "/", "%", "<", ">", "=", "!", "?", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]"]
+    ops = ["===", "!==", "==", "=>", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%=", "+", "-", "*", "/", "%", "<", ">", "=", "!", "?", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]"]
     n = src.Length
     line = jsLineBase
     fresh = TRUE
@@ -529,6 +537,7 @@ FUNCTION JsAssign () AS Integer
     VAR op AS String
     VAR line AS Integer
     line = JsAt()
+    IF JsArrowAhead() THEN RETURN JsArrow()
     left = JsConditional()
     IF jtType[jp] = "op" AND "|=|+=|-=|*=|/=|%=|".Contains("|" + jtText[jp] + "|") THEN
         op = jtText[jp]
@@ -537,6 +546,47 @@ FUNCTION JsAssign () AS Integer
         RETURN JsNode("assign", left, JsAssign(), 0, 0, op, "", line)
     END IF
     RETURN left
+END FUNCTION
+
+' Is an arrow function next: x => ..., () => ..., (a, b) => ...?
+FUNCTION JsArrowAhead () AS Bool
+    VAR k AS Integer
+    IF jtType[jp] = "id" THEN RETURN jtType[jp + 1] = "op" AND jtText[jp + 1] = "=>"
+    IF NOT JsIsOp("(") THEN RETURN FALSE
+    k = jp + 1
+    WHILE jtType[k] = "id" OR (jtType[k] = "op" AND jtText[k] = ",")
+        k = k + 1
+    END WHILE
+    IF jtType[k] <> "op" OR jtText[k] <> ")" THEN RETURN FALSE
+    RETURN jtType[k + 1] = "op" AND jtText[k + 1] = "=>"
+END FUNCTION
+
+' An arrow function, a later convenience: a function expression marked
+' (nd = 1) to keep the this of where it was made. A body that is just an
+' expression returns it.
+FUNCTION JsArrow () AS Integer
+    VAR params AS Array OF String
+    VAR line AS Integer
+    VAR body AS Integer
+    line = JsAt()
+    IF jtType[jp] = "id" THEN
+        params.Add(JsName())
+    ELSE
+        jp = jp + 1
+        WHILE NOT JsIsOp(")")
+            params.Add(JsName())
+            IF NOT JsIsOp(")") THEN JsExpect(",")
+        END WHILE
+        jp = jp + 1
+    END IF
+    JsExpect("=>")
+    IF JsIsOp("{") THEN
+        body = JsBlock()
+    ELSE
+        body = JsNode("return", JsAssign(), 0, 0, 0, "", "", line)
+        body = JsNode("block", 0, 0, 0, 0, "", Str(body), line)
+    END IF
+    RETURN JsNode("funcexpr", body, 0, 0, 1, "", params.Join(","), line)
 END FUNCTION
 
 FUNCTION JsConditional () AS Integer
@@ -1279,6 +1329,12 @@ FUNCTION JsGet (v AS String, name AS String) AS String
             RETURN JsStyleGet(id, name)
         CASE "Location"
             RETURN JsLocationGet(name)
+        CASE "All"
+            ' IE's document.all: every element with an id
+            IF name = "item" THEN RETURN JsNative("All.item")
+            IF name <> "" AND JsOwn(id, name) < 0 THEN
+                IF HostHas(name) THEN RETURN JsElement(name)
+            END IF
         CASE "Document"
             IF "|title|cookie|URL|lastModified|referrer|domain|".Contains("|" + name + "|") THEN RETURN JsDocumentGet(name)
         CASE "Global"
@@ -2180,6 +2236,8 @@ FUNCTION JsCall (fn AS String, thisVal AS String, args AS Array OF String) AS St
     IF jsDepth > JSMAXDEPTH THEN THROW Str(jsLine) + "|Out of stack space"
     line = jsLine
     scope = JsNewScope(joB[id], thisVal)
+    ' an arrow function's this is the one where it was made
+    IF nd[node] = 1 THEN JsDeleteProp(scope, "@this")
     IF nl[node] <> "" THEN params = nl[node].Split(",")
     FOR i = 0 TO params.Count - 1
         IF i < args.Count THEN
@@ -2374,6 +2432,12 @@ FUNCTION JsConstruct (name AS String, args AS Array OF String) AS String
             RETURN JsNewDate(JsLocalMs(id, JsReal(args[1]), ms, JsReal(JsArg(args, 3)), JsReal(JsArg(args, 4)), JsReal(JsArg(args, 5)), JsReal(JsArg(args, 6))))
         CASE "Error"
             RETURN JsMakeError("0|" + JsStr(JsArg(args, 0)))
+        CASE "XMLHttpRequest"
+            RETURN JsO(JsNewXhr())
+        CASE "ActiveXObject"
+            ' IE's way: only the XMLHTTP objects are here
+            IF JsStr(JsArg(args, 0)).Lower() = "microsoft.xmlhttp" OR JsStr(JsArg(args, 0)).Lower().StartsWith("msxml2.xmlhttp") THEN RETURN JsO(JsNewXhr())
+            THROW Str(jsLine) + "|Automation server can't create object"
     END SELECT
     RETURN JsCallNative(name, JsO(jsGlobal), args)
 END FUNCTION
@@ -2392,6 +2456,8 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
     IF name.StartsWith("Array.") THEN RETURN JsArrayMethod(name.Substring(6, name.Length - 6), JsId(thisVal), args)
     IF name.StartsWith("Math.") THEN RETURN JsMath(name.Substring(5, name.Length - 5), args)
     IF name.StartsWith("Date.") THEN RETURN JsDateMethod(name.Substring(5, name.Length - 5), thisVal, args)
+    IF name.StartsWith("XHR.") THEN RETURN JsXhrMethod(name.Substring(4, name.Length - 4), thisVal, args)
+    IF name.StartsWith("Promise.") OR name.StartsWith("Response.") THEN RETURN JsPromiseMethod(name, thisVal, args)
     SELECT CASE name
         CASE "alert"
             HostAlert(JsStr(a))
@@ -2424,8 +2490,13 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
             RETURN "n" + JsNum(a)
         CASE "Boolean"
             RETURN JsB(JsBool(a))
-        CASE "Array", "Object", "Error"
+        CASE "Array", "Object", "Error", "XMLHttpRequest", "ActiveXObject"
             RETURN JsConstruct(name, args)
+        CASE "fetch"
+            RETURN JsFetch(args)
+        CASE "All.item"
+            IF HostHas(JsStr(a)) THEN RETURN JsElement(JsStr(a))
+            RETURN "l"
         CASE "Date"
             RETURN JsS(JsDateText(JsNow()))
         CASE "String.fromCharCode"
@@ -3016,6 +3087,348 @@ FUNCTION JsDateMethod (name AS String, thisVal AS String, args AS Array OF Strin
     THROW Str(jsLine) + "|Object doesn't support this property or method"
 END FUNCTION
 
+' ---------------------------------------------------------------- XMLHttpRequest
+'
+' An XMLHttpRequest is an object of class XHR. Besides what the page sees
+' (readyState, status, statusText, responseText, the handlers) it keeps
+' hidden properties: @method, @url, @headers (one "Name: value" a line) and
+' @rheaders for the response's, and @req, the browser's number for the
+' request on its way (0 when there is none). fetch() makes one too, with
+' @promise, the promise it answers.
+
+FUNCTION JsNewXhr () AS Integer
+    VAR id AS Integer
+    id = JsNewObject("XHR", jsXhrProto)
+    JsPutOwn(id, "readyState", "n0")
+    JsPutOwn(id, "status", "n0")
+    JsPutOwn(id, "statusText", "s")
+    JsPutOwn(id, "responseText", "s")
+    JsPutOwn(id, "responseXML", "l")
+    JsPutOwn(id, "onreadystatechange", "l")
+    JsPutOwn(id, "onload", "l")
+    JsPutOwn(id, "onerror", "l")
+    JsPutOwn(id, "@req", "n0")
+    JsPutOwn(id, "@headers", "s")
+    JsPutOwn(id, "@rheaders", "s")
+    RETURN id
+END FUNCTION
+
+' readyState becomes state, and onreadystatechange hears of it.
+SUB JsXhrState (id AS Integer, state AS Integer)
+    VAR none AS Array OF String
+    VAR fn AS String
+    VAR v AS String
+    JsPutOwn(id, "readyState", JsN(state))
+    fn = JsGetProp(id, "onreadystatechange")
+    IF JsCallable(fn) THEN v = JsCall(fn, JsO(id), none)
+END SUB
+
+FUNCTION JsXhrMethod (name AS String, thisVal AS String, args AS Array OF String) AS String
+    VAR id AS Integer
+    VAR body AS String
+    VAR line AS String
+    VAR want AS String
+    VAR out AS Array OF String
+    id = JsId(thisVal)
+    IF id = 0 OR joClass[id] <> "XHR" THEN THROW Str(jsLine) + "|Object expected"
+    SELECT CASE name
+        CASE "open"
+            ' A script cannot stop and wait for the network: the browser fetches
+            ' between scripts, a tick at a time
+            IF args.Count > 2 THEN
+                IF args[2] <> "u" AND NOT JsBool(args[2]) THEN THROW Str(jsLine) + "|Simxplorer cannot wait for the network in the middle of a script. Use open(method, url, true) and onreadystatechange"
+            END IF
+            IF JsInt(JsGetProp(id, "@req")) > 0 THEN HostXhrAbort(JsInt(JsGetProp(id, "@req")))
+            JsPutOwn(id, "@method", JsS(JsStr(JsArg(args, 0)).Upper()))
+            JsPutOwn(id, "@url", JsS(JsStr(JsArg(args, 1))))
+            JsPutOwn(id, "@headers", "s")
+            JsPutOwn(id, "@rheaders", "s")
+            JsPutOwn(id, "@req", "n0")
+            JsPutOwn(id, "status", "n0")
+            JsPutOwn(id, "statusText", "s")
+            JsPutOwn(id, "responseText", "s")
+            JsXhrState(id, 1)
+            RETURN "u"
+        CASE "setRequestHeader"
+            IF JsInt(JsGetProp(id, "readyState")) <> 1 OR JsInt(JsGetProp(id, "@req")) <> 0 THEN THROW Str(jsLine) + "|Unspecified error"
+            line = JsStr(JsArg(args, 0)).Replace(Chr(10), "").Replace(Chr(13), "") + ": " + JsStr(JsArg(args, 1)).Replace(Chr(10), " ").Replace(Chr(13), "")
+            JsPutOwn(id, "@headers", JsS(JsStr(JsGetProp(id, "@headers")) + line + Chr(10)))
+            RETURN "u"
+        CASE "send"
+            IF JsInt(JsGetProp(id, "readyState")) <> 1 OR JsInt(JsGetProp(id, "@req")) <> 0 THEN THROW Str(jsLine) + "|Unspecified error"
+            IF args.Count > 0 THEN
+                IF args[0] <> "u" AND args[0] <> "l" THEN body = JsStr(args[0])
+            END IF
+            JsPutOwn(id, "@req", JsN(HostXhrSend(JsStr(JsGetProp(id, "@method")), JsStr(JsGetProp(id, "@url")), JsStr(JsGetProp(id, "@headers")), body, id)))
+            RETURN "u"
+        CASE "abort"
+            IF JsInt(JsGetProp(id, "@req")) > 0 THEN HostXhrAbort(JsInt(JsGetProp(id, "@req")))
+            JsPutOwn(id, "@req", "n0")
+            JsPutOwn(id, "readyState", "n0")
+            JsPutOwn(id, "status", "n0")
+            JsPutOwn(id, "responseText", "s")
+            RETURN "u"
+        CASE "getResponseHeader"
+            want = JsStr(JsArg(args, 0)).Lower().Trim() + ":"
+            FOR EACH line IN JsStr(JsGetProp(id, "@rheaders")).Split(Chr(10))
+                IF line.Lower().StartsWith(want) THEN RETURN JsS(line.Substring(want.Length, line.Length - want.Length).Trim())
+            NEXT
+            RETURN "l"
+        CASE "getAllResponseHeaders"
+            FOR EACH line IN JsStr(JsGetProp(id, "@rheaders")).Split(Chr(10))
+                IF line <> "" THEN out.Add(line)
+            NEXT
+            IF out.Count = 0 THEN RETURN "s"
+            RETURN JsS(out.Join(Chr(13) + Chr(10)) + Chr(13) + Chr(10))
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+' The browser's news of request req, which XMLHttpRequest id made: readyState
+' 2, 3 or 4 (at 4, status 0 means it failed). Runs the page's handlers, and
+' settles fetch()'s promise. Returns "" or an error ("line|message").
+FUNCTION JsXhrUpdate (id AS Integer, req AS Integer, state AS Integer, status AS Integer, statusText AS String, headers AS String, body AS String) AS String
+    VAR none AS Array OF String
+    VAR fn AS String
+    VAR v AS String
+    jsSig = ""
+    jsDepth = 0
+    jsSteps = 0
+    jsLimit = JSSTEPLIMIT
+    jsThrown = ""
+    IF id <= 0 OR id >= joClass.Count THEN RETURN ""
+    IF joClass[id] <> "XHR" THEN RETURN ""
+    ' aborted, or opened again since
+    IF JsInt(JsGetProp(id, "@req")) <> req THEN RETURN ""
+    TRY
+        JsPutOwn(id, "status", JsN(status))
+        JsPutOwn(id, "statusText", JsS(statusText))
+        JsPutOwn(id, "@rheaders", JsS(headers))
+        JsPutOwn(id, "responseText", JsS(body))
+        IF state = 4 THEN JsPutOwn(id, "@req", "n0")
+        JsXhrState(id, state)
+        IF state = 4 THEN
+            IF JsGetProp(id, "@promise").StartsWith("o") THEN JsFetched(id, JsId(JsGetProp(id, "@promise")), status, statusText, body)
+            IF status = 0 THEN
+                fn = JsGetProp(id, "onerror")
+            ELSE
+                fn = JsGetProp(id, "onload")
+            END IF
+            IF JsCallable(fn) THEN v = JsCall(fn, JsO(id), none)
+        END IF
+    CATCH err
+        RETURN JsTidyError(err)
+    END TRY
+    jsSig = ""
+    RETURN ""
+END FUNCTION
+
+' fetch(url[, {method, body, headers}]): a promise of a response.
+FUNCTION JsFetch (args AS Array OF String) AS String
+    VAR x AS Integer
+    VAR p AS Integer
+    VAR init AS String
+    VAR method AS String
+    VAR body AS String
+    VAR headers AS String
+    VAR h AS String
+    VAR key AS String
+    method = "GET"
+    init = JsArg(args, 1)
+    IF init.StartsWith("o") THEN
+        IF JsGet(init, "method") <> "u" THEN method = JsStr(JsGet(init, "method")).Upper()
+        IF JsGet(init, "body") <> "u" AND JsGet(init, "body") <> "l" THEN body = JsStr(JsGet(init, "body"))
+        h = JsGet(init, "headers")
+        IF h.StartsWith("o") THEN
+            FOR EACH key IN joKeys[JsId(h)].Split("|")
+                IF key <> "" THEN headers = headers + key + ": " + JsStr(JsGet(h, key)) + Chr(10)
+            NEXT
+        END IF
+    END IF
+    x = JsNewXhr()
+    p = JsNewPromise()
+    JsPutOwn(x, "@promise", JsO(p))
+    JsPutOwn(x, "@method", JsS(method))
+    JsPutOwn(x, "@url", JsS(JsStr(JsArg(args, 0))))
+    JsPutOwn(x, "readyState", "n1")
+    JsPutOwn(x, "@req", JsN(HostXhrSend(method, JsStr(JsArg(args, 0)), headers, body, x)))
+    RETURN JsO(p)
+END FUNCTION
+
+' fetch()'s answer: a Response, or (when nothing came back) a rejection.
+SUB JsFetched (x AS Integer, p AS Integer, status AS Integer, statusText AS String, body AS String)
+    VAR r AS Integer
+    VAR hd AS Integer
+    IF status = 0 THEN
+        JsResolve(p, FALSE, JsMakeError("0|Failed to fetch " + JsStr(JsGetProp(x, "@url"))))
+        RETURN
+    END IF
+    r = JsNewObject("Object", jsObjectProto)
+    JsPutOwn(r, "status", JsN(status))
+    JsPutOwn(r, "statusText", JsS(statusText))
+    JsPutOwn(r, "ok", JsB(status >= 200 AND status < 300))
+    JsPutOwn(r, "url", JsGetProp(x, "@url"))
+    JsPutOwn(r, "@body", JsS(body))
+    JsPutOwn(r, "text", JsNative("Response.text"))
+    JsPutOwn(r, "json", JsNative("Response.json"))
+    hd = JsNewObject("Object", jsObjectProto)
+    JsPutOwn(hd, "@xhr", JsO(x))
+    JsPutOwn(hd, "get", JsNative("Response.header"))
+    JsPutOwn(r, "headers", JsO(hd))
+    JsResolve(p, TRUE, JsO(r))
+END SUB
+
+' ---------------------------------------------------------------- promises, small ones
+'
+' Enough for fetch(url).then(function (r) { return r.text(); }).then(...):
+' then and catch, chaining, and a callback's thenable followed. @state is
+' pending, ok or err; @value what it settled with; @then the callbacks
+' waiting, three to an entry (on ok, on err, the promise then() returned).
+' Callbacks run as soon as there is something to give them.
+
+FUNCTION JsNewPromise () AS Integer
+    VAR id AS Integer
+    VAR none AS Array OF String
+    id = JsNewObject("Promise", jsPromiseProto)
+    JsPutOwn(id, "@state", "spending")
+    JsPutOwn(id, "@value", "u")
+    JsPutOwn(id, "@then", JsO(JsNewArray(none)))
+    RETURN id
+END FUNCTION
+
+' A function that settles promise p (kind "ok" or "err") with its argument.
+FUNCTION JsSettler (p AS Integer, kind AS String) AS String
+    RETURN JsNative("Promise.settle:" + kind + ":" + Str(p))
+END FUNCTION
+
+SUB JsResolve (p AS Integer, ok AS Bool, v AS String)
+    VAR args AS Array OF String
+    VAR fn AS String
+    VAR r AS String
+    VAR waiting AS Array OF String
+    VAR i AS Integer
+    VAR none AS Array OF String
+    IF JsGetProp(p, "@state") <> "spending" THEN RETURN
+    ' a thenable is followed: p ends as it does
+    IF ok AND v.StartsWith("o") AND JsId(v) <> p THEN
+        fn = JsGet(v, "then")
+        IF JsCallable(fn) THEN
+            args.Add(JsSettler(p, "ok"))
+            args.Add(JsSettler(p, "err"))
+            r = JsCall(fn, v, args)
+            RETURN
+        END IF
+    END IF
+    IF ok THEN
+        JsPutOwn(p, "@state", "sok")
+    ELSE
+        JsPutOwn(p, "@state", "serr")
+    END IF
+    JsPutOwn(p, "@value", v)
+    waiting = JsItems(JsId(JsGetProp(p, "@then")))
+    JsPutOwn(p, "@then", JsO(JsNewArray(none)))
+    i = 0
+    WHILE i + 2 < waiting.Count
+        JsRunThen(p, waiting[i], waiting[i + 1], JsId(waiting[i + 2]))
+        i = i + 3
+    END WHILE
+END SUB
+
+' A settled promise p gives its value to the callback that fits; what that
+' returns (or throws) settles child.
+SUB JsRunThen (p AS Integer, onOk AS String, onErr AS String, child AS Integer)
+    VAR ok AS Bool
+    VAR fn AS String
+    VAR args AS Array OF String
+    VAR r AS String
+    VAR depth AS Integer
+    VAR failed AS Bool
+    ok = JsGetProp(p, "@state") = "sok"
+    fn = onErr
+    IF ok THEN fn = onOk
+    IF NOT JsCallable(fn) THEN
+        JsResolve(child, ok, JsGetProp(p, "@value"))
+        RETURN
+    END IF
+    args.Add(JsGetProp(p, "@value"))
+    depth = jsDepth
+    TRY
+        r = JsCall(fn, JsO(jsGlobal), args)
+    CATCH err
+        jsDepth = depth
+        IF err.Contains("@aborted") THEN THROW err
+        IF jsThrown <> "" THEN
+            r = jsThrown
+        ELSE
+            r = JsMakeError(err)
+        END IF
+        jsThrown = ""
+        jsSig = ""
+        failed = TRUE
+    END TRY
+    JsResolve(child, NOT failed, r)
+END SUB
+
+FUNCTION JsPromiseMethod (name AS String, thisVal AS String, args AS Array OF String) AS String
+    VAR id AS Integer
+    VAR child AS Integer
+    VAR list AS Integer
+    VAR n AS Integer
+    VAR parts AS Array OF String
+    VAR line AS String
+    VAR want AS String
+    VAR code AS Array OF String
+    VAR v AS String
+    id = JsId(thisVal)
+    IF name.StartsWith("Promise.settle:") THEN
+        parts = name.Split(":")
+        JsResolve(Int(Val(parts[2])), parts[1] = "ok", JsArg(args, 0))
+        RETURN "u"
+    END IF
+    SELECT CASE name
+        CASE "Promise.then", "Promise.catch"
+            IF id = 0 OR joClass[id] <> "Promise" THEN THROW Str(jsLine) + "|Object expected"
+            child = JsNewPromise()
+            IF name = "Promise.catch" THEN
+                args.Insert(0, "u")
+            END IF
+            IF JsGetProp(id, "@state") = "spending" THEN
+                list = JsId(JsGetProp(id, "@then"))
+                n = JsInt(JsGetProp(list, "length"))
+                JsPutOwn(list, Str(n), JsArg(args, 0))
+                JsPutOwn(list, Str(n + 1), JsArg(args, 1))
+                JsPutOwn(list, Str(n + 2), JsO(child))
+                JsPutOwn(list, "length", JsN(n + 3))
+            ELSE
+                JsRunThen(id, JsArg(args, 0), JsArg(args, 1), child)
+            END IF
+            RETURN JsO(child)
+        CASE "Response.text"
+            child = JsNewPromise()
+            JsResolve(child, TRUE, JsGet(thisVal, "@body"))
+            RETURN JsO(child)
+        CASE "Response.json"
+            ' JSON is JavaScript, so eval reads it
+            child = JsNewPromise()
+            code.Add(JsS("(" + JsStr(JsGet(thisVal, "@body")) + ")"))
+            TRY
+                v = JsEvalCode(code, jsGlobal)
+            CATCH err
+                JsResolve(child, FALSE, JsMakeError(err))
+                RETURN JsO(child)
+            END TRY
+            JsResolve(child, TRUE, v)
+            RETURN JsO(child)
+        CASE "Response.header"
+            want = JsStr(JsArg(args, 0)).Lower().Trim() + ":"
+            FOR EACH line IN JsStr(JsGetProp(JsId(JsGet(thisVal, "@xhr")), "@rheaders")).Split(Chr(10))
+                IF line.Lower().StartsWith(want) THEN RETURN JsS(line.Substring(want.Length, line.Length - want.Length).Trim())
+            NEXT
+            RETURN "l"
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
 ' ---------------------------------------------------------------- a fresh page
 
 SUB JsReset ()
@@ -3108,7 +3521,15 @@ SUB JsReset ()
     JsPutOwn(jsDocument, "links", JsO(JsNewArray(none)))
     JsPutOwn(jsDocument, "bgColor", JsS("#FFFFFF"))
     JsPutOwn(jsDocument, "fgColor", JsS("#000000"))
+    JsPutOwn(jsDocument, "all", JsO(JsNewObject("All", jsObjectProto)))
     JsPutOwn(jsGlobal, "document", JsO(jsDocument))
+
+    ' XMLHttpRequest, IE's ActiveXObject for it, and fetch
+    jsXhrProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsXhrProto, "XHR.", "open,setRequestHeader,send,abort,getResponseHeader,getAllResponseHeaders")
+    jsPromiseProto = JsNewObject("Object", jsObjectProto)
+    JsMethods(jsPromiseProto, "Promise.", "then,catch")
+    JsMethods(jsGlobal, "", "XMLHttpRequest,ActiveXObject,fetch")
 
     jsLocation = JsNewObject("Location", jsObjectProto)
     JsPutOwn(jsDocument, "location", JsO(jsLocation))

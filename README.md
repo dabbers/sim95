@@ -19,7 +19,8 @@ A series of programs for the sim95 playground
 * [`eliza/`](eliza/) – ELIZA-95, an ELIZA chatbot with Language-Model-of-Certain-Size
   manners (and the occasional real answer).
 * [`simxplorer/`](simxplorer/) – Simxplorer, a 1996-style web browser
-  program with a JavaScript interpreter written in SPARK.
+  program with a JavaScript interpreter written in SPARK (XMLHttpRequest
+  included), and `SNIFF.SPK` for "best viewed in Simxplorer" server pages.
 * [`simpal/`](simpal/) – SimPal, a late-90s PayPal: send and request
   SimBucks, and a Pay with SimPal button for any web site, on a crash-proof
   ledger.
