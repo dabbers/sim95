@@ -4,6 +4,7 @@ CONST FROM = "%HOST%"
 VAR web AS NET_Socket
 VAR parts AS Array OF String
 VAR done AS Bool
+VAR fetchNo AS Integer      ' which fetch the socket's events belong to
 
 SUB Main ()
     ' a failed Connect spoils the handler it happens in, so all of it sits in a TRY
@@ -19,23 +20,39 @@ SUB Install ()
     VAR i AS Integer
     VAR text AS String
     VAR piece AS String
+    VAR bytes AS Integer
+    VAR tries AS Integer
     web = NET_Socket.New()
     web.onMessage = Web_OnMessage
     web.onClose = Web_OnClose
     Print("Fetching Vapor from " + FROM + "...")
     FOR EACH line IN Fetch("/vapor/catalog.txt").Lines()
-        IF line.StartsWith("VAPOR|") THEN count = Int(Val(line.Split("|")[2]))
+        IF line.StartsWith("VAPOR|") THEN
+            count = Int(Val(line.Split("|")[2]))
+            bytes = Int(Val(line.Split("|")[3]))
+        END IF
     NEXT
     IF count = 0 THEN
         Print("There is no Vapor in the store on " + FROM + ".")
         RETURN
     END IF
-    FOR i = 1 TO count
-        piece = Fetch("/vapor/vapor/" + Str(i) + ".txt")
-        IF piece = "" THEN RETURN
-        text = text + piece
-        Print("  part " + Str(i) + " of " + Str(count))
+    ' the store says how long Vapor is: a download that doesn't add up is fetched again
+    FOR tries = 1 TO 3
+        text = ""
+        FOR i = 1 TO count
+            piece = Fetch("/vapor/vapor/" + Str(i) + ".txt")
+            IF piece = "" THEN piece = Fetch("/vapor/vapor/" + Str(i) + ".txt")
+            IF piece = "" THEN RETURN
+            text = text + piece
+            Print("  part " + Str(i) + " of " + Str(count))
+        NEXT
+        IF bytes = 0 OR text.Length = bytes OR text.Length = bytes + 1 THEN BREAK
+        Print("  that came out " + Str(text.Length) + " long, not " + Str(bytes) + ": again")
     NEXT
+    IF bytes <> 0 AND text.Length <> bytes AND text.Length <> bytes + 1 THEN
+        Print("Vapor didn't arrive whole. Run this again.")
+        RETURN
+    END IF
     FS.Write("C:\PROGRAMS\VAPOR.SPK", text)
     IF NOT FS.Exists("C:\GAMES") THEN FS.MakeDir("C:\GAMES")
     FS.Write("C:\GAMES\VAPOR.INI", "store=http://" + FROM + "/vapor/" + Chr(10))
@@ -50,12 +67,15 @@ FUNCTION Fetch (path AS String) AS String
     VAR since AS Integer
     parts.Clear()
     done = FALSE
+    fetchNo = fetchNo + 1
     TRY
         conn = web.Connect(FROM, 80)
     CATCH err
         Print("Could not reach " + FROM + ": " + err)
         RETURN ""
     END TRY
+    ' (an earlier connection's late messages are not this one's)
+    conn.Tag = Str(fetchNo)
     conn.Send("GET " + path + " HTTP/1.0" + Chr(10) + "Host: " + FROM)
     since = SYS.Ticks
     WHILE NOT done AND SYS.Ticks - since < 10000
@@ -70,9 +90,9 @@ FUNCTION Fetch (path AS String) AS String
 END FUNCTION
 
 SUB Web_OnMessage (conn AS NET_Connection, message AS String)
-    parts.Add(message)
+    IF conn.Tag = Str(fetchNo) THEN parts.Add(message)
 END SUB
 
 SUB Web_OnClose (conn AS NET_Connection)
-    done = TRUE
+    IF conn.Tag = Str(fetchNo) THEN done = TRUE
 END SUB

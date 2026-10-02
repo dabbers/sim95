@@ -49,7 +49,8 @@ await test("the store's web site offers Vapor for download", async () => {
   let r = await alpha.fetch("ALPHA", "/vapor/");
   assert.match(r, /HTTP\/1.0 200/);
   assert.match(r, /<b>Get Vapor<\/b>/);
-  assert.match(r, /<a href="getvapor.asp"><b>getvapor.asp<\/b><\/a>/);
+  assert.match(r, /<a href="getvapor.asp">getvapor.asp<\/a>/);
+  assert.match(r, /On a new machine:/);
   assert.match(r, /<b>SimDOOM<\/b>[\s\S]*build [0-9a-f]{8}/);
   assert.match(r, /<b>SimPlayer<\/b>/, "every store stocks SimPlayer");
   assert.match(entry("SIMPLAYR"), /^SIMPLAYR\|SimPlayer\|\d+\|\d+\|ok\|Multimedia\|.*\|program\|[0-9a-f]{8}\|C:\\PROGRAMS\\PLAYER.SPK\|/);
@@ -63,6 +64,22 @@ await test("the store's web site offers Vapor for download", async () => {
   assert.match(bravo.output(pid), /Vapor is installed/);
   assert.equal(bravo.read("C:\\PROGRAMS\\VAPOR.SPK"), alpha.read("C:\\PROGRAMS\\VAPOR.SPK").replace(/\n?$/, "\n"));
   assert.equal(bravo.read("C:\\GAMES\\VAPOR.INI"), "store=http://alpha/vapor/\n");
+});
+
+await test("a new machine needs only the 21 lines from go.asp: they fetch GETVAPOR, which fetches Vapor", async () => {
+  const r = await alpha.fetch("ALPHA", "/vapor/go.asp");
+  assert.match(r, /Content-Type: text\/plain/);
+  const go = body(r);
+  assert.ok(go.trim().split("\n").length <= 25, "short enough to paste: " + go.trim().split("\n").length + " lines");
+  assert.match(go, /s\.Connect\("alpha", 80\)/);
+  assert.match((await alpha.fetch("ALPHA", "/vapor/")), /SimDOOM|On a new machine/);
+  const fresh = await net.boot("FRESH");
+  fresh.write("C:\\MYFILES\\GO.SPK", go);
+  fresh.run("C:\\MYFILES\\GO.SPK");
+  await wait(() => fresh.exists("C:\\PROGRAMS\\VAPOR.SPK") && proc(fresh, "VAPOR"), "Vapor on the new machine", 40000).catch((e) => { throw new Error(e.message + " " + JSON.stringify(fresh.ui.dialogs) + fresh.errors); });
+  assert.equal(fresh.read("C:\\PROGRAMS\\VAPOR.SPK"), alpha.read("C:\\PROGRAMS\\VAPOR.SPK").replace(/\n?$/, "\n"));
+  assert.equal(fresh.read("C:\\GAMES\\VAPOR.INI"), "store=http://alpha/vapor/\n");
+  assert.deepEqual(fresh.errors, []);
 });
 
 // Driving a Vapor window
@@ -125,7 +142,7 @@ await test("Publish Apps puts the installers in C:\\MYFILES on the shelves", asy
 await test("BRAVO's store shows apps and games; Half-Life 3 is coming soon", async () => {
   await wait(() => B.pid() && B.items().length > 0, "Vapor on bravo", 30000);
   B.menu("Refresh");
-  await wait(() => B.items().includes("- APPS -") && B.items().includes("- GAMES -"), "the headings: " + B.items().join(" / "));
+  await wait(() => B.items().some((i) => i.trim() === "Frostbird") && B.items().includes("- GAMES -"), "the published apps: " + B.items().join(" / "));
   assert.deepEqual(B.items().map((i) => i.trim()), ["- APPS -", "Clippy", "ELIZA-95", "Frostbird", "SimPlayer", "simweb", "- GAMES -", "SimDOOM", "Snake 95", "Half-Life 3"]);
   await B.select("Half-Life 3");
   await wait(() => B.button("Coming soon"), "Coming soon");

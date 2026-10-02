@@ -48,6 +48,44 @@ the old, and every Vapor that has the app is offered the update. Publish a
 newer Vapor (its header says `kind=client`) and every Vapor offers to update
 itself.
 
+## Quick start: a new machine in one paste
+
+On a new machine, open **Start > Programs > SPARK**, paste these lines and
+press **F5**:
+
+```
+VAR t AS String
+VAR d AS Bool
+SUB Main ()
+    VAR s AS NET_Socket
+    VAR c AS NET_Connection
+    s = NET_Socket.New()
+    s.onMessage = Got
+    s.onClose = Done
+    c = s.Connect("starthere", 80)
+    c.Send("GET /vapor/getvapor.asp HTTP/1.0" + Chr(10) + "Host: starthere")
+    WHILE NOT d
+        SYS.Sleep(50)
+    END WHILE
+    FS.Write("C:\MYFILES\GETVAPOR.SPK", t.Substring(t.IndexOf(Chr(10) + Chr(10)) + 2, t.Length - t.IndexOf(Chr(10) + Chr(10)) - 2))
+    SYS.Run("C:\MYFILES\GETVAPOR.SPK")
+END SUB
+SUB Got (c AS NET_Connection, m AS String)
+    t = t + m + Chr(10)
+END SUB
+SUB Done (c AS NET_Connection)
+    d = TRUE
+END SUB
+```
+
+That's all. These lines are stage one: they fetch GETVAPOR.SPK (stage two)
+from the store on STARTHERE, and run it. GETVAPOR downloads Vapor in parts,
+checks it arrived whole, points it at that store and starts it. Then Vapor
+installs everything else.
+
+Every store's page shows the same lines with its own name in them, and
+`http://STORE/vapor/go.asp` gives them as plain text.
+
 ## The download site: getting Vapor
 
 `http://STORE/vapor/` is the store's web site. It has a **Get Vapor** section,

@@ -51,6 +51,11 @@ A series of programs for the sim95 playground
 * [`SIM95-NOTES.md`](SIM95-NOTES.md) – platform limits and a kernel bug worth
   knowing about.
 
+**A new machine:** paste the 21 lines from
+[Vapor's quick start](vapor/README.md#quick-start-a-new-machine-in-one-paste)
+into SPARK and press F5. They fetch Vapor from STARTHERE, and Vapor installs
+the rest.
+
 Paste an app's `INSTALL.SPK` into SPARK and press F5. On its own, a web app
 becomes its machine's home page: one machine per app. Install
 [SimHost](simhost/) first and they all share one machine instead, at

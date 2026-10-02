@@ -54,7 +54,9 @@ SUB Main ()
     File28()
     File29()
     File30()
-    Print("Vapor is installed (31 files).")
+    File31()
+    File32()
+    Print("Vapor is installed (33 files).")
     SYS.Start("C:\PROGRAMS\VAPOR.SPK", "")
 
     Print("Vapor is running, and this machine is a store: http://" + NET.HostName.Lower() + "/vapor/")
@@ -90,6 +92,7 @@ SUB File1 ()
     t = t + "VAR web AS NET_Socket" + NL
     t = t + "VAR parts AS Array OF String" + NL
     t = t + "VAR done AS Bool" + NL
+    t = t + "VAR fetchNo AS Integer      ' which fetch the socket's events belong to" + NL
     t = t + "" + NL
     t = t + "SUB Main ()" + NL
     t = t + "    ' a failed Connect spoils the handler it happens in, so all of it sits in a TRY" + NL
@@ -105,23 +108,39 @@ SUB File1 ()
     t = t + "    VAR i AS Integer" + NL
     t = t + "    VAR text AS String" + NL
     t = t + "    VAR piece AS String" + NL
+    t = t + "    VAR bytes AS Integer" + NL
+    t = t + "    VAR tries AS Integer" + NL
     t = t + "    web = NET_Socket.New()" + NL
     t = t + "    web.onMessage = Web_OnMessage" + NL
     t = t + "    web.onClose = Web_OnClose" + NL
     t = t + "    Print(""Fetching Vapor from "" + FROM + ""..."")" + NL
     t = t + "    FOR EACH line IN Fetch(""/vapor/catalog.txt"").Lines()" + NL
-    t = t + "        IF line.StartsWith(""VAPOR|"") THEN count = Int(Val(line.Split(""|"")[2]))" + NL
+    t = t + "        IF line.StartsWith(""VAPOR|"") THEN" + NL
+    t = t + "            count = Int(Val(line.Split(""|"")[2]))" + NL
+    t = t + "            bytes = Int(Val(line.Split(""|"")[3]))" + NL
+    t = t + "        END IF" + NL
     t = t + "    NEXT" + NL
     t = t + "    IF count = 0 THEN" + NL
     t = t + "        Print(""There is no Vapor in the store on "" + FROM + ""."")" + NL
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL
-    t = t + "    FOR i = 1 TO count" + NL
-    t = t + "        piece = Fetch(""/vapor/vapor/"" + Str(i) + "".txt"")" + NL
-    t = t + "        IF piece = """" THEN RETURN" + NL
-    t = t + "        text = text + piece" + NL
-    t = t + "        Print(""  part "" + Str(i) + "" of "" + Str(count))" + NL
+    t = t + "    ' the store says how long Vapor is: a download that doesn't add up is fetched again" + NL
+    t = t + "    FOR tries = 1 TO 3" + NL
+    t = t + "        text = """"" + NL
+    t = t + "        FOR i = 1 TO count" + NL
+    t = t + "            piece = Fetch(""/vapor/vapor/"" + Str(i) + "".txt"")" + NL
+    t = t + "            IF piece = """" THEN piece = Fetch(""/vapor/vapor/"" + Str(i) + "".txt"")" + NL
+    t = t + "            IF piece = """" THEN RETURN" + NL
+    t = t + "            text = text + piece" + NL
+    t = t + "            Print(""  part "" + Str(i) + "" of "" + Str(count))" + NL
+    t = t + "        NEXT" + NL
+    t = t + "        IF bytes = 0 OR text.Length = bytes OR text.Length = bytes + 1 THEN BREAK" + NL
+    t = t + "        Print(""  that came out "" + Str(text.Length) + "" long, not "" + Str(bytes) + "": again"")" + NL
     t = t + "    NEXT" + NL
+    t = t + "    IF bytes <> 0 AND text.Length <> bytes AND text.Length <> bytes + 1 THEN" + NL
+    t = t + "        Print(""Vapor didn't arrive whole. Run this again."")" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
     t = t + "    FS.Write(""C:\PROGRAMS\VAPOR.SPK"", text)" + NL
     t = t + "    IF NOT FS.Exists(""C:\GAMES"") THEN FS.MakeDir(""C:\GAMES"")" + NL
     t = t + "    FS.Write(""C:\GAMES\VAPOR.INI"", ""store=http://"" + FROM + ""/vapor/"" + Chr(10))" + NL
@@ -136,12 +155,15 @@ SUB File1 ()
     t = t + "    VAR since AS Integer" + NL
     t = t + "    parts.Clear()" + NL
     t = t + "    done = FALSE" + NL
+    t = t + "    fetchNo = fetchNo + 1" + NL
     t = t + "    TRY" + NL
     t = t + "        conn = web.Connect(FROM, 80)" + NL
     t = t + "    CATCH err" + NL
     t = t + "        Print(""Could not reach "" + FROM + "": "" + err)" + NL
     t = t + "        RETURN """"" + NL
     t = t + "    END TRY" + NL
+    t = t + "    ' (an earlier connection's late messages are not this one's)" + NL
+    t = t + "    conn.Tag = Str(fetchNo)" + NL
     t = t + "    conn.Send(""GET "" + path + "" HTTP/1.0"" + Chr(10) + ""Host: "" + FROM)" + NL
     t = t + "    since = SYS.Ticks" + NL
     t = t + "    WHILE NOT done AND SYS.Ticks - since < 10000" + NL
@@ -156,16 +178,55 @@ SUB File1 ()
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "SUB Web_OnMessage (conn AS NET_Connection, message AS String)" + NL
-    t = t + "    parts.Add(message)" + NL
+    t = t + "    IF conn.Tag = Str(fetchNo) THEN parts.Add(message)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "SUB Web_OnClose (conn AS NET_Connection)" + NL
-    t = t + "    done = TRUE" + NL
+    t = t + "    IF conn.Tag = Str(fetchNo) THEN done = TRUE" + NL
     t = t + "END SUB" + NL
     Put("C:\WEB\VAPOR\GETVAPOR.TXT")
 END SUB
 
 SUB File2 ()
+    t = ""
+    t = t + "<%" + NL
+    t = t + "' GO.ASP - the shortest way onto a new machine: 21 lines to paste into SPARK" + NL
+    t = t + "' and run. They fetch GETVAPOR.SPK from this store and run it; that fetches" + NL
+    t = t + "' Vapor; Vapor installs everything else." + NL
+    t = t + "RESPONSE.ContentType = ""text/plain""" + NL
+    t = t + "RESPONSE.Write(FS.Read(""C:\WEB\VAPOR\GO.TXT"").Replace(""%HOST%"", SERVER.Name.Lower().Split(""."")[0]))" + NL
+    t = t + "%>" + NL
+    Put("C:\WEB\VAPOR\GO.ASP")
+END SUB
+
+SUB File3 ()
+    t = ""
+    t = t + "VAR t AS String" + NL
+    t = t + "VAR d AS Bool" + NL
+    t = t + "SUB Main ()" + NL
+    t = t + "    VAR s AS NET_Socket" + NL
+    t = t + "    VAR c AS NET_Connection" + NL
+    t = t + "    s = NET_Socket.New()" + NL
+    t = t + "    s.onMessage = Got" + NL
+    t = t + "    s.onClose = Done" + NL
+    t = t + "    c = s.Connect(""%HOST%"", 80)" + NL
+    t = t + "    c.Send(""GET /vapor/getvapor.asp HTTP/1.0"" + Chr(10) + ""Host: %HOST%"")" + NL
+    t = t + "    WHILE NOT d" + NL
+    t = t + "        SYS.Sleep(50)" + NL
+    t = t + "    END WHILE" + NL
+    t = t + "    FS.Write(""C:\MYFILES\GETVAPOR.SPK"", t.Substring(t.IndexOf(Chr(10) + Chr(10)) + 2, t.Length - t.IndexOf(Chr(10) + Chr(10)) - 2))" + NL
+    t = t + "    SYS.Run(""C:\MYFILES\GETVAPOR.SPK"")" + NL
+    t = t + "END SUB" + NL
+    t = t + "SUB Got (c AS NET_Connection, m AS String)" + NL
+    t = t + "    t = t + m + Chr(10)" + NL
+    t = t + "END SUB" + NL
+    t = t + "SUB Done (c AS NET_Connection)" + NL
+    t = t + "    d = TRUE" + NL
+    t = t + "END SUB" + NL
+    Put("C:\WEB\VAPOR\GO.TXT")
+END SUB
+
+SUB File4 ()
     t = ""
     t = t + "<%" + NL
     t = t + "' INDEX.ASP - the Vapor store's web site (http://<machine>/vapor/): download" + NL
@@ -217,10 +278,10 @@ SUB File2 ()
     t = t + "<table width=""100%"" cellpadding=""14"" cellspacing=""0""><tr><td bgcolor=""#2A475E"">" + NL
     t = t + "<font size=""5"" color=""#FFFFFF""><b>Get Vapor</b></font><br>" + NL
     t = t + "<font color=""#C7D5E0"">Games, programs and web apps for SIM95, in one place. Install with a click, keep everything up to date, count your hours, collect achievements.</font>" + NL
-    t = t + "<p><font color=""#FFFFFF""><b>1.</b></font> Open <a href=""getvapor.asp""><b>getvapor.asp</b></a> in Simxplorer and choose <b>File &gt; Save As File</b>; save it as <tt>C:\MYFILES\GETVAPOR.SPK</tt>." + NL
-    t = t + "<font size=""2"" color=""#8F98A0"">(In Voyager: View Source, then save it from Notes.)</font><br>" + NL
-    t = t + "<font color=""#FFFFFF""><b>2.</b></font> Open <tt>GETVAPOR.SPK</tt> in SPARK and press <b>F5</b>. It downloads Vapor, already pointed at this store, and starts it.</p>" + NL
-    t = t + "<font size=""2"" color=""#8F98A0"">Or copy the program from the bottom of this page into SPARK. Vapor <%= client %>.</font>" + NL
+    t = t + "<p><font color=""#FFFFFF""><b>On a new machine:</b></font> open SPARK, paste these lines, and press <b>F5</b>. They fetch Vapor from <%= here %> and start it; Vapor installs the rest.</p>" + NL
+    t = t + "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#000000""><pre><font color=""#A4D007""><%= SERVER.HtmlEncode(FS.Read(""C:\WEB\VAPOR\GO.TXT"").Replace(""%HOST%"", here.Split(""."")[0])) %></font></pre></td></tr></table>" + NL
+    t = t + "<p><font size=""2"" color=""#8F98A0"">The same lines, as plain text: <a href=""go.asp"">go.asp</a>." + NL
+    t = t + "Or the long way: open <a href=""getvapor.asp"">getvapor.asp</a> in Simxplorer, <b>File &gt; Save As File</b> as <tt>C:\MYFILES\GETVAPOR.SPK</tt>, and run that. Vapor <%= client %>.</font></p>" + NL
     t = t + "</td></tr></table>" + NL
     t = t + "" + NL
     t = t + "<a name=""apps""></a>" + NL
@@ -240,7 +301,7 @@ SUB File2 ()
     Put("C:\WEB\VAPOR\INDEX.ASP")
 END SUB
 
-SUB File3 ()
+SUB File5 ()
     t = ""
     t = t + "' VAPOR|id=SIMDOOM|name=SimDOOM|kind=game|version=c0f9cfa6|category=Shooter|run=C:\GAMES\SIMDOOM\SIMDOOM.SPK|files=C:\GAMES\SIMDOOM\SIMDOOM.SPK|tasks=SIMDOOM|startup=|folder=|about=Rip and tear through E1M1 in glorious 16 colours. A real raycast 3D view, imps that chase you, a pistol, health and ammo, a face that watches you, and achievements. Type IDDQD at your own risk." + NL
     t = t + "' SIMDOOM.SPK - SimDOOM, episode one, map one: a raycaster on a GUI_Canvas." + NL
@@ -736,7 +797,7 @@ SUB File3 ()
     Put("C:\WEB\VAPOR\SIMDOOM\1.TXT")
 END SUB
 
-SUB File4 ()
+SUB File6 ()
     t = ""
     t = t + "' Light and dark sides, and darker far away: all in 16 colours." + NL
     t = t + "FUNCTION WallColour (kind AS String, side AS Integer, dist AS Real) AS Integer" + NL
@@ -996,7 +1057,7 @@ SUB File4 ()
     Put("C:\WEB\VAPOR\SIMDOOM\2.TXT")
 END SUB
 
-SUB File5 ()
+SUB File7 ()
     t = ""
     t = t + "' VAPOR|id=SNAKE|name=Snake 95|kind=game|version=aa5d9aeb|category=Arcade|run=C:\GAMES\SNAKE\SNAKE.SPK|files=C:\GAMES\SNAKE\SNAKE.SPK|tasks=SNAKE|startup=|folder=|about=Eat the dots. Grow longer. Don't eat yourself. The game that sold a million phones, now on SIM95." + NL
     t = t + "' SNAKE.SPK - Snake 95. Eat the dots; don't eat yourself." + NL
@@ -1218,7 +1279,7 @@ SUB File5 ()
     Put("C:\WEB\VAPOR\SNAKE\1.TXT")
 END SUB
 
-SUB File6 ()
+SUB File8 ()
     t = ""
     t = t + "' VAPOR|id=SIMPLAYR|name=SimPlayer|kind=program|version=68f17303|category=Multimedia|run=C:\PROGRAMS\PLAYER.SPK|files=C:\PROGRAMS\PLAYER.SPK|tasks=PLAYER|startup=|folder=|about=The movie player for SIM95: plays SimMovies from the disk or streams them from the web, like the ones on SimTube. (Simxplorer has it built in.)" + NL
     t = t + "' INSTALL.SPK - puts SimPlayer on this machine. Generated by tools/build-installer.mjs;" + NL
@@ -1524,7 +1585,7 @@ SUB File6 ()
     Put("C:\WEB\VAPOR\SIMPLAYR\1.TXT")
 END SUB
 
-SUB File7 ()
+SUB File9 ()
     t = ""
     t = t + "    t = t + ""        screen.SetColor(4)"" + NL" + NL
     t = t + "    t = t + ""        IF i MOD 2 = 1 THEN screen.SetColor(12)"" + NL" + NL
@@ -1843,7 +1904,7 @@ SUB File7 ()
     Put("C:\WEB\VAPOR\SIMPLAYR\2.TXT")
 END SUB
 
-SUB File8 ()
+SUB File10 ()
     t = ""
     t = t + "    t = t + ""' Frame n on the screen. Going forward, the frames in between are drawn over"" + NL" + NL
     t = t + "    t = t + ""' what is there (from a keyframe, if one comes first); anywhere else, from the"" + NL" + NL
@@ -2160,7 +2221,7 @@ SUB File8 ()
     Put("C:\WEB\VAPOR\SIMPLAYR\3.TXT")
 END SUB
 
-SUB File9 ()
+SUB File11 ()
     t = ""
     t = t + "    t = t + ""' ================================================================ the seek bar"" + NL" + NL
     t = t + "    t = t + """" + NL" + NL
@@ -2440,7 +2501,7 @@ SUB File9 ()
     Put("C:\WEB\VAPOR\SIMPLAYR\4.TXT")
 END SUB
 
-SUB File10 ()
+SUB File12 ()
     t = ""
     t = t + "    t = t + ""VAR rsReadAt AS Integer"" + NL" + NL
     t = t + "    t = t + ""VAR rsSock AS NET_Socket"" + NL" + NL
@@ -2728,7 +2789,7 @@ SUB File10 ()
     Put("C:\WEB\VAPOR\SIMPLAYR\5.TXT")
 END SUB
 
-SUB File11 ()
+SUB File13 ()
     t = ""
     t = t + "    t = t + ""    conn.Tag = """""""""" + NL" + NL
     t = t + "    t = t + ""    TRY"" + NL" + NL
@@ -2940,7 +3001,7 @@ SUB File11 ()
     Put("C:\WEB\VAPOR\SIMPLAYR\6.TXT")
 END SUB
 
-SUB File12 ()
+SUB File14 ()
     t = ""
     t = t + "' VAPOR|id=SIMWEB|name=simweb|kind=program|version=b0fb52c6|category=Internet|run=C:\PROGRAMS\PWM.SPK|files=C:\PROGRAMS\PWM.SPK;C:\PROGRAMS\DIG.SPK;C:\PROGRAMS\RESOLVE.SPK|tasks=PWM|startup=|folder=|about=Personal Web Manager and a web server that serves many sites by name: coolsite.sim for your own pages, coolbook.sim for SimBook. Register and point the names at SimNIC; then add them here. With DIG, to ask the name server." + NL
     t = t + "' INSTALL.SPK - puts simweb on this machine. Generated by tools/build-installer.mjs;" + NL
@@ -3242,7 +3303,7 @@ SUB File12 ()
     Put("C:\WEB\VAPOR\SIMWEB\1.TXT")
 END SUB
 
-SUB File13 ()
+SUB File15 ()
     t = ""
     t = t + "    t = t + ""    RETURN a.PadRight(24) + b.PadRight(28) + c"" + NL" + NL
     t = t + "    t = t + ""END FUNCTION"" + NL" + NL
@@ -3560,7 +3621,7 @@ SUB File13 ()
     Put("C:\WEB\VAPOR\SIMWEB\2.TXT")
 END SUB
 
-SUB File14 ()
+SUB File16 ()
     t = ""
     t = t + "    t = t + ""        IF NOT f.EndsWith(""""\"""") THEN CONTINUE"" + NL" + NL
     t = t + "    t = t + ""        f = f.Substring(0, f.Length - 1).Upper()"" + NL" + NL
@@ -3840,7 +3901,7 @@ SUB File14 ()
     Put("C:\WEB\VAPOR\SIMWEB\3.TXT")
 END SUB
 
-SUB File15 ()
+SUB File17 ()
     t = ""
     t = t + "    t = t + ""    dHome = Radio(""""This machine's &home page (C:\WEB)"""", 156, """"home"""")"" + NL" + NL
     t = t + "    t = t + ""    dOk = GUI_Button.New(dWin)"" + NL" + NL
@@ -4121,7 +4182,7 @@ SUB File15 ()
     Put("C:\WEB\VAPOR\SIMWEB\4.TXT")
 END SUB
 
-SUB File16 ()
+SUB File18 ()
     t = ""
     t = t + "    t = t + ""' With no nameserver= line, the central name server; none (or nothing after"" + NL" + NL
     t = t + "    t = t + ""' the =) turns SimDNS off."" + NL" + NL
@@ -4417,7 +4478,7 @@ SUB File16 ()
     Put("C:\WEB\VAPOR\SIMWEB\5.TXT")
 END SUB
 
-SUB File17 ()
+SUB File19 ()
     t = ""
     t = t + "    t = t + ""    IF lines[0].StartsWith(""""NXDOMAIN"""") THEN"" + NL" + NL
     t = t + "    t = t + ""        RsKeep(host, """""""", """"NXDOMAIN"""", RSNEG)"" + NL" + NL
@@ -4712,7 +4773,7 @@ SUB File17 ()
     Put("C:\WEB\VAPOR\SIMWEB\6.TXT")
 END SUB
 
-SUB File18 ()
+SUB File20 ()
     t = ""
     t = t + "    t = t + ""    IF lines[0].Contains("""" """") THEN Print("""";; """" + lines[0].Substring(lines[0].IndexOf("""" """") + 1, lines[0].Length - lines[0].IndexOf("""" """") - 1))"" + NL" + NL
     t = t + "    t = t + ""    Print("""""""")"" + NL" + NL
@@ -4976,7 +5037,7 @@ SUB File18 ()
     Put("C:\WEB\VAPOR\SIMWEB\7.TXT")
 END SUB
 
-SUB File19 ()
+SUB File21 ()
     t = ""
     t = t + "    t = t + """" + NL" + NL
     t = t + "    t = t + ""FUNCTION RsWants (host AS String) AS Bool"" + NL" + NL
@@ -5271,7 +5332,7 @@ SUB File19 ()
     Put("C:\WEB\VAPOR\SIMWEB\8.TXT")
 END SUB
 
-SUB File20 ()
+SUB File22 ()
     t = ""
     t = t + "    t = t + ""SUB RsKeep (host AS String, target AS String, canon AS String, ms AS Integer)"" + NL" + NL
     t = t + "    t = t + ""    VAR i AS Integer"" + NL" + NL
@@ -5549,7 +5610,7 @@ SUB File20 ()
     Put("C:\WEB\VAPOR\SIMWEB\9.TXT")
 END SUB
 
-SUB File21 ()
+SUB File23 ()
     t = ""
     t = t + "    t = t + ""    IF rsDown AND SYS.Ticks - rsDownAt < RSQUIET THEN RETURN FALSE"" + NL" + NL
     t = t + "    t = t + ""    IF RsIsAddress(h) THEN RETURN FALSE"" + NL" + NL
@@ -5846,7 +5907,7 @@ SUB File21 ()
     Put("C:\WEB\VAPOR\SIMWEB\10.TXT")
 END SUB
 
-SUB File22 ()
+SUB File24 ()
     t = ""
     t = t + "    t = t + ""    rsUntil.Add(SYS.Ticks + ms)"" + NL" + NL
     t = t + "    t = t + ""END SUB"" + NL" + NL
@@ -6130,7 +6191,7 @@ SUB File22 ()
     Put("C:\WEB\VAPOR\SIMWEB\11.TXT")
 END SUB
 
-SUB File23 ()
+SUB File25 ()
     t = ""
     t = t + "    t = t + ""        dir = line.Substring(line.IndexOf(""""|"""") + 1, line.Length - line.IndexOf(""""|"""") - 1).Trim().Upper()"" + NL" + NL
     t = t + "    t = t + ""        IF dir.EndsWith(""""\"""") THEN dir = dir.Substring(0, dir.Length - 1)"" + NL" + NL
@@ -6313,7 +6374,7 @@ SUB File23 ()
     Put("C:\WEB\VAPOR\SIMWEB\12.TXT")
 END SUB
 
-SUB File24 ()
+SUB File26 ()
     t = ""
     t = t + "' VAPOR|id=VAPOR|name=Vapor|kind=client|version=61f71a2e|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself." + NL
     t = t + "' VAPOR.SPK - Vapor, the store and library for everything on SIM95: games," + NL
@@ -6767,7 +6828,7 @@ SUB File24 ()
     Put("C:\WEB\VAPOR\VAPOR\1.TXT")
 END SUB
 
-SUB File25 ()
+SUB File27 ()
     t = ""
     t = t + "                IF a.Contains(""|"") THEN trophies.Add(""* "" + a.Split(""|"")[0] + "" - "" + a.Split(""|"")[1] + ""  ("" + a.Split(""|"")[2] + "")"")" + NL
     t = t + "            NEXT" + NL
@@ -7219,7 +7280,7 @@ SUB File25 ()
     Put("C:\WEB\VAPOR\VAPOR\2.TXT")
 END SUB
 
-SUB File26 ()
+SUB File28 ()
     t = ""
     t = t + "            box.Text = ""A new version of Vapor is in the store (build "" + Field(line, 8) + ""; this is "" + mine + "")."" + EOL + EOL + ""Update Vapor now? It will restart.""" + NL
     t = t + "            IF box.Show() THEN queue.Insert(0, line)" + NL
@@ -7637,7 +7698,7 @@ SUB File26 ()
     Put("C:\WEB\VAPOR\VAPOR\3.TXT")
 END SUB
 
-SUB File27 ()
+SUB File29 ()
     t = ""
     t = t + "'                       there is no name server (or it isn't answering)." + NL
     t = t + "'   2. RsAsk(host, address) - sends the question to the name server at that" + NL
@@ -8084,7 +8145,7 @@ SUB File27 ()
     Put("C:\WEB\VAPOR\VAPOR\4.TXT")
 END SUB
 
-SUB File28 ()
+SUB File30 ()
     t = ""
     t = t + "FUNCTION RsMailTarget (domain AS String) AS String" + NL
     t = t + "    RETURN RsTarget(RsMailHost(domain))" + NL
@@ -8166,7 +8227,7 @@ SUB File28 ()
     Put("C:\WEB\VAPOR\VAPOR\5.TXT")
 END SUB
 
-SUB File29 ()
+SUB File31 ()
     t = ""
     t = t + "SIMDOOM|SimDOOM|2|23549|ok|Shooter|Rip and tear through E1M1 in glorious 16 colours. A real raycast 3D view, imps that chase you, a pistol, health and ammo, a face that watches you, and achievements. Type IDDQD at your own risk.|game|c0f9cfa6|C:\GAMES\SIMDOOM\SIMDOOM.SPK|C:\GAMES\SIMDOOM\SIMDOOM.SPK|SIMDOOM||" + NL
     t = t + "SNAKE|Snake 95|1|5545|ok|Arcade|Eat the dots. Grow longer. Don't eat yourself. The game that sold a million phones, now on SIM95.|game|aa5d9aeb|C:\GAMES\SNAKE\SNAKE.SPK|C:\GAMES\SNAKE\SNAKE.SPK|SNAKE||" + NL
@@ -8177,7 +8238,7 @@ SUB File29 ()
     Put("C:\WEB\VAPOR\CATALOG.TXT")
 END SUB
 
-SUB File30 ()
+SUB File32 ()
     t = ""
     t = t + "' VAPOR|id=VAPOR|name=Vapor|kind=client|version=61f71a2e|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself." + NL
     t = t + "' VAPOR.SPK - Vapor, the store and library for everything on SIM95: games," + NL

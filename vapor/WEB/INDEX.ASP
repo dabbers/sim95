@@ -48,10 +48,10 @@ END IF
 <table width="100%" cellpadding="14" cellspacing="0"><tr><td bgcolor="#2A475E">
 <font size="5" color="#FFFFFF"><b>Get Vapor</b></font><br>
 <font color="#C7D5E0">Games, programs and web apps for SIM95, in one place. Install with a click, keep everything up to date, count your hours, collect achievements.</font>
-<p><font color="#FFFFFF"><b>1.</b></font> Open <a href="getvapor.asp"><b>getvapor.asp</b></a> in Simxplorer and choose <b>File &gt; Save As File</b>; save it as <tt>C:\MYFILES\GETVAPOR.SPK</tt>.
-<font size="2" color="#8F98A0">(In Voyager: View Source, then save it from Notes.)</font><br>
-<font color="#FFFFFF"><b>2.</b></font> Open <tt>GETVAPOR.SPK</tt> in SPARK and press <b>F5</b>. It downloads Vapor, already pointed at this store, and starts it.</p>
-<font size="2" color="#8F98A0">Or copy the program from the bottom of this page into SPARK. Vapor <%= client %>.</font>
+<p><font color="#FFFFFF"><b>On a new machine:</b></font> open SPARK, paste these lines, and press <b>F5</b>. They fetch Vapor from <%= here %> and start it; Vapor installs the rest.</p>
+<table width="100%" cellpadding="6"><tr><td bgcolor="#000000"><pre><font color="#A4D007"><%= SERVER.HtmlEncode(FS.Read("C:\WEB\VAPOR\GO.TXT").Replace("%HOST%", here.Split(".")[0])) %></font></pre></td></tr></table>
+<p><font size="2" color="#8F98A0">The same lines, as plain text: <a href="go.asp">go.asp</a>.
+Or the long way: open <a href="getvapor.asp">getvapor.asp</a> in Simxplorer, <b>File &gt; Save As File</b> as <tt>C:\MYFILES\GETVAPOR.SPK</tt>, and run that. Vapor <%= client %>.</font></p>
 </td></tr></table>
 
 <a name="apps"></a>
