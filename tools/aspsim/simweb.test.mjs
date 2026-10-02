@@ -612,10 +612,14 @@ await test("Simxplorer: Options shows the central name server; a dead one doesn'
   submit(0, {});
   await until(() => /Your settings have been saved/.test(sx.html()), "the settings");
   assert.ok(!client.exists("C:\\SYSTEM\\RESOLV.INI"), "the central one is left as the default");
+  // (the saved page is "Options" too: wait for this one by its address. A go
+  // typed while a page is still being drawn is overtaken by its address.)
+  const shown = (url) => until(() => sx.address() === url && String(sx.win().get("Status")).startsWith("Done"), url);
   sx.go("about:options");
-  await sx.loaded("Options");
+  await shown("about:options");
   submit(0, { dns: "charlie" });
   await until(() => client.exists("C:\\SYSTEM\\RESOLV.INI"), "the setting");
+  await until(() => /dns=charlie/.test(sx.address()) && String(sx.win().get("Status")).startsWith("Done"), "the saved page");
   assert.equal(client.read("C:\\SYSTEM\\RESOLV.INI"), "nameserver=charlie\n");
   const t0 = Date.now();
   sx.go("www.ourown.sim");
