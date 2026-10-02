@@ -1,0 +1,488 @@
+' WELCOME.SPK - the Welcome Wagon, for the central host (STARTHERE). Every
+' machine runs a Chat service (port 6667), and the Chat program connects to
+' its own machine's, in #general, out of the box: so somebody new who opens
+' Chat finds an empty room. The Welcome Wagon looks round the network every
+' half minute (NET.Machines) and waits in #general on every machine as
+' StartHereBot. When somebody comes into the room (or is there already), it
+' says hello, once, and tells them what this machine serves (the same list
+' as SimHost's front page) and where everybody chats. In the room:
+'   sites   the sites here, one a line
+'   bye     it leaves that machine's room, for good (C:\WELCOME\OPTOUT.TXT)
+' Settings, in C:\WELCOME\WELCOME.INI:
+'   channel=#general    the room to wait in
+'   every=30            seconds between looks round the network
+' Whom it has greeted is in C:\WELCOME\SEEN.TXT (machine|nick).
+'
+' One Connect a tick, the last thing in it, inside a TRY: a failed wait
+' spoils the rest of its handler (see SIM95-NOTES.md).
+'
+' The Chat service runs each line it gets as a task of its own, and a long
+' one can be overtaken by the next: lines sent together arrive shuffled, and
+' a JOIN can come before the NICK sent ahead of it. So the bot joins only
+' once its name is taken, says one line a tick, and greets somebody a moment
+' after they come in, by the name they have by then.
+
+CONST HOME = "C:\WELCOME"
+CONST BOTNICK = "StartHereBot"
+CONST RETRY = 300000              ' a machine with no Chat service is tried again after this (ms)
+CONST QUIET = 20000               ' the list of sites at most this often in one room (ms)
+CONST MOST = 200                  ' lines kept in the window
+CONST SETTLE = 1500               ' greet this long after somebody comes in (ms)
+
+VAR EOL AS String
+VAR win AS GUI_Window
+VAR journal AS GUI_ListBox
+VAR clock AS GUI_Timer
+VAR sock AS NET_Socket
+VAR noted AS Array OF String      ' the window's lines
+
+VAR channel AS String
+VAR every AS Integer              ' seconds
+VAR here AS String                ' this machine as people type it: starthere
+VAR lookedAt AS Integer           ' when it last looked round (0: never)
+VAR looking AS Bool
+VAR connecting AS Bool
+VAR connectAt AS Integer
+VAR seen AS Array OF String       ' MACHINE|nick: greeted already
+VAR greeted AS Integer            ' since it started
+
+' The rooms, one a machine (this one's too, as localhost).
+VAR rName AS Array OF String      ' A3F9C2E1.DIALUP.ZONE
+VAR rAddr AS Array OF String
+VAR rState AS Array OF String     ' new, open, off (no answer), gone (closed), left (said bye)
+VAR rSince AS Array OF Integer
+VAR rNick AS Array OF String      ' the name it has there
+VAR rListed AS Array OF Integer   ' when it last listed the sites there
+
+' The open connections, by room name.
+VAR cName AS Array OF String
+VAR cConn AS Array OF NET_Connection
+
+' Waiting to be greeted: room, nick, since when.
+VAR gRoom AS Array OF String
+VAR gNick AS Array OF String
+VAR gAt AS Array OF Integer
+
+' Lines to say, one a tick: room, then the line.
+VAR oRoom AS Array OF String
+VAR oText AS Array OF String
+
+SUB Main ()
+    VAR line AS String
+    EOL = Chr(10)
+    IF NOT FS.Exists(HOME) THEN FS.MakeDir(HOME)
+    channel = "#general"
+    every = 30
+    FOR EACH line IN ReadOr(HOME + "\WELCOME.INI", "").Lines()
+        IF line.StartsWith("channel=") THEN channel = line.Substring(8, line.Length - 8).Trim().Lower()
+        IF line.StartsWith("every=") THEN every = MATH.Max(1, Int(Val(line.Substring(6, line.Length - 6))))
+    NEXT
+    IF NOT channel.StartsWith("#") THEN channel = "#" + channel
+    here = NET.HostName.Split(".")[0].Lower()
+    FOR EACH line IN ReadOr(HOME + "\SEEN.TXT", "").Lines()
+        IF line <> "" THEN seen.Add(line)
+    NEXT
+
+    win = GUI_Window.New("Welcome Wagon", 480, 260)
+    win.Icon = "chat"
+    win.onClose = Win_OnClose
+    journal = GUI_ListBox.New(win)
+    journal.SetBounds(6, 6, 468, 226)
+    sock = NET_Socket.New()
+    sock.onMessage = Room_OnMessage
+    sock.onClose = Room_OnClose
+    ' this machine's own room too: it is where people are sent to meet
+    AddRoom(NET.HostName.Upper(), "localhost")
+    clock = GUI_Timer.New(win)
+    clock.Interval = 500
+    clock.onTick = Clock_OnTick
+    clock.Start()
+    Note("Greeting people in " + channel + " on every machine, for http://" + here + "/")
+    Status()
+    win.Show()
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+FUNCTION ReadOr (path AS String, fallback AS String) AS String
+    IF FS.Exists(path) THEN RETURN FS.Read(path)
+    RETURN fallback
+END FUNCTION
+
+SUB Note (text AS String)
+    noted.Add(TIME.Clock + "  " + text)
+    IF noted.Count > MOST THEN noted.RemoveAt(0)
+    journal.Items = noted
+    journal.ScrollToEnd()
+END SUB
+
+SUB Status ()
+    VAR n AS Integer
+    VAR s AS String
+    FOR EACH s IN rState
+        IF s = "open" THEN n = n + 1
+    NEXT
+    win.Status = Str(n) + " room" + Plural(n) + " open  -  " + Str(greeted) + " greeted since it started"
+END SUB
+
+FUNCTION Plural (n AS Integer) AS String
+    IF n = 1 THEN RETURN ""
+    RETURN "s"
+END FUNCTION
+
+' ================================================================ the rooms
+
+SUB AddRoom (name AS String, addr AS String)
+    rName.Add(name)
+    rAddr.Add(addr)
+    rState.Add("new")
+    rSince.Add(SYS.Ticks)
+    rNick.Add(BOTNICK)
+    rListed.Add(0)
+    IF OptedOut(name) THEN rState[rState.Count - 1] = "left"
+END SUB
+
+SUB SetState (i AS Integer, s AS String)
+    rState[i] = s
+    rSince[i] = SYS.Ticks
+END SUB
+
+FUNCTION IsHub (i AS Integer) AS Bool
+    RETURN rAddr[i] = "localhost"
+END FUNCTION
+
+' Said bye: by computer name, so a new address or ISP doesn't bring it back.
+FUNCTION OptedOut (name AS String) AS Bool
+    VAR line AS String
+    FOR EACH line IN ReadOr(HOME + "\OPTOUT.TXT", "").Lines()
+        IF line.Trim().Upper() = name.Split(".")[0].Upper() THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' ================================================================ the clock
+
+SUB Clock_OnTick ()
+    TRY
+        Tick()
+    CATCH err
+    END TRY
+END SUB
+
+SUB Tick ()
+    VAR i AS Integer
+    VAR room AS String
+    VAR nick AS String
+    ' somebody who came in a moment ago: hello now, by the name they have
+    ' (one a tick, off the list first: ticks overlap while one waits)
+    IF gRoom.Count > 0 THEN
+        IF SYS.Ticks - gAt[0] >= SETTLE THEN
+            room = gRoom[0]
+            nick = gNick[0]
+            gRoom.RemoveAt(0)
+            gNick.RemoveAt(0)
+            gAt.RemoveAt(0)
+            Greet(rName.IndexOf(room), nick)
+        END IF
+    END IF
+    ' one line a tick
+    IF oRoom.Count > 0 THEN
+        SendLine(oRoom[0], oText[0])
+        oRoom.RemoveAt(0)
+        oText.RemoveAt(0)
+    END IF
+    ' (a look round or a Connect waits, and ticks go on meanwhile)
+    IF looking AND SYS.Ticks - lookedAt < 5000 THEN RETURN
+    looking = FALSE
+    IF connecting AND SYS.Ticks - connectAt < 15000 THEN RETURN
+    connecting = FALSE
+    IF lookedAt = 0 OR SYS.Ticks - lookedAt > every * 1000 THEN
+        looking = TRUE
+        lookedAt = MATH.Max(1, SYS.Ticks)
+        LookRound()
+        looking = FALSE
+        RETURN
+    END IF
+    FOR i = 0 TO rName.Count - 1
+        IF rState[i] = "off" AND SYS.Ticks - rSince[i] > RETRY THEN SetState(i, "new")
+    NEXT
+    i = rState.IndexOf("new")
+    IF i >= 0 THEN OpenRoom(i)
+END SUB
+
+' Every machine that answers a ping: new ones get a room, and ones whose
+' room closed (the machine went away, or its Chat service restarted) get it
+' back.
+SUB LookRound ()
+    VAR m AS String
+    VAR p AS Array OF String
+    VAR i AS Integer
+    FOR EACH m IN NET.Machines()
+        p = m.Split(" ")
+        IF p.Count < 2 THEN CONTINUE
+        IF p[0].Upper() = NET.HostName.Upper() OR p[1] = NET.LocalAddress THEN CONTINUE
+        i = rName.IndexOf(p[0].Upper())
+        IF i < 0 THEN
+            AddRoom(p[0].Upper(), p[1])
+            IF rState[rState.Count - 1] = "new" THEN Note("Found " + p[0])
+        ELSE
+            rAddr[i] = p[1]
+            IF rState[i] = "gone" THEN SetState(i, "new")
+        END IF
+    NEXT
+    Status()
+END SUB
+
+' Into the room on machine i: the last thing in the tick.
+SUB OpenRoom (i AS Integer)
+    VAR conn AS NET_Connection
+    SetState(i, "off")            ' until it answers
+    rNick[i] = BOTNICK
+    connecting = TRUE
+    connectAt = SYS.Ticks
+    TRY
+        conn = sock.Connect(rAddr[i], 6667)
+        conn.Tag = rName[i]
+        SetState(i, "open")
+        Forget(rName[i])
+        cName.Add(rName[i])
+        cConn.Add(conn)
+        ' (JOIN once the name is taken: see Room_OnMessage)
+        conn.Send("NICK " + BOTNICK)
+        connecting = FALSE
+        Status()
+    CATCH err
+        connecting = FALSE
+    END TRY
+END SUB
+
+SUB Room_OnClose (conn AS NET_Connection)
+    VAR i AS Integer
+    i = rName.IndexOf(conn.Tag)
+    IF i < 0 THEN RETURN
+    Forget(rName[i])
+    IF rState[i] = "open" THEN
+        SetState(i, "gone")
+        Note("Left " + rName[i] + " (closed)")
+        Status()
+    END IF
+END SUB
+
+' The Chat service's lines: MSG #chan nick text | JOIN #chan nick |
+' WHO #chan a,b,c | OK ... | ERR ...
+SUB Room_OnMessage (conn AS NET_Connection, message AS String)
+    VAR i AS Integer
+    VAR p AS Array OF String
+    VAR who AS String
+    VAR cut AS Integer
+    VAR k AS Integer
+    i = rName.IndexOf(conn.Tag)
+    IF i < 0 THEN RETURN
+    p = message.Split(" ")
+    SELECT CASE p[0]
+        CASE "OK"
+            ' its name is taken: now into the room
+            IF message.StartsWith("OK You are now ") THEN
+                rNick[i] = message.Substring(15, message.Length - 15).Trim()
+                conn.Send("JOIN " + channel)
+            END IF
+        CASE "ERR"
+            ' somebody there has the name: the same with a number
+            IF message.Contains("Nick in use") THEN conn.Send("NICK " + BOTNICK.Substring(0, 11) + Str(Rnd(10)))
+        CASE "NICK"
+            ' NICK #chan old new: somebody waiting to be greeted has a name now
+            IF p.Count >= 4 THEN
+                FOR k = 0 TO gRoom.Count - 1
+                    IF gRoom[k] = rName[i] AND gNick[k].Lower() = p[2].Lower() THEN gNick[k] = p[3]
+                NEXT
+            END IF
+        CASE "WHO"
+            ' whoever was there before it came. (Not on this machine: the
+            ' regulars there know it, and newcomers are greeted as they come.)
+            IF p.Count >= 3 AND p[1] = channel AND NOT IsHub(i) THEN
+                FOR EACH who IN p[2].Split(",")
+                    IF who <> "" AND who.Lower() <> rNick[i].Lower() THEN Soon(i, who)
+                NEXT
+            END IF
+        CASE "JOIN"
+            IF p.Count >= 3 AND p[1] = channel AND p[2].Lower() <> rNick[i].Lower() THEN Soon(i, p[2])
+        CASE "MSG"
+            IF p.Count >= 4 AND p[1] = channel AND p[2].Lower() <> rNick[i].Lower() THEN
+                cut = p[0].Length + p[1].Length + p[2].Length + 3
+                Heard(conn, i, p[2], message.Substring(cut, message.Length - cut))
+            END IF
+    END SELECT
+END SUB
+
+' A line for room i, said in its turn (one a tick).
+SUB Say (i AS Integer, text AS String)
+    oRoom.Add(rName[i])
+    oText.Add(text)
+END SUB
+
+SUB SendLine (room AS String, text AS String)
+    VAR k AS Integer
+    k = cName.IndexOf(room)
+    IF k < 0 THEN RETURN
+    TRY
+        IF text = Chr(1) + "QUIT" THEN
+            cConn[k].Send("QUIT")
+        ELSE
+            cConn[k].Send("MSG " + channel + " " + text)
+        END IF
+    CATCH err
+    END TRY
+END SUB
+
+' A room's connection is closed (or about to be replaced): no more lines for it.
+SUB Forget (room AS String)
+    VAR k AS Integer
+    k = cName.IndexOf(room)
+    IF k >= 0 THEN
+        cName.RemoveAt(k)
+        cConn.RemoveAt(k)
+    END IF
+    FOR k = gRoom.Count - 1 TO 0 STEP -1
+        IF gRoom[k] = room THEN
+            gRoom.RemoveAt(k)
+            gNick.RemoveAt(k)
+            gAt.RemoveAt(k)
+        END IF
+    NEXT
+END SUB
+
+' Somebody in room i, to greet in a moment (when their NICK has caught up).
+SUB Soon (i AS Integer, nick AS String)
+    VAR k AS Integer
+    FOR k = 0 TO gRoom.Count - 1
+        IF gRoom[k] = rName[i] AND gNick[k].Lower() = nick.Lower() THEN RETURN
+    NEXT
+    gRoom.Add(rName[i])
+    gNick.Add(nick)
+    gAt.Add(SYS.Ticks)
+END SUB
+
+' ================================================================ what it says
+
+' Hello, once for each person on each machine.
+SUB Greet (i AS Integer, nick AS String)
+    VAR key AS String
+    VAR names AS Array OF String
+    VAR site AS String
+    IF i < 0 THEN RETURN
+    IF nick.Lower() = rNick[i].Lower() THEN RETURN
+    key = rName[i].Split(".")[0] + "|" + nick.Lower()
+    IF seen.Contains(key) THEN RETURN
+    seen.Add(key)
+    FS.Append(HOME + "\SEEN.TXT", key + EOL)
+    greeted = greeted + 1
+    FOR EACH site IN Sites()
+        names.Add(site.Split("|")[0])
+    NEXT
+    Say(i, "Hi " + nick + ", welcome to SIM95! I'm the greeter bot from " + here.Upper() + ".")
+    IF names.Count = 0 THEN
+        Say(i, "Open Voyager and go to http://" + here + "/ to see what's on.")
+    ELSE
+        Say(i, "Open Voyager and go to http://" + here + "/ for " + Listed(names) + ".")
+    END IF
+    IF IsHub(i) THEN
+        Say(i, "Say sites for the list.")
+    ELSE
+        Say(i, "Looking for people? We chat in " + channel + " on " + here + ": in Chat, put " + here + " in Server and press Connect.")
+        Say(i, "Say sites for the list, or bye and I'll leave this machine alone.")
+    END IF
+    Note("Greeted " + nick + " on " + rName[i])
+    Status()
+END SUB
+
+' Somebody said something in the room: "sites", or "bye".
+SUB Heard (conn AS NET_Connection, i AS Integer, nick AS String, text AS String)
+    VAR t AS String
+    VAR site AS String
+    VAR all AS Array OF String
+    VAR p AS Array OF String
+    t = text.Trim().Lower()
+    ' "StartHereBot: sites" too
+    IF t.StartsWith(rNick[i].Lower()) THEN t = t.Substring(rNick[i].Length, t.Length - rNick[i].Length)
+    t = Bare(t)
+    IF t = "sites" OR t = "!sites" OR t = "help" THEN
+        IF rListed[i] <> 0 AND SYS.Ticks - rListed[i] < QUIET THEN RETURN
+        rListed[i] = MATH.Max(1, SYS.Ticks)
+        all = Sites()
+        IF all.Count = 0 THEN Say(i, "Everything is at http://" + here + "/")
+        FOR EACH site IN all
+            p = site.Split("|")
+            Say(i, p[0] + " - " + p[1] + " - " + p[2])
+        NEXT
+        Note("Listed the sites for " + nick + " on " + rName[i])
+    ELSEIF (t = "bye" OR t = "go away" OR t = "leave") AND NOT IsHub(i) THEN
+        Say(i, "OK, I'll leave this machine alone. Find us any time at http://" + here + "/ - bye!")
+        FS.Append(HOME + "\OPTOUT.TXT", rName[i].Split(".")[0] + EOL)
+        SetState(i, "left")
+        ' (after the goodbye, in its turn)
+        Say(i, Chr(1) + "QUIT")
+        Note(nick + " said bye: leaving " + rName[i] + " alone")
+        Status()
+    END IF
+END SUB
+
+' Without the bits around a word: ": sites!" -> "sites"
+FUNCTION Bare (t AS String) AS String
+    WHILE t.Length > 0 AND ":,; ".Contains(t.Substring(0, 1))
+        t = t.Substring(1, t.Length - 1)
+    END WHILE
+    WHILE t.Length > 0 AND "!.? ".Contains(t.Substring(t.Length - 1, 1))
+        t = t.Substring(0, t.Length - 1)
+    END WHILE
+    RETURN t
+END FUNCTION
+
+' "SimBook, ColdMail and AskSim"; after six, "and more".
+FUNCTION Listed (names AS Array OF String) AS String
+    VAR out AS String
+    VAR k AS Integer
+    IF names.Count = 1 THEN RETURN names[0]
+    FOR k = 0 TO MATH.Min(names.Count, 6) - 1
+        IF k > 0 THEN
+            IF k = names.Count - 1 THEN
+                out = out + " and "
+            ELSE
+                out = out + ", "
+            END IF
+        END IF
+        out = out + names[k]
+    NEXT
+    IF names.Count > 6 THEN out = out + " and more"
+    RETURN out
+END FUNCTION
+
+' The sites here, as SimHost's front page lists them: name|address|blurb.
+' A folder of C:\WEB with an APP.INF (name|blurb|colour) says how it shows;
+' the list below covers apps installed before they wrote one.
+FUNCTION Sites () AS Array OF String
+    VAR out AS Array OF String
+    VAR known AS Array OF String
+    VAR f AS String
+    VAR k AS String
+    VAR p AS Array OF String
+    known = ["BOOK|BOOK.SPK|SimBook|The social network: profiles, friends, a news feed, walls, photos and pokes.", "MAIL|MAIL.SPK|ColdMail|Free webmail, with a real mail server behind it.", "ASK|ASK.SPK|AskSim|A search engine with a real crawler that goes round every machine on the network.", "GEO|GEO.SPK|GeoSimies|Free homepages for everybody: neighborhoods, hit counters, guestbooks and webrings.", "WIKI|WIKI.SPK|WikiSim|The encyclopedia: hundreds of articles from Wikipedia, as of 1996.", "ELIZA|BOT.SPK|ELIZA-95|A chatbot with Language-Model-of-Certain-Size manners.", "PAL|PAL.SPK|SimPal|Send and request money in SimBucks.", "TUBE|TUBE.SPK|SimTube|Movies: watch them, put yours up, give them stars.", "STATS|STATS.SPK|SimStats|Web statistics for any site.", "VAPOR|CATALOG.TXT|Vapor|The store: games and every SIM95 program, for your own machine."]
+    IF NOT FS.Exists("C:\WEB") THEN RETURN out
+    FOR EACH f IN FS.List("C:\WEB")
+        IF NOT f.EndsWith("\") THEN CONTINUE
+        f = f.Substring(0, f.Length - 1).Upper()
+        IF FS.Exists("C:\WEB\" + f + "\APP.INF") THEN
+            p = FS.Read("C:\WEB\" + f + "\APP.INF").Trim().Split("|")
+            IF p.Count >= 2 THEN
+                out.Add(p[0] + "|http://" + here + "/" + f.Lower() + "/|" + p[1])
+                CONTINUE
+            END IF
+        END IF
+        FOR EACH k IN known
+            p = k.Split("|")
+            IF p[0] = f AND FS.Exists("C:\WEB\" + f + "\" + p[1]) THEN out.Add(p[2] + "|http://" + here + "/" + f.Lower() + "/|" + p[3])
+        NEXT
+    NEXT
+    RETURN out
+END FUNCTION

@@ -488,6 +488,49 @@ END SUB
     NicDone()`,
     code: () => startService + "\n" + read("simnic/SETUP.SPK").replace(/^CONST NICHOST = "[^"]*"/m, `CONST NICHOST = "${CENTRAL}"`),
   },
+  // The Welcome Wagon: the greeter bot, for the central host only (like
+  // SimNIC, no vapor header: one greeter is plenty, two would talk at once).
+  welcome: {
+    title: "the Welcome Wagon",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5 - on the central
+' host, ${CENTRAL.toUpperCase()}. It writes the Welcome Wagon to C:\\PROGRAMS\\WELCOME.SPK,
+' starts it, and adds it to C:\\SYSTEM\\STARTUP. It waits in #general on every
+' machine's Chat service as StartHereBot, says hello to whoever comes in, and
+' tells them about this machine's sites (the SimHost front page's list) and
+' where everybody chats. "bye" in a room sends it away from that machine for
+' good. Settings: C:\\WELCOME\\WELCOME.INI. (On any other machine it warns you
+' first: a second greeter would greet everybody twice.)`,
+    copy: [["welcome/PROGRAMS", "C:\\PROGRAMS"]],
+    dirs: [],
+    first: ["IF NOT WelcomeHere() THEN RETURN"],
+    last: [`StartService("WELCOME", "C:\\PROGRAMS\\WELCOME.SPK", "WELCOME.RUN")`],
+    done: `Print("The Welcome Wagon is running: it greets newcomers in #general on every machine.")`,
+    code: () => startService + `
+VAR welcomeWin AS GUI_Window
+
+' The central host, or a yes to installing it somewhere else anyway.
+FUNCTION WelcomeHere () AS Bool
+    VAR box AS GUI_MessageBox
+    IF NET.HostName.Lower() = "${CENTRAL}" THEN RETURN TRUE
+    welcomeWin = GUI_Window.New("Welcome Wagon Setup", 10, 10)
+    box = GUI_MessageBox.New(welcomeWin)
+    box.Title = "Welcome Wagon Setup"
+    box.Kind = "warn"
+    box.Buttons = "yesno"
+    box.Text = "This machine is " + NET.HostName.Upper() + ", not ${CENTRAL.toUpperCase()}." + NL + NL _
+        + "The Welcome Wagon is meant for the central host: with two of them, every newcomer is greeted twice, and told about two places." + NL + NL _
+        + "Install it here anyway (for testing, say)?"
+    IF box.Show() THEN
+        welcomeWin.Close()
+        Print("  (not the central host, ${CENTRAL}: installing anyway)")
+        RETURN TRUE
+    END IF
+    Print("The Welcome Wagon was not installed: it belongs on ${CENTRAL}.")
+    SYS.Exit(0)
+    RETURN FALSE
+END FUNCTION
+`,
+  },
   // simweb: for every machine with a web site. The web server with sites by
   // name (it replaces HTTPD.SPK, keeping the stock one as HTTPD.ORG, and puts
   // it back when PWM.SPK is uninstalled), Personal Web Manager, DIG and the

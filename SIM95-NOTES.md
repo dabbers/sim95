@@ -171,3 +171,50 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
   (to clear it, say) leaves the handler reading what the tick wrote. Don't
   reset an input box from a tick that repeats; do it once, and remember that
   it was done. (The Sim Shell's password prompt did this, now and then.)
+
+## The Chat service (found for the Welcome Wagon)
+
+* **Lines sent together can arrive shuffled.**
+  * **The cause:** `CHATSVC.SPK` handles each line it gets as a task of its
+    own. A task is paused every 512 statements, and the service's name check
+    (`Clean`) walks a line character by character. So a long line's task can
+    be paused while a shorter line sent just after it finishes first.
+  * **What it does:**
+    * Four `MSG`s sent in a row reach the room in another order.
+    * A `JOIN` sent right after `NICK` can be broadcast with the old
+      `guestNNN` name; the Chat program sends exactly that pair on Connect.
+    * A `QUIT` sent after a `MSG` can close the connection before the
+      message goes out.
+  * **What a bot can do:**
+    * Send `JOIN` only after the `OK You are now ...` reply to `NICK`.
+    * Space its lines out (the Welcome Wagon sends one every half second).
+    * Wait a moment before greeting somebody who joined, and follow any
+      `NICK #chan old new` that comes in the meantime.
+  * **A fix in the service** would be to handle a connection's lines one at
+    a time, in order: keep a queue per connection, and work through it from
+    one task.
+* **Bug: Disconnect in Chat often crashes the Chat service, with an error
+  box.**
+  * **Symptom:** the newcomer presses Disconnect and gets
+    *Runtime error in Sock_OnMessage (line 157): Connection closed* from
+    `CHATSVC.SPK`. The machine's Chat service is gone until it restarts, and
+    the next Connect is refused.
+  * **How often:** with nothing else on the machine, it happens within one to
+    six Connect/Disconnect presses.
+  * **Cause:** the Chat program's `Disconnect` sends `QUIT` and closes the
+    socket at once. The service's `QUIT` case runs `LeaveAll`, then
+    `conn.Send("OK Bye")`. When the close has landed first, that `Send`
+    throws, and nothing catches it.
+  * **Fix, in the service:** put `conn.Send("OK Bye")` and `conn.Close()` in
+    a `TRY` with an empty `CATCH`, or check `conn.IsOpen` first. (Or, in the
+    program, wait for `OK Bye` before closing.) `Broadcast` already checks
+    `IsOpen`; the replies to the sender don't.
+* **There is no history.** A line goes only to whoever is in the channel at
+  that moment. Somebody who joins later sees nothing that was said before.
+* **The Chat program defaults to this machine's own service, in
+  `#general`.** So a newcomer who opens Chat and presses Connect is alone,
+  unless something else is already waiting in that room.
+* **`NET.Machines()` is a broadcast ping.** It waits about 0.7 s for the
+  answers and returns them as `NAME ADDRESS MS`. Every machine sees the ping
+  in Monitor, so calling it every half minute is fine, and calling it every
+  second is noisy.
