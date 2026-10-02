@@ -43,8 +43,10 @@ A series of programs for the sim95 playground
   pages each name gets (`coolsite.sim`, `coolbook.sim` for SimBook...), `DIG`,
   and the resolver every program uses to look names up.
 * [`welcome/`](welcome/) – the Welcome Wagon, a greeter bot for
-  STARTHERE: it waits in `#general` on every machine's Chat, says hello to
-  newcomers, and points them at STARTHERE's sites and its chat room.
+  STARTHERE. It waits in `#general` on every machine's Chat, says hello to
+  newcomers, and points them at STARTHERE's sites. It also links every
+  machine's `#general` into one conversation, with people under their own
+  names.
 * [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
   scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK

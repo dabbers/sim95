@@ -5,10 +5,12 @@
 ' host, STARTHERE.56K.NET. It writes the Welcome Wagon to C:\PROGRAMS\WELCOME.SPK,
 ' starts it, and adds it to C:\SYSTEM\STARTUP. It waits in #general on every
 ' machine's Chat service as StartHereBot, says hello to whoever comes in, and
-' tells them about this machine's sites (the SimHost front page's list) and
-' where everybody chats. "bye" in a room sends it away from that machine for
-' good. Settings: C:\WELCOME\WELCOME.INI. (On any other machine it warns you
-' first: a second greeter would greet everybody twice.)
+' tells them about this machine's sites (the SimHost front page's list). It
+' links the rooms into one, too: people in #general anywhere are in #general
+' everywhere, under their own names. "unlink" in a room keeps it to itself;
+' "bye" sends the bot away from that machine for good. Settings:
+' C:\WELCOME\WELCOME.INI. (On any other machine it warns you first: a second
+' one would greet everybody twice, and link every line twice.)
 
 VAR t AS String
 VAR NL AS String
@@ -47,9 +49,20 @@ SUB File0 ()
     t = t + "' half minute (NET.Machines) and waits in #general on every machine as" + NL
     t = t + "' StartHereBot. When somebody comes into the room (or is there already), it" + NL
     t = t + "' says hello, once, and tells them what this machine serves (the same list" + NL
-    t = t + "' as SimHost's front page) and where everybody chats. In the room:" + NL
-    t = t + "'   sites   the sites here, one a line" + NL
-    t = t + "'   bye     it leaves that machine's room, for good (C:\WELCOME\OPTOUT.TXT)" + NL
+    t = t + "' as SimHost's front page)." + NL
+    t = t + "'" + NL
+    t = t + "' It also links the rooms into one: everybody in #general on any machine" + NL
+    t = t + "' is in #general on every machine where somebody is. Each person gets a" + NL
+    t = t + "' stand-in in the other rooms, a connection of the bot's own under their" + NL
+    t = t + "' name, which says what they say there; so ""<newbie> hi all"" reads the same" + NL
+    t = t + "' everywhere, and the list of who's here is everybody on the network. A" + NL
+    t = t + "' room nobody is in gets no stand-ins. In a room:" + NL
+    t = t + "'   sites    the sites here, one a line" + NL
+    t = t + "'   unlink   this room stays to itself (C:\WELCOME\UNLINK.TXT); link undoes it" + NL
+    t = t + "'   bye      it leaves that machine's room, for good (C:\WELCOME\OPTOUT.TXT)" + NL
+    t = t + "' A name somebody in another room already has can't be passed through (the" + NL
+    t = t + "' Chat service won't have two): that person is told, once, and isn't heard" + NL
+    t = t + "' in that room until they change their name." + NL
     t = t + "' Settings, in C:\WELCOME\WELCOME.INI:" + NL
     t = t + "'   channel=#general    the room to wait in" + NL
     t = t + "'   every=30            seconds between looks round the network" + NL
@@ -67,9 +80,11 @@ SUB File0 ()
     t = t + "CONST HOME = ""C:\WELCOME""" + NL
     t = t + "CONST BOTNICK = ""StartHereBot""" + NL
     t = t + "CONST RETRY = 300000              ' a machine with no Chat service is tried again after this (ms)" + NL
+    t = t + "CONST RETRYSOON = 10000           ' ...one whose Chat service was there (it may have crashed: see SIM95-NOTES.md)" + NL
     t = t + "CONST QUIET = 20000               ' the list of sites at most this often in one room (ms)" + NL
     t = t + "CONST MOST = 200                  ' lines kept in the window" + NL
     t = t + "CONST SETTLE = 1500               ' greet this long after somebody comes in (ms)" + NL
+    t = t + "CONST MOSTLINKS = 300             ' stand-ins at most, all told" + NL
     t = t + "" + NL
     t = t + "VAR EOL AS String" + NL
     t = t + "VAR win AS GUI_Window" + NL
@@ -96,18 +111,52 @@ SUB File0 ()
     t = t + "VAR rNick AS Array OF String      ' the name it has there" + NL
     t = t + "VAR rListed AS Array OF Integer   ' when it last listed the sites there" + NL
     t = t + "" + NL
-    t = t + "' The open connections, by room name." + NL
+    t = t + "VAR rLinked AS Array OF Bool      ' FALSE when somebody there said unlink" + NL
+    t = t + "VAR rTold AS Array OF Bool        ' told (since it started) that the room is linked" + NL
+    t = t + "VAR rWasOpen AS Array OF Bool     ' it has been in the room before" + NL
+    t = t + "" + NL
+    t = t + "' The open connections, by tag: a room's name for the bot's own, ""#"" and a" + NL
+    t = t + "' number for a stand-in." + NL
     t = t + "VAR cName AS Array OF String" + NL
     t = t + "VAR cConn AS Array OF NET_Connection" + NL
     t = t + "" + NL
-    t = t + "' Waiting to be greeted: room, nick, since when." + NL
+    t = t + "' Waiting a moment (for their NICK to catch up): room, nick, since when, and" + NL
+    t = t + "' whether to say hello." + NL
     t = t + "VAR gRoom AS Array OF String" + NL
     t = t + "VAR gNick AS Array OF String" + NL
     t = t + "VAR gAt AS Array OF Integer" + NL
+    t = t + "VAR gHello AS Array OF Bool" + NL
     t = t + "" + NL
-    t = t + "' Lines to say, one a tick: room, then the line." + NL
+    t = t + "' Recent renames (room, old, new, when): a NICK can reach the bot before the" + NL
+    t = t + "' JOIN it followed, and the JOIN still has the old name." + NL
+    t = t + "VAR nRoom AS Array OF String" + NL
+    t = t + "VAR nOld AS Array OF String" + NL
+    t = t + "VAR nNew AS Array OF String" + NL
+    t = t + "VAR nAt AS Array OF Integer" + NL
+    t = t + "" + NL
+    t = t + "' Lines to send, one a tick for each connection: tag, then the line." + NL
     t = t + "VAR oRoom AS Array OF String" + NL
     t = t + "VAR oText AS Array OF String" + NL
+    t = t + "VAR sending AS Bool" + NL
+    t = t + "VAR sendingAt AS Integer" + NL
+    t = t + "" + NL
+    t = t + "' The people in the rooms (not the bot, not stand-ins)." + NL
+    t = t + "VAR hId AS Array OF Integer" + NL
+    t = t + "VAR hRoom AS Array OF String" + NL
+    t = t + "VAR hNick AS Array OF String" + NL
+    t = t + "VAR nextId AS Integer" + NL
+    t = t + "" + NL
+    t = t + "' Stand-ins: whose (a person's id), in which room, under what name, and how" + NL
+    t = t + "' far along: wait (to connect), naming (NICK sent), in (JOINed), dead (QUIT sent)." + NL
+    t = t + "VAR uId AS Array OF Integer" + NL
+    t = t + "VAR uWho AS Array OF Integer" + NL
+    t = t + "VAR uRoom AS Array OF String" + NL
+    t = t + "VAR uNick AS Array OF String" + NL
+    t = t + "VAR uState AS Array OF String" + NL
+    t = t + "VAR clashed AS Array OF String    ' ""id|room"": the name is taken there" + NL
+    t = t + "VAR linker AS GUI_Timer" + NL
+    t = t + "VAR pConnecting AS Bool" + NL
+    t = t + "VAR pConnectAt AS Integer" + NL
     t = t + "" + NL
     t = t + "SUB Main ()" + NL
     t = t + "    VAR line AS String" + NL
@@ -139,7 +188,12 @@ SUB File0 ()
     t = t + "    clock.Interval = 500" + NL
     t = t + "    clock.onTick = Clock_OnTick" + NL
     t = t + "    clock.Start()" + NL
-    t = t + "    Note(""Greeting people in "" + channel + "" on every machine, for http://"" + here + ""/"")" + NL
+    t = t + "    ' stand-ins connect on a clock of their own, quicker" + NL
+    t = t + "    linker = GUI_Timer.New(win)" + NL
+    t = t + "    linker.Interval = 150" + NL
+    t = t + "    linker.onTick = Linker_OnTick" + NL
+    t = t + "    linker.Start()" + NL
+    t = t + "    Note(""Greeting people in "" + channel + "" on every machine, for http://"" + here + ""/, and linking the rooms"")" + NL
     t = t + "    Status()" + NL
     t = t + "    win.Show()" + NL
     t = t + "END SUB" + NL
@@ -166,12 +220,17 @@ SUB File0 ()
     t = t + "    FOR EACH s IN rState" + NL
     t = t + "        IF s = ""open"" THEN n = n + 1" + NL
     t = t + "    NEXT" + NL
-    t = t + "    win.Status = Str(n) + "" room"" + Plural(n) + "" open  -  "" + Str(greeted) + "" greeted since it started""" + NL
+    t = t + "    win.Status = Str(n) + "" room"" + Plural(n) + "" open  -  "" + Str(hId.Count) + "" "" + People(hId.Count) + "" in them  -  "" + Str(uState.Count) + "" stand-in"" + Plural(uState.Count) + ""  -  "" + Str(greeted) + "" greeted since it started""" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "FUNCTION Plural (n AS Integer) AS String" + NL
     t = t + "    IF n = 1 THEN RETURN """"" + NL
     t = t + "    RETURN ""s""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION People (n AS Integer) AS String" + NL
+    t = t + "    IF n = 1 THEN RETURN ""person""" + NL
+    t = t + "    RETURN ""people""" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' ================================================================ the rooms" + NL
@@ -183,6 +242,9 @@ SUB File0 ()
     t = t + "    rSince.Add(SYS.Ticks)" + NL
     t = t + "    rNick.Add(BOTNICK)" + NL
     t = t + "    rListed.Add(0)" + NL
+    t = t + "    rLinked.Add(NOT InFile(HOME + ""\UNLINK.TXT"", name))" + NL
+    t = t + "    rTold.Add(FALSE)" + NL
+    t = t + "    rWasOpen.Add(FALSE)" + NL
     t = t + "    IF OptedOut(name) THEN rState[rState.Count - 1] = ""left""" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
@@ -197,11 +259,21 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "' Said bye: by computer name, so a new address or ISP doesn't bring it back." + NL
     t = t + "FUNCTION OptedOut (name AS String) AS Bool" + NL
+    t = t + "    RETURN InFile(HOME + ""\OPTOUT.TXT"", name)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Is the machine (by computer name) in the file, one name a line?" + NL
+    t = t + "FUNCTION InFile (path AS String, name AS String) AS Bool" + NL
     t = t + "    VAR line AS String" + NL
-    t = t + "    FOR EACH line IN ReadOr(HOME + ""\OPTOUT.TXT"", """").Lines()" + NL
+    t = t + "    FOR EACH line IN ReadOr(path, """").Lines()" + NL
     t = t + "        IF line.Trim().Upper() = name.Split(""."")[0].Upper() THEN RETURN TRUE" + NL
     t = t + "    NEXT" + NL
     t = t + "    RETURN FALSE" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The machine as people say it: newbie, starthere" + NL
+    t = t + "FUNCTION Called (room AS String) AS String" + NL
+    t = t + "    RETURN room.Split(""."")[0].Lower()" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' ================================================================ the clock" + NL
@@ -217,23 +289,35 @@ SUB File0 ()
     t = t + "    VAR i AS Integer" + NL
     t = t + "    VAR room AS String" + NL
     t = t + "    VAR nick AS String" + NL
-    t = t + "    ' somebody who came in a moment ago: hello now, by the name they have" + NL
-    t = t + "    ' (one a tick, off the list first: ticks overlap while one waits)" + NL
+    t = t + "    VAR hello AS Bool" + NL
+    t = t + "    ' somebody who came in a moment ago: hello now, by the name they have," + NL
+    t = t + "    ' and into the other rooms (one a tick, off the list first: ticks overlap" + NL
+    t = t + "    ' while one waits)" + NL
     t = t + "    IF gRoom.Count > 0 THEN" + NL
     t = t + "        IF SYS.Ticks - gAt[0] >= SETTLE THEN" + NL
     t = t + "            room = gRoom[0]" + NL
     t = t + "            nick = gNick[0]" + NL
+    t = t + "            hello = gHello[0]" + NL
     t = t + "            gRoom.RemoveAt(0)" + NL
     t = t + "            gNick.RemoveAt(0)" + NL
     t = t + "            gAt.RemoveAt(0)" + NL
-    t = t + "            Greet(rName.IndexOf(room), nick)" + NL
+    t = t + "            gHello.RemoveAt(0)" + NL
+    t = t + "            i = rName.IndexOf(room)" + NL
+    t = t + "            IF i >= 0 THEN" + NL
+    t = t + "                IF rState[i] = ""open"" THEN" + NL
+    t = t + "                    AddPerson(room, nick)" + NL
+    t = t + "                    IF hello THEN Greet(i, nick)" + NL
+    t = t + "                    Spread()" + NL
+    t = t + "                END IF" + NL
+    t = t + "            END IF" + NL
     t = t + "        END IF" + NL
     t = t + "    END IF" + NL
-    t = t + "    ' one line a tick" + NL
-    t = t + "    IF oRoom.Count > 0 THEN" + NL
-    t = t + "        SendLine(oRoom[0], oText[0])" + NL
-    t = t + "        oRoom.RemoveAt(0)" + NL
-    t = t + "        oText.RemoveAt(0)" + NL
+    t = t + "    ' a line for each connection that has one waiting" + NL
+    t = t + "    IF NOT sending OR SYS.Ticks - sendingAt > 3000 THEN" + NL
+    t = t + "        sending = TRUE" + NL
+    t = t + "        sendingAt = SYS.Ticks" + NL
+    t = t + "        SendSome()" + NL
+    t = t + "        sending = FALSE" + NL
     t = t + "    END IF" + NL
     t = t + "    ' (a look round or a Connect waits, and ticks go on meanwhile)" + NL
     t = t + "    IF looking AND SYS.Ticks - lookedAt < 5000 THEN RETURN" + NL
@@ -248,7 +332,7 @@ SUB File0 ()
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL
     t = t + "    FOR i = 0 TO rName.Count - 1" + NL
-    t = t + "        IF rState[i] = ""off"" AND SYS.Ticks - rSince[i] > RETRY THEN SetState(i, ""new"")" + NL
+    t = t + "        IF rState[i] = ""off"" AND (SYS.Ticks - rSince[i] > RETRY OR (rWasOpen[i] AND SYS.Ticks - rSince[i] > RETRYSOON)) THEN SetState(i, ""new"")" + NL
     t = t + "    NEXT" + NL
     t = t + "    i = rState.IndexOf(""new"")" + NL
     t = t + "    IF i >= 0 THEN OpenRoom(i)" + NL
@@ -288,6 +372,7 @@ SUB File0 ()
     t = t + "        conn = sock.Connect(rAddr[i], 6667)" + NL
     t = t + "        conn.Tag = rName[i]" + NL
     t = t + "        SetState(i, ""open"")" + NL
+    t = t + "        rWasOpen[i] = TRUE" + NL
     t = t + "        Forget(rName[i])" + NL
     t = t + "        cName.Add(rName[i])" + NL
     t = t + "        cConn.Add(conn)" + NL
@@ -302,24 +387,42 @@ SUB File0 ()
     t = t + "" + NL
     t = t + "SUB Room_OnClose (conn AS NET_Connection)" + NL
     t = t + "    VAR i AS Integer" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    IF conn.Tag.StartsWith(""#"") THEN" + NL
+    t = t + "        ' a stand-in's connection: it has gone" + NL
+    t = t + "        Forget(conn.Tag)" + NL
+    t = t + "        k = uId.IndexOf(Int(Val(conn.Tag.Substring(1, conn.Tag.Length - 1))))" + NL
+    t = t + "        IF k >= 0 THEN DropStandIn(k)" + NL
+    t = t + "        Status()" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
     t = t + "    i = rName.IndexOf(conn.Tag)" + NL
     t = t + "    IF i < 0 THEN RETURN" + NL
     t = t + "    Forget(rName[i])" + NL
+    t = t + "    ' nobody can be heard there now, and its stand-ins are gone with it" + NL
+    t = t + "    FOR k = hId.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF hRoom[k] = rName[i] THEN RemovePerson(k)" + NL
+    t = t + "    NEXT" + NL
     t = t + "    IF rState[i] = ""open"" THEN" + NL
     t = t + "        SetState(i, ""gone"")" + NL
     t = t + "        Note(""Left "" + rName[i] + "" (closed)"")" + NL
-    t = t + "        Status()" + NL
     t = t + "    END IF" + NL
+    t = t + "    Spread()" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "' The Chat service's lines: MSG #chan nick text | JOIN #chan nick |" + NL
-    t = t + "' WHO #chan a,b,c | OK ... | ERR ..." + NL
+    t = t + "' PART #chan nick | NICK #chan old new | WHO #chan a,b,c | OK ... | ERR ..." + NL
+    t = t + "' On the bot's own connection to a room; a stand-in's go to StandInHeard." + NL
     t = t + "SUB Room_OnMessage (conn AS NET_Connection, message AS String)" + NL
     t = t + "    VAR i AS Integer" + NL
     t = t + "    VAR p AS Array OF String" + NL
     t = t + "    VAR who AS String" + NL
     t = t + "    VAR cut AS Integer" + NL
     t = t + "    VAR k AS Integer" + NL
+    t = t + "    IF conn.Tag.StartsWith(""#"") THEN" + NL
+    t = t + "        StandInHeard(conn, message)" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
     t = t + "    i = rName.IndexOf(conn.Tag)" + NL
     t = t + "    IF i < 0 THEN RETURN" + NL
     t = t + "    p = message.Split("" "")" + NL
@@ -333,44 +436,79 @@ SUB File0 ()
     t = t + "        CASE ""ERR""" + NL
     t = t + "            ' somebody there has the name: the same with a number" + NL
     t = t + "            IF message.Contains(""Nick in use"") THEN conn.Send(""NICK "" + BOTNICK.Substring(0, 11) + Str(Rnd(10)))" + NL
-    t = t + "        CASE ""NICK""" + NL
-    t = t + "            ' NICK #chan old new: somebody waiting to be greeted has a name now" + NL
-    t = t + "            IF p.Count >= 4 THEN" + NL
-    t = t + "                FOR k = 0 TO gRoom.Count - 1" + NL
-    t = t + "                    IF gRoom[k] = rName[i] AND gNick[k].Lower() = p[2].Lower() THEN gNick[k] = p[3]" + NL
-    t = t + "                NEXT" + NL
-    t = t + "            END IF" + NL
     t = t + "        CASE ""WHO""" + NL
-    t = t + "            ' whoever was there before it came. (Not on this machine: the" + NL
-    t = t + "            ' regulars there know it, and newcomers are greeted as they come.)" + NL
-    t = t + "            IF p.Count >= 3 AND p[1] = channel AND NOT IsHub(i) THEN" + NL
+    t = t + "            ' whoever was there before it came. (Greeted, but not on this" + NL
+    t = t + "            ' machine: the regulars there know it, and newcomers are greeted" + NL
+    t = t + "            ' as they come.)" + NL
+    t = t + "            IF p.Count >= 3 AND p[1] = channel THEN" + NL
     t = t + "                FOR EACH who IN p[2].Split("","")" + NL
-    t = t + "                    IF who <> """" AND who.Lower() <> rNick[i].Lower() THEN Soon(i, who)" + NL
+    t = t + "                    IF who <> """" AND NOT Ours(i, who) THEN Soon(i, who, NOT IsHub(i))" + NL
     t = t + "                NEXT" + NL
     t = t + "            END IF" + NL
     t = t + "        CASE ""JOIN""" + NL
-    t = t + "            IF p.Count >= 3 AND p[1] = channel AND p[2].Lower() <> rNick[i].Lower() THEN Soon(i, p[2])" + NL
+    t = t + "            IF p.Count >= 3 AND p[1] = channel AND NOT Ours(i, p[2]) THEN Soon(i, p[2], TRUE)" + NL
+    t = t + "        CASE ""PART""" + NL
+    t = t + "            IF p.Count >= 3 AND p[1] = channel AND NOT Ours(i, p[2]) THEN Gone(i, p[2])" + NL
+    t = t + "        CASE ""NICK""" + NL
+    t = t + "            ' NICK #chan old new" + NL
+    t = t + "            IF p.Count >= 4 AND NOT Ours(i, p[3]) THEN Renamed(i, p[2], p[3])" + NL
     t = t + "        CASE ""MSG""" + NL
-    t = t + "            IF p.Count >= 4 AND p[1] = channel AND p[2].Lower() <> rNick[i].Lower() THEN" + NL
+    t = t + "            IF p.Count >= 4 AND p[1] = channel AND NOT Ours(i, p[2]) THEN" + NL
     t = t + "                cut = p[0].Length + p[1].Length + p[2].Length + 3" + NL
+    t = t + "                Relay(i, p[2], message.Substring(cut, message.Length - cut))" + NL
     t = t + "                Heard(conn, i, p[2], message.Substring(cut, message.Length - cut))" + NL
     t = t + "            END IF" + NL
     t = t + "    END SELECT" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "' A line for room i, said in its turn (one a tick)." + NL
+    t = t + "' The bot itself, or one of its stand-ins, in room i." + NL
+    t = t + "FUNCTION Ours (i AS Integer, nick AS String) AS Bool" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    IF nick.Lower() = rNick[i].Lower() THEN RETURN TRUE" + NL
+    t = t + "    FOR k = 0 TO uId.Count - 1" + NL
+    t = t + "        IF uRoom[k] = rName[i] AND uNick[k].Lower() = nick.Lower() THEN RETURN TRUE" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN FALSE" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' A line for room i, said by the bot in its turn." + NL
     t = t + "SUB Say (i AS Integer, text AS String)" + NL
-    t = t + "    oRoom.Add(rName[i])" + NL
+    t = t + "    Queue(rName[i], text)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' A line for a connection (by tag), sent in its turn: a connection sends one" + NL
+    t = t + "' a tick, so the Chat service at the other end keeps them in order." + NL
+    t = t + "' Chr(1) + ""QUIT"" or Chr(1) + ""NICK name"" send those instead." + NL
+    t = t + "SUB Queue (tag AS String, text AS String)" + NL
+    t = t + "    oRoom.Add(tag)" + NL
     t = t + "    oText.Add(text)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "SUB SendLine (room AS String, text AS String)" + NL
+    t = t + "' The first waiting line of every connection." + NL
+    t = t + "SUB SendSome ()" + NL
     t = t + "    VAR k AS Integer" + NL
-    t = t + "    k = cName.IndexOf(room)" + NL
+    t = t + "    VAR done AS String" + NL
+    t = t + "    done = "",""" + NL
+    t = t + "    k = 0" + NL
+    t = t + "    WHILE k < oRoom.Count" + NL
+    t = t + "        IF done.Contains("","" + oRoom[k] + "","") THEN" + NL
+    t = t + "            k = k + 1" + NL
+    t = t + "        ELSE" + NL
+    t = t + "            done = done + oRoom[k] + "",""" + NL
+    t = t + "            SendLine(oRoom[k], oText[k])" + NL
+    t = t + "            oRoom.RemoveAt(k)" + NL
+    t = t + "            oText.RemoveAt(k)" + NL
+    t = t + "        END IF" + NL
+    t = t + "    END WHILE" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB SendLine (tag AS String, text AS String)" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    k = cName.IndexOf(tag)" + NL
     t = t + "    IF k < 0 THEN RETURN" + NL
     t = t + "    TRY" + NL
-    t = t + "        IF text = Chr(1) + ""QUIT"" THEN" + NL
-    t = t + "            cConn[k].Send(""QUIT"")" + NL
+    t = t + "        IF text.StartsWith(Chr(1)) THEN" + NL
+    t = t + "            cConn[k].Send(text.Substring(1, text.Length - 1))" + NL
     t = t + "        ELSE" + NL
     t = t + "            cConn[k].Send(""MSG "" + channel + "" "" + text)" + NL
     t = t + "        END IF" + NL
@@ -391,19 +529,23 @@ SUB File0 ()
     t = t + "            gRoom.RemoveAt(k)" + NL
     t = t + "            gNick.RemoveAt(k)" + NL
     t = t + "            gAt.RemoveAt(k)" + NL
+    t = t + "            gHello.RemoveAt(k)" + NL
     t = t + "        END IF" + NL
     t = t + "    NEXT" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "' Somebody in room i, to greet in a moment (when their NICK has caught up)." + NL
-    t = t + "SUB Soon (i AS Integer, nick AS String)" + NL
+    t = t + "' Somebody in room i: greeted (if hello) and linked in a moment, when" + NL
+    t = t + "' their NICK has caught up." + NL
+    t = t + "SUB Soon (i AS Integer, nick AS String, hello AS Bool)" + NL
     t = t + "    VAR k AS Integer" + NL
+    t = t + "    nick = Current(rName[i], nick)" + NL
     t = t + "    FOR k = 0 TO gRoom.Count - 1" + NL
     t = t + "        IF gRoom[k] = rName[i] AND gNick[k].Lower() = nick.Lower() THEN RETURN" + NL
     t = t + "    NEXT" + NL
     t = t + "    gRoom.Add(rName[i])" + NL
     t = t + "    gNick.Add(nick)" + NL
     t = t + "    gAt.Add(SYS.Ticks)" + NL
+    t = t + "    gHello.Add(hello)" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "' ================================================================ what it says" + NL
@@ -413,6 +555,7 @@ SUB File0 ()
     t = t + "    VAR key AS String" + NL
     t = t + "    VAR names AS Array OF String" + NL
     t = t + "    VAR site AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
     t = t + "    IF i < 0 THEN RETURN" + NL
     t = t + "    IF nick.Lower() = rNick[i].Lower() THEN RETURN" + NL
     t = t + "    key = rName[i].Split(""."")[0] + ""|"" + nick.Lower()" + NL
@@ -429,10 +572,22 @@ SUB File0 ()
     t = t + "    ELSE" + NL
     t = t + "        Say(i, ""Open Voyager and go to http://"" + here + ""/ for "" + Listed(names) + ""."")" + NL
     t = t + "    END IF" + NL
+    t = t + "    n = Elsewhere(rName[i])" + NL
+    t = t + "    IF Linked(i) THEN" + NL
+    t = t + "        rTold[i] = TRUE" + NL
+    t = t + "        IF n > 0 THEN" + NL
+    t = t + "            Say(i, ""This room is linked to "" + channel + "" on every machine: "" + Str(n) + "" "" + People(n) + "" elsewhere on the network can talk with you here, and see what you say."")" + NL
+    t = t + "        ELSE" + NL
+    t = t + "            Say(i, ""This room is linked to "" + channel + "" on every machine: whoever comes in anywhere on the network will be here too, and see what you say."")" + NL
+    t = t + "        END IF" + NL
+    t = t + "    ELSE" + NL
+    t = t + "        Say(i, ""Say link to talk with everybody in "" + channel + "" across the network ("" + Str(n) + "" "" + People(n) + "" now)."")" + NL
+    t = t + "    END IF" + NL
     t = t + "    IF IsHub(i) THEN" + NL
     t = t + "        Say(i, ""Say sites for the list."")" + NL
+    t = t + "    ELSEIF Linked(i) THEN" + NL
+    t = t + "        Say(i, ""Say sites for the list, unlink to keep this room to this machine, or bye and I'll leave it alone."")" + NL
     t = t + "    ELSE" + NL
-    t = t + "        Say(i, ""Looking for people? We chat in "" + channel + "" on "" + here + "": in Chat, put "" + here + "" in Server and press Connect."")" + NL
     t = t + "        Say(i, ""Say sites for the list, or bye and I'll leave this machine alone."")" + NL
     t = t + "    END IF" + NL
     t = t + "    Note(""Greeted "" + nick + "" on "" + rName[i])" + NL
@@ -459,14 +614,320 @@ SUB File0 ()
     t = t + "            Say(i, p[0] + "" - "" + p[1] + "" - "" + p[2])" + NL
     t = t + "        NEXT" + NL
     t = t + "        Note(""Listed the sites for "" + nick + "" on "" + rName[i])" + NL
+    t = t + "    ELSEIF t = ""unlink"" AND IsHub(i) THEN" + NL
+    t = t + "        Say(i, ""This is where everybody meets: it stays linked."")" + NL
+    t = t + "    ELSEIF t = ""unlink"" AND rLinked[i] THEN" + NL
+    t = t + "        rLinked[i] = FALSE" + NL
+    t = t + "        FS.Append(HOME + ""\UNLINK.TXT"", Called(rName[i]) + EOL)" + NL
+    t = t + "        Say(i, ""Unlinked: only people on this machine see this room now. Say link to talk with everybody again."")" + NL
+    t = t + "        Note(nick + "" unlinked "" + rName[i])" + NL
+    t = t + "        Spread()" + NL
+    t = t + "    ELSEIF t = ""link"" AND NOT rLinked[i] THEN" + NL
+    t = t + "        rLinked[i] = TRUE" + NL
+    t = t + "        FS.Write(HOME + ""\UNLINK.TXT"", Without(ReadOr(HOME + ""\UNLINK.TXT"", """"), Called(rName[i])))" + NL
+    t = t + "        rTold[i] = TRUE" + NL
+    t = t + "        Say(i, ""Linked: you're in "" + channel + "" with everybody on the network ("" + Str(Elsewhere(rName[i])) + "" "" + People(Elsewhere(rName[i])) + "" elsewhere now). Say unlink to undo it."")" + NL
+    t = t + "        Note(nick + "" linked "" + rName[i])" + NL
+    t = t + "        Spread()" + NL
     t = t + "    ELSEIF (t = ""bye"" OR t = ""go away"" OR t = ""leave"") AND NOT IsHub(i) THEN" + NL
     t = t + "        Say(i, ""OK, I'll leave this machine alone. Find us any time at http://"" + here + ""/ - bye!"")" + NL
-    t = t + "        FS.Append(HOME + ""\OPTOUT.TXT"", rName[i].Split(""."")[0] + EOL)" + NL
+    t = t + "        FS.Append(HOME + ""\OPTOUT.TXT"", Called(rName[i]) + EOL)" + NL
     t = t + "        SetState(i, ""left"")" + NL
     t = t + "        ' (after the goodbye, in its turn)" + NL
     t = t + "        Say(i, Chr(1) + ""QUIT"")" + NL
     t = t + "        Note(nick + "" said bye: leaving "" + rName[i] + "" alone"")" + NL
-    t = t + "        Status()" + NL
+    t = t + "        Spread()" + NL
+    t = t + "    END IF" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' The lines of text, without the one that is name (any case)." + NL
+    t = t + "FUNCTION Without (text AS String, name AS String) AS String" + NL
+    t = t + "    VAR out AS String" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    FOR EACH line IN text.Lines()" + NL
+    t = t + "        IF line.Trim() <> """" AND line.Trim().Upper() <> name.Upper() THEN out = out + line.Trim() + EOL" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN out" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' ================================================================ linking the rooms" + NL
+    t = t + "" + NL
+    t = t + "' Room i shares #general with the others: linked, and the bot is in it." + NL
+    t = t + "FUNCTION Linked (i AS Integer) AS Bool" + NL
+    t = t + "    IF i < 0 THEN RETURN FALSE" + NL
+    t = t + "    RETURN rLinked[i] AND rState[i] = ""open""" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Linked, with somebody in it to read what's said." + NL
+    t = t + "FUNCTION Active (i AS Integer) AS Bool" + NL
+    t = t + "    IF NOT Linked(i) THEN RETURN FALSE" + NL
+    t = t + "    RETURN hRoom.Contains(rName[i])" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' People in linked rooms other than this one." + NL
+    t = t + "FUNCTION Elsewhere (room AS String) AS Integer" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    FOR k = 0 TO hId.Count - 1" + NL
+    t = t + "        IF hRoom[k] <> room AND Linked(rName.IndexOf(hRoom[k])) THEN n = n + 1" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN n" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "SUB AddPerson (room AS String, nick AS String)" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    nick = Current(room, nick)" + NL
+    t = t + "    FOR k = 0 TO hId.Count - 1" + NL
+    t = t + "        IF hRoom[k] = room AND hNick[k].Lower() = nick.Lower() THEN RETURN" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    nextId = nextId + 1" + NL
+    t = t + "    hId.Add(nextId)" + NL
+    t = t + "    hRoom.Add(room)" + NL
+    t = t + "    hNick.Add(nick)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB RemovePerson (k AS Integer)" + NL
+    t = t + "    VAR id AS Integer" + NL
+    t = t + "    VAR m AS Integer" + NL
+    t = t + "    id = hId[k]" + NL
+    t = t + "    hId.RemoveAt(k)" + NL
+    t = t + "    hRoom.RemoveAt(k)" + NL
+    t = t + "    hNick.RemoveAt(k)" + NL
+    t = t + "    FOR m = clashed.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF clashed[m].StartsWith(Str(id) + ""|"") THEN clashed.RemoveAt(m)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' The name somebody has now, after any renames in the last few seconds." + NL
+    t = t + "FUNCTION Current (room AS String, nick AS String) AS String" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    FOR k = 0 TO nRoom.Count - 1" + NL
+    t = t + "        IF nRoom[k] = room AND nOld[k].Lower() = nick.Lower() AND SYS.Ticks - nAt[k] <= 10000 THEN nick = nNew[k]" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN nick" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION PersonAt (room AS String, nick AS String) AS Integer" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    FOR k = 0 TO hId.Count - 1" + NL
+    t = t + "        IF hRoom[k] = room AND hNick[k].Lower() = nick.Lower() THEN RETURN k" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN -1" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Somebody left room i (PART)." + NL
+    t = t + "SUB Gone (i AS Integer, nick AS String)" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    FOR k = gRoom.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF gRoom[k] = rName[i] AND gNick[k].Lower() = nick.Lower() THEN" + NL
+    t = t + "            gRoom.RemoveAt(k)" + NL
+    t = t + "            gNick.RemoveAt(k)" + NL
+    t = t + "            gAt.RemoveAt(k)" + NL
+    t = t + "            gHello.RemoveAt(k)" + NL
+    t = t + "        END IF" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    k = PersonAt(rName[i], nick)" + NL
+    t = t + "    IF k >= 0 THEN" + NL
+    t = t + "        RemovePerson(k)" + NL
+    t = t + "        ' their name is free here now" + NL
+    t = t + "        FOR k = clashed.Count - 1 TO 0 STEP -1" + NL
+    t = t + "            IF clashed[k].EndsWith(""|"" + rName[i]) THEN clashed.RemoveAt(k)" + NL
+    t = t + "        NEXT" + NL
+    t = t + "        Spread()" + NL
+    t = t + "    END IF" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Somebody in room i changed their name: their stand-ins do too." + NL
+    t = t + "SUB Renamed (i AS Integer, old AS String, nick AS String)" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    VAR h AS Integer" + NL
+    t = t + "    VAR m AS Integer" + NL
+    t = t + "    ' remembered a little while, for a JOIN still on its way" + NL
+    t = t + "    FOR k = nAt.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF SYS.Ticks - nAt[k] > 10000 THEN" + NL
+    t = t + "            nRoom.RemoveAt(k)" + NL
+    t = t + "            nOld.RemoveAt(k)" + NL
+    t = t + "            nNew.RemoveAt(k)" + NL
+    t = t + "            nAt.RemoveAt(k)" + NL
+    t = t + "        END IF" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    nRoom.Add(rName[i])" + NL
+    t = t + "    nOld.Add(old)" + NL
+    t = t + "    nNew.Add(nick)" + NL
+    t = t + "    nAt.Add(SYS.Ticks)" + NL
+    t = t + "    FOR k = 0 TO gRoom.Count - 1" + NL
+    t = t + "        IF gRoom[k] = rName[i] AND gNick[k].Lower() = old.Lower() THEN gNick[k] = nick" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    h = PersonAt(rName[i], old)" + NL
+    t = t + "    IF h < 0 THEN RETURN" + NL
+    t = t + "    hNick[h] = nick" + NL
+    t = t + "    FOR k = 0 TO uId.Count - 1" + NL
+    t = t + "        IF uWho[k] = hId[h] AND uState[k] <> ""dead"" THEN" + NL
+    t = t + "            uNick[k] = nick" + NL
+    t = t + "            IF uState[k] <> ""wait"" THEN Queue(""#"" + Str(uId[k]), Chr(1) + ""NICK "" + nick)" + NL
+    t = t + "        END IF" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    ' a new name may be free where the old one wasn't, and the old one is" + NL
+    t = t + "    ' free here now" + NL
+    t = t + "    FOR m = clashed.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF clashed[m].StartsWith(Str(hId[h]) + ""|"") OR clashed[m].EndsWith(""|"" + rName[i]) THEN clashed.RemoveAt(m)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    Spread()" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Somebody in room i said text: their stand-ins say it in the other rooms." + NL
+    t = t + "SUB Relay (i AS Integer, nick AS String, text AS String)" + NL
+    t = t + "    VAR h AS Integer" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    h = PersonAt(rName[i], nick)" + NL
+    t = t + "    IF h < 0 THEN RETURN" + NL
+    t = t + "    FOR k = 0 TO uId.Count - 1" + NL
+    t = t + "        IF uWho[k] = hId[h] AND uState[k] = ""in"" THEN Queue(""#"" + Str(uId[k]), text)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Every person in a linked room has a stand-in in every other linked room" + NL
+    t = t + "' with somebody in it; nobody else has one. Called whenever that may change." + NL
+    t = t + "SUB Spread ()" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    VAR h AS Integer" + NL
+    t = t + "    VAR j AS Integer" + NL
+    t = t + "    VAR want AS Bool" + NL
+    t = t + "    ' stand-ins no longer wanted" + NL
+    t = t + "    FOR k = uId.Count - 1 TO 0 STEP -1" + NL
+    t = t + "        IF uState[k] = ""dead"" THEN CONTINUE" + NL
+    t = t + "        h = hId.IndexOf(uWho[k])" + NL
+    t = t + "        want = h >= 0" + NL
+    t = t + "        IF want THEN want = hRoom[h] <> uRoom[k] AND Linked(rName.IndexOf(hRoom[h])) AND Active(rName.IndexOf(uRoom[k]))" + NL
+    t = t + "        IF NOT want THEN EndStandIn(k)" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    ' and ones that are wanted" + NL
+    t = t + "    FOR h = 0 TO hId.Count - 1" + NL
+    t = t + "        IF NOT Linked(rName.IndexOf(hRoom[h])) THEN CONTINUE" + NL
+    t = t + "        FOR j = 0 TO rName.Count - 1" + NL
+    t = t + "            IF rName[j] = hRoom[h] OR NOT Active(j) THEN CONTINUE" + NL
+    t = t + "            IF HasStandIn(hId[h], rName[j]) OR clashed.Contains(Str(hId[h]) + ""|"" + rName[j]) THEN CONTINUE" + NL
+    t = t + "            IF uId.Count >= MOSTLINKS THEN" + NL
+    t = t + "                Note(""Too many stand-ins ("" + Str(MOSTLINKS) + ""): not linking any more"")" + NL
+    t = t + "                RETURN" + NL
+    t = t + "            END IF" + NL
+    t = t + "            nextId = nextId + 1" + NL
+    t = t + "            uId.Add(nextId)" + NL
+    t = t + "            uWho.Add(hId[h])" + NL
+    t = t + "            uRoom.Add(rName[j])" + NL
+    t = t + "            uNick.Add(hNick[h])" + NL
+    t = t + "            uState.Add(""wait"")" + NL
+    t = t + "        NEXT" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    ' a room linked with people in it who haven't been told" + NL
+    t = t + "    FOR j = 0 TO rName.Count - 1" + NL
+    t = t + "        IF Active(j) AND NOT rTold[j] THEN" + NL
+    t = t + "            rTold[j] = TRUE" + NL
+    t = t + "            Say(j, ""This room is linked to "" + channel + "" on every machine: people elsewhere on the network see what's said here. Say unlink to keep it to this machine."")" + NL
+    t = t + "        END IF" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    Status()" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "FUNCTION HasStandIn (who AS Integer, room AS String) AS Bool" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    FOR k = 0 TO uId.Count - 1" + NL
+    t = t + "        IF uWho[k] = who AND uRoom[k] = room THEN RETURN TRUE" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN FALSE" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Stand-in k leaves: QUIT, in its turn (it's dropped when its connection" + NL
+    t = t + "' closes), or at once if it never connected." + NL
+    t = t + "SUB EndStandIn (k AS Integer)" + NL
+    t = t + "    IF uState[k] = ""wait"" THEN" + NL
+    t = t + "        DropStandIn(k)" + NL
+    t = t + "    ELSEIF uState[k] <> ""dead"" THEN" + NL
+    t = t + "        uState[k] = ""dead""" + NL
+    t = t + "        Queue(""#"" + Str(uId[k]), Chr(1) + ""QUIT"")" + NL
+    t = t + "    END IF" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB DropStandIn (k AS Integer)" + NL
+    t = t + "    uId.RemoveAt(k)" + NL
+    t = t + "    uWho.RemoveAt(k)" + NL
+    t = t + "    uRoom.RemoveAt(k)" + NL
+    t = t + "    uNick.RemoveAt(k)" + NL
+    t = t + "    uState.RemoveAt(k)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "SUB Linker_OnTick ()" + NL
+    t = t + "    TRY" + NL
+    t = t + "        LinkTick()" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "    END TRY" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' One stand-in connects a tick: NICK first, JOIN once the name is taken." + NL
+    t = t + "SUB LinkTick ()" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    VAR j AS Integer" + NL
+    t = t + "    VAR id AS Integer" + NL
+    t = t + "    VAR conn AS NET_Connection" + NL
+    t = t + "    IF pConnecting AND SYS.Ticks - pConnectAt < 10000 THEN RETURN" + NL
+    t = t + "    pConnecting = FALSE" + NL
+    t = t + "    k = uState.IndexOf(""wait"")" + NL
+    t = t + "    IF k < 0 THEN RETURN" + NL
+    t = t + "    j = rName.IndexOf(uRoom[k])" + NL
+    t = t + "    IF NOT Linked(j) THEN" + NL
+    t = t + "        DropStandIn(k)" + NL
+    t = t + "        RETURN" + NL
+    t = t + "    END IF" + NL
+    t = t + "    id = uId[k]" + NL
+    t = t + "    uState[k] = ""naming""" + NL
+    t = t + "    pConnecting = TRUE" + NL
+    t = t + "    pConnectAt = SYS.Ticks" + NL
+    t = t + "    TRY" + NL
+    t = t + "        conn = sock.Connect(rAddr[j], 6667)" + NL
+    t = t + "        conn.Tag = ""#"" + Str(id)" + NL
+    t = t + "        cName.Add(conn.Tag)" + NL
+    t = t + "        cConn.Add(conn)" + NL
+    t = t + "        pConnecting = FALSE" + NL
+    t = t + "        ' (the lists may have moved while it connected)" + NL
+    t = t + "        k = uId.IndexOf(id)" + NL
+    t = t + "        IF k < 0 THEN" + NL
+    t = t + "            conn.Send(""QUIT"")" + NL
+    t = t + "        ELSEIF uState[k] = ""dead"" THEN" + NL
+    t = t + "            conn.Send(""QUIT"")" + NL
+    t = t + "        ELSE" + NL
+    t = t + "            conn.Send(""NICK "" + uNick[k])" + NL
+    t = t + "        END IF" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "        pConnecting = FALSE" + NL
+    t = t + "        k = uId.IndexOf(id)" + NL
+    t = t + "        IF k >= 0 THEN DropStandIn(k)" + NL
+    t = t + "    END TRY" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' What a stand-in's connection hears: only its own name matters." + NL
+    t = t + "SUB StandInHeard (conn AS NET_Connection, message AS String)" + NL
+    t = t + "    VAR k AS Integer" + NL
+    t = t + "    VAR h AS Integer" + NL
+    t = t + "    VAR i AS Integer" + NL
+    t = t + "    k = uId.IndexOf(Int(Val(conn.Tag.Substring(1, conn.Tag.Length - 1))))" + NL
+    t = t + "    IF k < 0 THEN RETURN" + NL
+    t = t + "    IF message.StartsWith(""OK You are now "") THEN" + NL
+    t = t + "        IF uState[k] = ""naming"" THEN" + NL
+    t = t + "            uState[k] = ""in""" + NL
+    t = t + "            Queue(conn.Tag, Chr(1) + ""JOIN "" + channel)" + NL
+    t = t + "            Status()" + NL
+    t = t + "        END IF" + NL
+    t = t + "    ELSEIF message.StartsWith(""ERR Nick in use"") OR message.StartsWith(""ERR Bad nick"") THEN" + NL
+    t = t + "        ' the name is somebody else's there: tell its owner, once, at home" + NL
+    t = t + "        IF uState[k] = ""dead"" THEN RETURN" + NL
+    t = t + "        clashed.Add(Str(uWho[k]) + ""|"" + uRoom[k])" + NL
+    t = t + "        h = hId.IndexOf(uWho[k])" + NL
+    t = t + "        IF h >= 0 THEN" + NL
+    t = t + "            i = rName.IndexOf(hRoom[h])" + NL
+    t = t + "            IF i >= 0 THEN Say(i, ""Somebody on "" + Called(uRoom[k]) + "" is already called "" + hNick[h] + "", so you can't be heard there. /nick gives you another name."")" + NL
+    t = t + "            Note(hNick[h] + ""'s name is taken on "" + uRoom[k])" + NL
+    t = t + "        END IF" + NL
+    t = t + "        EndStandIn(k)" + NL
     t = t + "    END IF" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL

@@ -1,12 +1,14 @@
 // Tests for the Welcome Wagon (welcome/PROGRAMS/WELCOME.SPK): the greeter bot
-// on the central host that waits in #general on every machine's Chat service
-// and says hello to newcomers. Real Chat services (C:\PROGRAMS\CHATSVC.SPK)
+// on the central host that waits in #general on every machine's Chat service,
+// says hello to newcomers, and links the rooms into one (stand-ins under
+// people's own names). Real Chat services (C:\PROGRAMS\CHATSVC.SPK)
 // and the real Chat program (CHAT.SPK) on a pretend network:
 //   STARTHERE.56k.net  the hub: some SimHost apps, and the Welcome Wagon
 //   NEWBIE             opens Chat before the bot has come round
 //   LATE               joins the network while the bot is running
 //   REGULAR            chats on STARTHERE's own #general
 //   NOCHAT             has its Chat service turned off
+//   CLASH              somebody there calls themselves regular too
 //   node tools/aspsim/welcome.test.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -44,12 +46,13 @@ hub.write("C:\\WELCOME\\WELCOME.INI", "channel=#general\nevery=1\n");
 function chat(m) {
   const self = {
     pid: null,
-    async open(server) {
+    async open(server, nick) {
       if (!self.pid || !m.running(self.pid)) {
         self.pid = m.run("C:\\PROGRAMS\\CHAT.SPK");
         await wait(() => m.widgets(self.pid, "Button").length >= 2, "Chat on " + m.stack.hostname());
       }
       if (server) m.widgets(self.pid, "TextBox")[0].set("Text", server);
+      if (nick) m.widgets(self.pid, "TextBox")[1].set("Text", nick);
       m.button(self.pid, "Connect").call("Click");
       await wait(() => m.button(self.pid, "Disconnect"), "connected").catch((e) => { throw new Error(e.message + " | status: " + m.widgets(self.pid, "Window")[0].get("Status") + " | buttons: " + m.widgets(self.pid, "Button").map((b) => b.get("Text")).join(",") + " | " + self.lines().slice(-4).join(" / ") + " | errors: " + m.errors.join(" ;; ") + " | dialogs: " + JSON.stringify(m.ui.dialogs) + " | ps: " + m.kernel.ps().map((p) => p.name).join(",")); });
     },
@@ -69,105 +72,182 @@ function chat(m) {
     },
     lines: () => m.widgets(self.pid, "ListBox")[0].get("Items").map((l) => l.replace(/^\d\d:\d\d:\d\d /, "")),
     users: () => m.widgets(self.pid, "ListBox")[1].get("Items"),
-    say(text) {
-      m.widgets(self.pid, "TextBox")[3].set("Text", text);
+    // (Chat reads the box when it gets to the click: one line at a time)
+    async say(text) {
+      const box = m.widgets(self.pid, "TextBox")[3];
+      box.set("Text", text);
       m.button(self.pid, "Send").call("Click");
+      await wait(() => box.get("Text") === "", "sent: " + text);
     },
     from: (nick) => self.lines().filter((l) => l.startsWith("<" + nick + "> ")).map((l) => l.slice(nick.length + 3)),
   };
   return self;
 }
 const bot = () => proc(hub, "WELCOME");
+process.on("exit", () => { if (hub.ui.dialogs.length) console.log("HUB DIALOGS:", JSON.stringify(hub.ui.dialogs)); if (hub.errors.length) console.log("HUB ERRORS:", hub.errors.join(" ;; ")); });
 const journal = () => hub.widgets(bot(), "ListBox")[0].get("Items").join("\n");
 
 const N = chat(newbie);
-await test("somebody already in their own Chat room is greeted when the bot comes round", async () => {
+const R = chat(regular);
+const BOT = "StartHereBot";
+const hellos = (c, nick) => c.from(BOT).filter((l) => l.startsWith("Hi " + nick + ",")).length;
+
+await test("somebody already in their own Chat room is greeted when the bot comes round, and told the room is linked", async () => {
   await N.open(); // its own machine, #general: as Chat starts
   assert.deepEqual(N.users(), ["newbie"]);
   hub.write("C:\\PROGRAMS\\WELCOME.SPK", fs.readFileSync(path.join(root, "welcome/PROGRAMS/WELCOME.SPK"), "utf8"));
   hub.run("C:\\PROGRAMS\\WELCOME.SPK");
-  await wait(() => N.from("StartHereBot").length >= 4, "the greeting: " + N.lines().join(" / "));
-  assert.deepEqual(N.from("StartHereBot"), [
+  await wait(() => N.from(BOT).length >= 4, "the greeting: " + N.lines().join(" / "));
+  assert.deepEqual(N.from(BOT), [
     "Hi newbie, welcome to SIM95! I'm the greeter bot from STARTHERE.",
     "Open Voyager and go to http://starthere/ for AskSim, SimBook and Vapor.",
-    "Looking for people? We chat in #general on starthere: in Chat, put starthere in Server and press Connect.",
-    "Say sites for the list, or bye and I'll leave this machine alone.",
+    "This room is linked to #general on every machine: whoever comes in anywhere on the network will be here too, and see what you say.",
+    "Say sites for the list, unlink to keep this room to this machine, or bye and I'll leave it alone.",
   ]);
   assert.ok(N.lines().includes("*** StartHereBot joined #general"));
-  await wait(() => N.users().includes("StartHereBot"), "the bot in the list");
+  await wait(() => N.users().includes(BOT), "the bot in the list");
   assert.match(journal(), /Greeted newbie on NEWBIE/);
   assert.equal(hub.read("C:\\WELCOME\\SEEN.TXT"), "NEWBIE|newbie\n");
 });
 
 await test("sites lists them, one a line (and not again straight away)", async () => {
-  N.say("sites");
-  await wait(() => N.from("StartHereBot").length >= 7, "the list: " + N.lines().join(" / "));
-  assert.deepEqual(N.from("StartHereBot").slice(4), [
+  await N.say("sites");
+  await wait(() => N.from(BOT).length >= 7, "the list: " + N.lines().join(" / "));
+  assert.deepEqual(N.from(BOT).slice(4), [
     "AskSim - http://starthere/ask/ - A search engine with a real crawler that goes round every machine on the network.",
     "SimBook - http://starthere/book/ - The social network: profiles, friends, a news feed, walls, photos and pokes.",
     "Vapor - http://starthere/vapor/ - The store: games and every SIM95 program, for your own machine.",
   ]);
-  N.say("StartHereBot: sites?");
+  await N.say("StartHereBot: sites?");
   await sleep(1500);
-  assert.equal(N.from("StartHereBot").length, 7, "once in a while is plenty");
+  assert.equal(N.from(BOT).length, 7, "once in a while is plenty");
 });
 
 await test("once is enough: back in the room, nobody is greeted twice", async () => {
   await N.close();
   await N.open();
-  await wait(() => N.users().includes("StartHereBot"), "the bot still there");
-  await sleep(1500);
-  assert.equal(N.from("StartHereBot").length, 7);
+  await wait(() => N.users().includes(BOT), "the bot still there");
+  await sleep(2000);
+  assert.equal(N.from(BOT).length, 7);
 });
 
-const R = chat(regular);
-await test("on STARTHERE's own #general: newcomers greeted, without the sales talk; bye there does nothing", async () => {
+await test("STARTHERE's own #general: greeted without the sales talk, and told who's about; bye there does nothing", async () => {
   await R.open("starthere");
-  await wait(() => R.from("StartHereBot").length >= 3, "the greeting on the hub: " + R.lines().join(" / "));
-  assert.deepEqual(R.from("StartHereBot"), [
+  await wait(() => R.from(BOT).length >= 4, "the greeting on the hub: " + R.lines().join(" / "));
+  assert.deepEqual(R.from(BOT), [
     "Hi regular, welcome to SIM95! I'm the greeter bot from STARTHERE.",
     "Open Voyager and go to http://starthere/ for AskSim, SimBook and Vapor.",
+    "This room is linked to #general on every machine: 1 person elsewhere on the network can talk with you here, and see what you say.",
     "Say sites for the list.",
   ]);
-  R.say("bye");
+  await R.say("bye");
   await sleep(1500);
-  assert.ok(R.users().includes("StartHereBot"), "still on the hub");
+  assert.ok(R.users().includes(BOT), "still on the hub");
   assert.ok(!hub.exists("C:\\WELCOME\\OPTOUT.TXT"));
 });
 
+await test("the rooms are one: each sees the other under their own name, and what they say, in order", async () => {
+  await wait(() => N.users().includes("regular") && R.users().includes("newbie"), "each in the other's list: " + N.users() + " | " + R.users());
+  assert.ok(N.lines().includes("*** regular joined #general"));
+  await N.say("hello from newbie");
+  await wait(() => R.from("newbie").includes("hello from newbie"), "newbie heard on the hub: " + R.lines().join(" / "));
+  await R.say("hi newbie, welcome!");
+  await wait(() => N.from("regular").includes("hi newbie, welcome!"), "regular heard on NEWBIE: " + N.lines().join(" / "));
+  for (const w of ["one", "two", "three", "four"]) await N.say(w);
+  await wait(() => R.from("newbie").length >= 5, "four more: " + R.from("newbie").join(" / "));
+  assert.deepEqual(R.from("newbie").slice(-4), ["one", "two", "three", "four"]);
+  // the bot's own lines stay in their room; and nobody else was greeted
+  assert.ok(!R.from(BOT).some((l) => l.includes("newbie,")));
+  assert.equal(N.from(BOT).length, 7);
+  assert.ok(N.from("regular").includes("bye"), "(regular's bye went across: it's chat)");
+  assert.ok(N.users().includes(BOT), "and the bot didn't take it for NEWBIE's");
+});
+
 let late, L;
-await test("a machine that joins the network later is found, and whoever opens Chat there is greeted", async () => {
+await test("a machine that joins later: found, greeted, and in the conversation", async () => {
   late = await net.boot("LATE");
   late.run("C:\\PROGRAMS\\CHATSVC.SPK");
   await wait(() => /Found LATE/.test(journal()), "LATE found: " + journal(), 20000);
-  await wait(() => /open/.test(hub.widgets(bot(), "Window")[0].get("Status")) && Number(hub.widgets(bot(), "Window")[0].get("Status").split(" ")[0]) >= 3, "three rooms open");
+  await sleep(1500);
   L = chat(late);
   await L.open();
-  await wait(() => L.from("StartHereBot").length >= 4, "LATE's greeting: " + L.lines().join(" / "));
-  assert.match(L.from("StartHereBot")[0], /^Hi late, welcome to SIM95!/);
+  await wait(() => L.from(BOT).length >= 4, "LATE's greeting: " + L.lines().join(" / "));
+  assert.equal(L.from(BOT)[2], "This room is linked to #general on every machine: 2 people elsewhere on the network can talk with you here, and see what you say.");
+  await wait(() => ["newbie", "regular"].every((n) => L.users().includes(n)) && N.users().includes("late") && R.users().includes("late"), "late everywhere: " + L.users() + " | " + N.users() + " | " + R.users());
+  await L.say("hi all");
+  await wait(() => N.from("late").includes("hi all") && R.from("late").includes("hi all"), "late heard everywhere");
 });
 
-await test("bye: it leaves that machine alone, for good", async () => {
-  L.say("bye!");
-  await wait(() => L.from("StartHereBot").some((l) => l.startsWith("OK, I'll leave this machine alone.")), "the goodbye");
-  await wait(() => !L.users().includes("StartHereBot"), "the bot gone: " + L.users().join(","));
-  assert.equal(hub.read("C:\\WELCOME\\OPTOUT.TXT"), "LATE\n");
-  assert.match(journal(), /late said bye: leaving LATE alone/);
+await test("a new name goes everywhere", async () => {
+  await L.say("/nick lateguy");
+  await wait(() => N.users().includes("lateguy") && !N.users().includes("late") && R.users().includes("lateguy"), "renamed: " + N.users() + " | " + R.users());
+  await L.say("it's me");
+  await wait(() => N.from("lateguy").includes("it's me") && R.from("lateguy").includes("it's me"), "the new name heard");
+});
+
+await test("unlink keeps a room to itself; link brings it back", async () => {
+  await N.say("unlink");
+  await wait(() => N.from(BOT).some((l) => l.startsWith("Unlinked: only people on this machine see this room now.")), "unlinked");
+  assert.equal(hub.read("C:\\WELCOME\\UNLINK.TXT"), "newbie\n");
+  await wait(() => !R.users().includes("newbie") && !L.users().includes("newbie"), "newbie gone from the others: " + R.users() + " | " + L.users());
+  await wait(() => !N.users().includes("regular") && !N.users().includes("lateguy"), "the others gone from NEWBIE: " + N.users());
+  await R.say("anyone on newbie?");
+  await N.say("just us here");
+  await sleep(2000);
+  assert.ok(!N.from("regular").includes("anyone on newbie?"));
+  assert.ok(!R.from("newbie").includes("just us here"));
+  await N.say("link");
+  await wait(() => N.from(BOT).some((l) => l.startsWith("Linked: you're in #general with everybody on the network (2 people elsewhere now).")), "linked again: " + N.from(BOT).join(" / "));
+  assert.equal(hub.read("C:\\WELCOME\\UNLINK.TXT"), "");
+  await wait(() => N.users().includes("regular") && R.users().includes("newbie"), "back together");
+  await R.say("there you are");
+  await wait(() => N.from("regular").includes("there you are"), "heard again");
+});
+
+let clash, C;
+await test("a name somebody elsewhere has: its owners are told, once, and change it to be heard", async () => {
+  clash = await net.boot("CLASH");
+  clash.run("C:\\PROGRAMS\\CHATSVC.SPK");
+  await wait(() => /Found CLASH/.test(journal()), "CLASH found", 20000);
+  await sleep(1500);
+  C = chat(clash);
+  await C.open(undefined, "regular");
+  const told = (c, where) => c.from(BOT).filter((l) => l === `Somebody on ${where} is already called regular, so you can't be heard there. /nick gives you another name.`).length;
+  await wait(() => told(C, "starthere") === 1 && told(R, "clash") === 1, "both told: " + C.from(BOT).join(" / ") + " | " + R.from(BOT).join(" / "));
+  await sleep(3000);
+  assert.equal(told(C, "starthere"), 1, "once");
+  assert.equal(told(R, "clash"), 1, "once");
+  assert.ok(!R.users().filter((u) => u === "regular").length !== 1);
+  await C.say("/nick clasher");
+  await wait(() => R.users().includes("clasher") && C.users().includes("regular"), "linked under the new name: " + R.users() + " | " + C.users() + "\n" + journal() + "\n" + hub.widgets(bot(), "Window")[0].get("Status"));
+  await C.say("better");
+  await wait(() => R.from("clasher").includes("better"), "heard on the hub now");
+});
+
+await test("bye: it leaves that machine alone, for good, and its room leaves the conversation", async () => {
+  await L.say("bye!");
+  await wait(() => L.from(BOT).some((l) => l.startsWith("OK, I'll leave this machine alone.")), "the goodbye");
+  await wait(() => L.users().length === 1, "LATE alone again: " + L.users().join(","));
+  assert.deepEqual(L.users(), ["lateguy"]);
+  await wait(() => !N.users().includes("lateguy") && !R.users().includes("lateguy"), "lateguy gone from the others");
+  assert.equal(hub.read("C:\\WELCOME\\OPTOUT.TXT"), "late\n");
+  assert.match(journal(), /lateguy said bye: leaving LATE alone/);
   await sleep(3000); // three looks round
   await L.close();
   await L.open();
-  await sleep(1500);
-  assert.ok(!L.users().includes("StartHereBot"), "it doesn't come back");
+  await sleep(2000);
+  assert.equal(L.users().length, 1, "it doesn't come back: " + L.users());
 });
 
-await test("a Chat service that restarts gets the bot back; one that's off is left until later", async () => {
+await test("a Chat service that restarts gets the bot back, and its people back in the conversation", async () => {
   newbie.kernel.kill(proc(newbie, "CHATSVC"));
   await wait(() => /Left NEWBIE \(closed\)/.test(journal()), "the room closed");
+  await wait(() => !R.users().includes("newbie"), "newbie gone from the hub");
   newbie.run("C:\\PROGRAMS\\CHATSVC.SPK");
   await N.close();
   await N.open();
-  await wait(() => N.users().includes("StartHereBot"), "the bot back on NEWBIE", 20000);
-  assert.ok(!/Greeted newbie on NEWBIE[\s\S]*Greeted newbie on NEWBIE/.test(journal()), "and no second hello");
+  await wait(() => N.users().includes(BOT) && R.users().includes("newbie") && N.users().includes("regular"), "back: " + N.users() + " | " + R.users(), 25000);
+  assert.equal(hellos(N, "newbie"), 1, "and no second hello");
   assert.ok(/Found NOCHAT/.test(journal()));
   assert.ok(!/Greeted [^\n]* on NOCHAT/.test(journal()));
   assert.ok(proc(hub, "WELCOME"), "still running");
@@ -187,8 +267,9 @@ await test("the installer: on STARTHERE it (re)starts the Welcome Wagon, and wit
   assert.equal(hub.read("C:\\SYSTEM\\STARTUP\\WELCOME.RUN"), "C:\\PROGRAMS\\WELCOME.SPK");
   assert.equal(hub.read("C:\\PROGRAMS\\WELCOME.SPK"), fs.readFileSync(path.join(root, "welcome/PROGRAMS/WELCOME.SPK"), "utf8").replace(/\n?$/, "\n"));
   // it remembers whom it greeted: nobody twice, even after a restart
-  await sleep(2500);
-  assert.equal(N.from("StartHereBot").length, 7);
+  await wait(() => R.users().includes("newbie") && N.users().includes("regular"), "linked again by the new one", 25000);
+  assert.equal(hellos(N, "newbie"), 1);
+  assert.equal(hellos(R, "regular"), 1);
   // anywhere else: a warning first
   nochat.write("C:\\MYFILES\\INSTALL.SPK", installer);
   nochat.ui.answers.push(false);

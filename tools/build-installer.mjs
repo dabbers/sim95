@@ -496,10 +496,12 @@ END SUB
 ' host, ${CENTRAL.toUpperCase()}. It writes the Welcome Wagon to C:\\PROGRAMS\\WELCOME.SPK,
 ' starts it, and adds it to C:\\SYSTEM\\STARTUP. It waits in #general on every
 ' machine's Chat service as StartHereBot, says hello to whoever comes in, and
-' tells them about this machine's sites (the SimHost front page's list) and
-' where everybody chats. "bye" in a room sends it away from that machine for
-' good. Settings: C:\\WELCOME\\WELCOME.INI. (On any other machine it warns you
-' first: a second greeter would greet everybody twice.)`,
+' tells them about this machine's sites (the SimHost front page's list). It
+' links the rooms into one, too: people in #general anywhere are in #general
+' everywhere, under their own names. "unlink" in a room keeps it to itself;
+' "bye" sends the bot away from that machine for good. Settings:
+' C:\\WELCOME\\WELCOME.INI. (On any other machine it warns you first: a second
+' one would greet everybody twice, and link every line twice.)`,
     copy: [["welcome/PROGRAMS", "C:\\PROGRAMS"]],
     dirs: [],
     first: ["IF NOT WelcomeHere() THEN RETURN"],

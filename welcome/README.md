@@ -1,6 +1,7 @@
 # The Welcome Wagon
 
-A greeter bot for the central host, STARTHERE.56k.net.
+A greeter bot, and a link between every machine's chat room, for the
+central host, STARTHERE.56k.net.
 
 New people join the network, open Chat, and find an empty room. Chat
 connects to their *own* machine's Chat service by default, and nobody else
@@ -11,9 +12,17 @@ machine as **StartHereBot** and says hello when somebody comes in:
 *** StartHereBot joined #general
 <StartHereBot> Hi newbie, welcome to SIM95! I'm the greeter bot from STARTHERE.
 <StartHereBot> Open Voyager and go to http://starthere/ for AskSim, SimBook, ELIZA-95, GeoSimies, ColdMail, SimNIC and more.
-<StartHereBot> Looking for people? We chat in #general on starthere: in Chat, put starthere in Server and press Connect.
-<StartHereBot> Say sites for the list, or bye and I'll leave this machine alone.
+<StartHereBot> This room is linked to #general on every machine: 2 people elsewhere on the network can talk with you here, and see what you say.
+<StartHereBot> Say sites for the list, unlink to keep this room to this machine, or bye and I'll leave it alone.
+*** regular joined #general
+*** lateguy joined #general
+<regular> hi newbie, welcome!
 ```
+
+It also **links the rooms into one**. Everybody in `#general` on any
+machine is in `#general` on every other machine where somebody is. Lines
+read the same everywhere, under people's own names, and the list of who's
+here is everybody on the network.
 
 * **How it finds people:**
   * It looks round the network every 30 seconds (`NET.Machines()`).
@@ -28,12 +37,33 @@ machine as **StartHereBot** and says hello when somebody comes in:
     address, at most once every 20 seconds.
   * `bye` (or `go away`, `leave`) makes it say goodbye and leave that
     machine for good (`C:\WELCOME\OPTOUT.TXT`, by computer name).
+* **How the linking works:**
+  * Each person gets a *stand-in* in every other linked room that has
+    somebody in it. A stand-in is a connection of the bot's own, under the
+    person's exact name, which says what they say.
+  * A room nobody is in gets no stand-ins, so the bot keeps few connections.
+  * When somebody leaves, their stand-ins leave everywhere. When they
+    `/nick`, their stand-ins take the new name.
+  * The bot never repeats what a stand-in says, so nothing echoes.
+  * Every room is linked by default. Each newcomer is told so in the
+    greeting, and a room that was already busy is told once.
+  * `unlink` keeps a room to its own machine (`C:\WELCOME\UNLINK.TXT`);
+    `link` undoes it. STARTHERE's own room always stays linked.
+  * **A name somebody in another room already has** can't be passed
+    through: the Chat service won't have two of one name. Nothing is added
+    to names, so that person isn't heard in that room. They're told once, in
+    their own room ("Somebody on starthere is already called regular...").
+    A `/nick` fixes it, and so does the other person leaving.
+  * One person who reconnects to another machine's Chat under the same name
+    may find their old stand-in still has it for a moment. Chat then says
+    the name is in use, and `/nick` gets them in.
 * **On STARTHERE's own `#general`,** where people are sent to meet:
   * It greets newcomers without the "come and chat here" line.
   * It doesn't greet the people who were already there when it started.
   * `bye` there does nothing.
 * **Its window** logs what it does: machines found, rooms left, people
-  greeted. The status bar counts open rooms and greetings.
+  greeted, rooms unlinked, names that clash. The status bar counts open
+  rooms, the people in them, stand-ins and greetings.
 
 ## Installing it
 
@@ -57,11 +87,16 @@ every=30
 
 The stock Chat service can deliver lines out of order. The details are in
 [SIM95-NOTES.md](../SIM95-NOTES.md#the-chat-service-found-for-the-welcome-wagon).
-So the bot:
-* joins only once its name is taken;
-* sends one line every half second;
-* greets people a moment and a half after they come in, by the name they
-  have by then.
+So the bot and its stand-ins:
+* join only once their names are taken;
+* send one line every half second on each connection, so a person's lines
+  arrive in the order they were typed;
+* greet and link people a moment and a half after they come in, by the
+  name they have by then.
+
+A room whose Chat service closes (the Disconnect crash in the notes) is
+tried again after 10 seconds. A machine whose Chat service has never
+answered is tried every 5 minutes.
 
 Tests: `node tools/aspsim/welcome.test.mjs`. They use real Chat services and
 the real Chat program on a pretend network.
