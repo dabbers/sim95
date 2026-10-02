@@ -49,7 +49,8 @@ bravo.write("C:\\WEB\\DOCS\\SPARK.TXT", "The SPARK manual, which every machine h
 bravo.write("C:\\WEB\\ROBOTS.TXT", "User-agent: *\nDisallow: /secret/\n");
 charlie.write("C:\\WEB\\CLUB.HTM", `<html><head><title>Charlie's Chess Club</title></head><body>
 <p>The chess club meets on Tuesdays. Bring your own chess board. Chess chess chess!</p>
-<p><img src="board.pic"> <a href="index.htm">Charlie's home page</a></p></body></html>`);
+<p><img src="board.pic"> <a href="index.htm">Charlie's home page</a> &middot; <a href="/docs/spark.txt">The SPARK manual</a></p></body></html>`);
+charlie.write("C:\\WEB\\DOCS\\SPARK.TXT", "The SPARK manual, which every machine has: ocelot.");
 
 const webOf = {};
 for (const m of [alpha, bravo, charlie]) webOf[m.stack.hostname()] = m.run("C:\\PROGRAMS\\HTTPD.SPK");
@@ -80,8 +81,10 @@ await test("it found the pages, followed links between machines, and minded robo
   assert.ok(!doc("http://bravo/secret/plans.htm"), "robots.txt");
   assert.ok(!asked(bravo).includes("/secret/"), "never even asked for it");
   assert.ok(!asked(bravo).includes("logout"), "links that change things are left alone");
-  assert.ok(!asked(bravo).includes("/docs/"), "the manuals every machine has are skipped");
-  assert.match(doc("http://bravo/chess.htm"), /\|All About Chess\|.*\|ok\|$/);
+  // the manual every machine has: no rule about /docs/, just one copy kept
+  const manuals = docs().filter((l) => /\/docs\/spark\.txt\|/.test(l));
+  assert.equal(manuals.length, 1, "the same text from two machines is kept once: " + manuals.join(" / "));
+  assert.match(doc("http://bravo/chess.htm"), /\|All About Chess\|.*\|ok\|(\|[0-9A-F]+-\d+)?$/);
   assert.match(alpha.read(`C:\\ASKDATA\\TEXT\\${doc("http://bravo/").split("|")[0]}.TXT`), /^Bravo's Hobby Corner\nWelcome to Bravo's hobby corner I like chess, cooking/);
   assert.ok(!alpha.read(`C:\\ASKDATA\\TEXT\\${doc("http://bravo/").split("|")[0]}.TXT`).includes("zebra"), "scripts are not text");
 });
@@ -139,7 +142,7 @@ await test("a machine that goes away stays findable, marked, with its cached cop
   alpha.button(crawlerPid(), "Crawl Now").call("Click");
   await net.until(() => stats() !== before, 60000, "the second crawl");
   assert.match(doc("http://charlie/club.htm"), new RegExp(`\\|gone\\|\\d{4}-\\d\\d-\\d\\d$`));
-  assert.match(doc("http://bravo/chess.htm"), /\|ok\|$/);
+  assert.match(doc("http://bravo/chess.htm"), /\|ok\|(\|[0-9A-F]+-\d+)?$/);
   let r = await ask("chess club");
   assert.match(r.body, /Charlie's Chess Club/);
   assert.match(r.body, /not answering since \d{4}-\d\d-\d\d/);
@@ -190,6 +193,33 @@ await test("the front page, and a results page full of answers, fit in a message
   assert.match(r.body, /Simms knows \d+ pages on 3 machines/, [...new Set(docs().map((l) => l.split("|")[1].split("/")[2]))].join(", "));
   r = await ask("chess cooking pancakes knight bishop club hobby welcome");
   assert.ok(r.raw.length < MESSAGE_LIMIT - 8000, r.raw.length);
+});
+
+await test("a big site on one machine (an encyclopedia) gets indexed whole, a crawl at a time", async () => {
+  // 260 linked pages on CHARLIE: more than one crawl gives a machine
+  if (!charlie.running(webOf.CHARLIE)) webOf.CHARLIE = charlie.run("C:\\PROGRAMS\\HTTPD.SPK");
+  if (!bravo.running(webOf.BRAVO)) webOf.BRAVO = bravo.run("C:\\PROGRAMS\\HTTPD.SPK");
+  charlie.mkdir("C:\\WEB\\ENCYC");
+  const links = [];
+  for (let i = 1; i <= 260; i++) {
+    charlie.write(`C:\\WEB\\ENCYC\\A${i}.HTM`, `<html><head><title>Article ${i}</title></head><body>Encyclopedia article number ${i} about aardvark${i}.</body></html>`);
+    links.push(`<a href="a${i}.htm">${i}</a>`);
+  }
+  charlie.write("C:\\WEB\\ENCYC\\INDEX.HTM", `<html><head><title>Encyclopedia</title></head><body>${links.join(" ")}</body></html>`);
+  ok(await visitor.post("/addurl.asp", { url: "http://charlie/encyc/" }));
+  const crawl = async (n) => {
+    const before = stats();
+    alpha.button(crawlerPid(), "Crawl Now").call("Click");
+    await net.until(() => stats() !== before, 240000, "crawl " + n);
+  };
+  const articles = () => docs().filter((l) => /\/encyc\/a\d+\.htm\|/.test(l) && /\|ok\|/.test(l)).length;
+  await crawl(1);
+  const first = articles();
+  assert.ok(first >= 150, "far more than 40 pages from one machine in one crawl: " + first + "\n" + alpha.widgets(crawlerPid(), "ListBox")[0].get("Items").slice(-8).join("\n") + "\n" + alpha.read("C:\\ASKDATA\\SEEDS.TXT"));
+  await crawl(2);
+  assert.equal(articles(), 260, "the rest on the next crawl, and none of the first lost");
+  assert.match((await ask("aardvark260")).body, /Article 260/);
+  assert.match((await ask("aardvark1")).body, /Article 1</);
 });
 
 net.shutdown();

@@ -4,11 +4,15 @@
 ' A crawl:
 '   1. Starting points: every machine NET.Machines() can see (http://name/),
 '      the sites people submitted (C:\ASKDATA\SEEDS.TXT), and every page
-'      already known, to see whether it is still there.
+'      already known, to see whether it is still there. Pages not seen before
+'      go first; known ones are looked at again oldest first, so a crawl that
+'      runs out of room carries on from there next time.
 '   2. Fetch each page over port 80 (GET, the way Voyager does), at most
-'      PERHOST pages per machine and MAXPAGES in all, minding each machine's
-'      /robots.txt ("Disallow: /path" lines). Follow its links, to other
-'      machines too.
+'      PERHOST pages per machine and MAXPAGES in all. What a site wants left
+'      alone it says itself: /robots.txt ("Disallow: /path" lines) and
+'      <meta name="robots" content="noindex">. Follow its links, to other
+'      machines too. A page with the same text as one already kept from
+'      another machine (the SIM95 manuals every machine has) is kept once.
 '   3. Keep the page's text (TEXT\<id>.TXT) and a copy of the page itself with
 '      its links pointing back at the real site (CACHE\<id>.HTM).
 '   4. A known page that does not answer this time is not forgotten: it stays,
@@ -16,7 +20,7 @@
 '      is what the search pages offer instead.
 '   5. Build the index: for every word, the pages it is on and how often.
 '
-'   C:\ASKDATA\DOCS.TXT       id|url|title|crawled|state|since   (state: ok or gone)
+'   C:\ASKDATA\DOCS.TXT       id|url|title|crawled|state|since|print   (state: ok or gone; print: a fingerprint of its text)
 '   C:\ASKDATA\TEXT\<id>.TXT  the page's title, a line break, then its text
 '   C:\ASKDATA\CACHE\<id>.HTM the page as it was, links made absolute
 '   C:\ASKDATA\IDX\<c>.TXT    word|id:count id:count ...  for words starting with c (0: digits)
@@ -42,10 +46,9 @@
 ' address is crawled under the name instead, and never twice. With no name
 ' server, or one that doesn't answer, names are machine names as always.
 
-CONST SKIPDIRS = "/docs/"            ' folders never crawled, "|" between them
 CONST DATA = "C:\ASKDATA"
-CONST PERHOST = 40
-CONST MAXPAGES = 500
+CONST PERHOST = 200
+CONST MAXPAGES = 1000
 CONST TEXTMAX = 12000
 CONST CACHEMAX = 40000
 CONST EVERY = 60              ' minutes between crawls
@@ -69,7 +72,8 @@ VAR fetched AS Integer
 VAR kept AS Integer
 
 ' One crawl's state
-VAR queue AS Array OF String
+VAR queue AS Array OF String     ' pages not seen before
+VAR again AS Array OF String     ' known pages, oldest first, once the new ones are done
 VAR seen AS String
 VAR hosts AS Array OF String
 VAR hostPages AS Array OF Integer
@@ -78,6 +82,7 @@ VAR robotRules AS Array OF String
 VAR docUrls AS Array OF String
 VAR docLines AS Array OF String
 VAR fetchedOk AS String
+VAR tried AS String              ' |url|... asked for this crawl, answered or not
 
 ' The fetch in progress, and what it got
 VAR fUrl AS String
@@ -295,21 +300,11 @@ FUNCTION SameMachine (a AS String, b AS String) AS Bool
     RETURN a = b OR a.Split(".")[0] = b.Split(".")[0]
 END FUNCTION
 
-' Folders every machine has the same copy of (the SIM95 manuals): not worth
-' indexing over and over.
-FUNCTION Skipped (url AS String) AS Bool
-    VAR dir AS String
-    FOR EACH dir IN SKIPDIRS.Split("|")
-        IF dir <> "" AND (PathOf(url) + "/").StartsWith(dir) THEN RETURN TRUE
-    NEXT
-    RETURN FALSE
-END FUNCTION
 
 ' Links nobody wants a robot to follow: they change things.
 FUNCTION Harmless (url AS String) AS Bool
     VAR p AS String
     p = PathOf(url)
-    IF Skipped(url) THEN RETURN FALSE
     IF p.Contains("logout") OR p.Contains("delete") OR p.Contains("remove") OR p.Contains("vote.") OR p.Contains("poke.") THEN RETURN FALSE
     IF p.Contains("?t=") OR p.Contains("&t=") THEN RETURN FALSE
     RETURN NOT (p.EndsWith(".pic") OR p.EndsWith(".spk") OR p.EndsWith(".inc"))
@@ -561,6 +556,32 @@ END SUB
 
 ' ---------------------------------------------------------------- the crawl
 
+' A short fingerprint of a page's text, to tell copies apart.
+FUNCTION Fingerprint (text AS String) AS String
+    VAR a AS Integer = 7
+    VAR b AS Integer = 31337
+    VAR i AS Integer
+    VAR c AS Integer
+    FOR i = 0 TO text.Length - 1
+        c = Asc(text.CharAt(i))
+        a = (a * 131 + c) MOD 2147483629
+        b = (b * 257 + c + a) MOD 2147483587
+    NEXT
+    RETURN Hex(a) + Hex(b) + "-" + Str(text.Length)
+END FUNCTION
+
+' The address of a page kept from another machine with this same text, or "".
+FUNCTION CopyOf (textPrint AS String, url AS String) AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    FOR EACH line IN docLines
+        p = line.Split("|")
+        IF p.Count < 7 THEN CONTINUE
+        IF p[6] = textPrint AND p[4] = "ok" AND NOT SameMachine(HostOf(p[1]), HostOf(url)) THEN RETURN p[1]
+    NEXT
+    RETURN ""
+END FUNCTION
+
 FUNCTION DocId (url AS String) AS String
     VAR i AS Integer
     VAR n AS Integer
@@ -590,6 +611,8 @@ SUB Begin ()
     fetched = 0
     kept = 0
     queue.Clear()
+    again.Clear()
+    tried = "|"
     hosts.Clear()
     hostPages.Clear()
     robotHosts.Clear()
@@ -600,8 +623,7 @@ SUB Begin ()
     fetchedOk = "|"
     EnsureDirs()
     FOR EACH line IN ReadOr(DATA + "\DOCS.TXT", "").Lines()
-        ' (pages from a folder that is skipped now are forgotten)
-        IF line.Split("|").Count >= 6 AND NOT Skipped(line.Split("|")[1]) THEN
+        IF line.Split("|").Count >= 6 THEN
             docUrls.Add(line.Split("|")[1])
             docLines.Add(line)
         END IF
@@ -614,6 +636,7 @@ SUB Gather ()
     VAR m AS String
     VAR line AS String
     VAR url AS String
+    VAR i AS Integer
     VAR machines AS Array OF String
     phase = "gathering"
     machines = NET.Machines()
@@ -624,8 +647,15 @@ SUB Gather ()
     FOR EACH line IN ReadOr(DATA + "\SEEDS.TXT", "").Lines()
         IF line.Trim().Lower().StartsWith("http://") THEN Enqueue(Normal(line.Trim()))
     NEXT
-    FOR EACH url IN docUrls
-        Enqueue(url)
+    ' known pages last, the longest unvisited first
+    FOR EACH line IN docLines
+        IF line.Split("|").Count >= 6 THEN again.Add(line.Split("|")[3] + "|" + line.Split("|")[1])
+    NEXT
+    again.Sort()
+    FOR i = 0 TO again.Count - 1
+        url = again[i].Substring(again[i].IndexOf("|") + 1, again[i].Length - again[i].IndexOf("|") - 1)
+        again[i] = url
+        seen = seen + url + "|"
     NEXT
     phase = "next"
 END SUB
@@ -636,7 +666,11 @@ SUB NextPage ()
     VAR url AS String
     VAR ok AS String
     VAR seg AS String
-    WHILE queue.Count > 0 AND fetched < MAXPAGES
+    WHILE (queue.Count > 0 OR again.Count > 0) AND fetched < MAXPAGES
+        IF queue.Count = 0 THEN
+            queue.Add(again[0])
+            again.RemoveAt(0)
+        END IF
         url = queue[0]
         ' a domain name: asked about first (a Connect, so the tick ends)
         IF RsNext(HostOf(url)) THEN RETURN
@@ -662,7 +696,8 @@ SUB NextPage ()
         IF ok = "yes" AND TakeHost(HostOf(url)) THEN
             fRobots = FALSE
             fetched = fetched + 1
-            win.Status = "Crawling: " + Str(fetched) + " fetched, " + Str(queue.Count) + " to go - " + url
+            tried = tried + url + "|"
+            win.Status = "Crawling: " + Str(fetched) + " fetched, " + Str(queue.Count + again.Count) + " to go - " + url
             StartFetch(url)
             RETURN
         END IF
@@ -673,6 +708,7 @@ END SUB
 ' A page (or robots.txt) came in, or gave up: keep what it says.
 SUB Arrived ()
     VAR url AS String
+    VAR textPrint AS String
     VAR id AS String
     VAR title AS String
     VAR text AS String
@@ -722,13 +758,20 @@ SUB Arrived ()
         END IF
         IF title = "" THEN title = url
         IF text.Length > TEXTMAX THEN text = text.Substring(0, TEXTMAX)
+        ' the same text as a page already kept from another machine: kept once
+        textPrint = Fingerprint(text)
+        IF CopyOf(textPrint, url) <> "" THEN
+            IF docUrls.IndexOf(url) >= 0 THEN SetDoc(url, DocId(url) + "|" + url + "|||new|")
+            fetchedOk = fetchedOk + url + "|"
+            RETURN
+        END IF
         IF pageCopy.Length > CACHEMAX THEN pageCopy = pageCopy.Substring(0, CACHEMAX)
         ' the first line is the title, then a tab and the keywords
         IF keywords <> "" THEN title = title + Chr(9) + keywords
         FS.Write(DATA + "\TEXT\" + id + ".TXT", title + NL + text)
         title = title.Split(Chr(9))[0]
         FS.Write(DATA + "\CACHE\" + id + ".HTM", pageCopy)
-        SetDoc(url, id + "|" + url + "|" + title + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|ok|")
+        SetDoc(url, id + "|" + url + "|" + title + "|" + TIME.Date + " " + TIME.Clock.Substring(0, 5) + "|ok||" + textPrint)
         fetchedOk = fetchedOk + url + "|"
         kept = kept + 1
     ELSEIF (fStatus = 301 OR fStatus = 302) AND fLocation <> "" THEN
@@ -747,7 +790,8 @@ SUB Finish ()
     phase = "indexing"
     FOR EACH line IN docLines
         p = line.Split("|")
-        IF NOT fetchedOk.Contains("|" + p[1] + "|") AND p[4] = "ok" THEN SetDoc(p[1], p[0] + "|" + p[1] + "|" + p[2] + "|" + p[3] + "|gone|" + TIME.Date)
+        ' (a page this crawl had no room for is left as it was)
+        IF tried.Contains("|" + p[1] + "|") AND NOT fetchedOk.Contains("|" + p[1] + "|") AND p[4] = "ok" THEN SetDoc(p[1], p[0] + "|" + p[1] + "|" + p[2] + "|" + p[3] + "|gone|" + TIME.Date)
     NEXT
     FOR EACH line IN docLines
         p = line.Split("|")

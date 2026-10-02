@@ -26,18 +26,26 @@ window has a **Crawl Now** button and a log of what it found.
 
 1. **Where to start**: every machine `NET.Machines()` can see (`http://name/`),
    sites people submitted on `addurl.asp`, and every page it already knows,
-   to check they're still there.
-2. **Fetching**: a plain `GET`, like Voyager's. At most 40 pages per machine
-   and 500 in all.
+   to check they're still there. Pages it has never seen go first; known
+   ones are checked again oldest first, so a crawl that runs out of room
+   carries on from there next time, and pages it had no room for are left
+   as they were (not marked gone).
+2. **Fetching**: a plain `GET`, like Voyager's. At most 200 pages per machine
+   and 1,000 in all per crawl. A SimHost machine with WikiSim's hundreds of
+   articles is covered in a crawl or two.
+   * **Sites decide what's left alone**: there are no built-in path rules.
+     A site that wants something left out says so itself, with
+     `/robots.txt` or `<meta name="robots">`.
    * **robots.txt**: it reads each machine's `/robots.txt` first and stays out
      of every path listed after `Disallow:`.
    * **Meta tags**: `<meta name="keywords">` words count three times (title
      words five), and `<meta name="description">` leads the result snippet.
      `<meta name="robots" content="noindex,nofollow">` is obeyed; AskSim's own
      results and cached copies say so, so it never indexes itself.
-   * **/docs/ is skipped**: every SIM95 machine serves the same manuals there,
-     so indexing them on each machine only buries real pages. (`SKIPDIRS` at
-     the top of `CRAWLER.SPK` lists the folders it never visits.)
+   * **Copies are kept once**: a page with the same text as one already kept
+     from another machine (the SIM95 manuals in `/docs/`, which every machine
+     serves) isn't indexed again. Each page's text fingerprint is in
+     `DOCS.TXT`.
    * **Links it won't follow**: ones that look like they change something
      (logout, delete, vote, poke, anything carrying a form token `t=`),
      `localhost` links, and pictures and program files.
@@ -70,7 +78,7 @@ best answer** (`go=1`), follow-up questions to try, and **Add your site**.
 ## Storage
 
 ```
-C:\ASKDATA\DOCS.TXT        id|url|title|crawled|ok or gone|since
+C:\ASKDATA\DOCS.TXT        id|url|title|crawled|ok or gone|since|fingerprint
 C:\ASKDATA\TEXT\<id>.TXT   title, line break, page text (up to 12K)
 C:\ASKDATA\CACHE\<id>.HTM  the page as last seen, links absolute (up to 40K)
 C:\ASKDATA\IDX\<c>.TXT     word|id:count id:count ...   (0.TXT: words starting with a digit)
