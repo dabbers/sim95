@@ -244,6 +244,8 @@ await test("SimNIC: sign up, look a name up under every TLD, register it (free w
   assert.match(ok(await nic.get("/nic/search.asp?d=coolsite.sim")).body, /<font color="#CC0000">Taken<\/font>/);
   assert.equal(notice(ok(await nic.post("/nic/register.asp", { d: "coolsite.sim", t: await token(nic) }))), "Sorry, coolsite.sim is already registered.");
   assert.match(notice(ok(await nic.post("/nic/register.asp", { d: "x.sim", t: await token(nic) }))), /That is not a domain name SimNIC can register/);
+  // SIM95's own ISPs are machines' names (STARTHERE.56k.net): never for sale
+  for (const isp of ["56k.net", "56K.NET"]) assert.match(notice(ok(await nic.post("/nic/register.asp", { d: isp, t: await token(nic) }))), /That is not a domain name SimNIC can register/, isp);
   assert.match(notice(ok(await nic.post("/nic/register.asp", { d: "fun.biz", t: await token(nic) }))), /That is not a domain name SimNIC can register/);
   // a domain that points nowhere yet: the name server knows it, with nothing to say
   await until(async () => (await ask(bravo, "starthere.56k.net", "QUERY coolsite.sim")) === "OK", "NAMED's reload", 8000);

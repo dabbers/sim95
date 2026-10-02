@@ -206,7 +206,18 @@ FUNCTION RsAsks (host AS String) AS Bool
     IF RsIsAddress(h) THEN RETURN FALSE
     IF NOT h.Contains(".") AND rsSearch = "" THEN RETURN FALSE
     IF h = rsServer OR h = NET.HostName.Lower() THEN RETURN FALSE
+    ' a machine's full name (bob.56k.net): SIM95's, never SimDNS's to answer
+    IF RsIspName(h) THEN RETURN FALSE
     RETURN TRUE
+END FUNCTION
+
+' Does h end in one of SIM95's ISPs (56k.net, dialup.zone...)?
+FUNCTION RsIspName (h AS String) AS Bool
+    VAR isp AS String
+    FOR EACH isp IN ["dialup.zone", "56k.net", "bbs.club", "modem.link", "beep.boop"]
+        IF h = isp OR h.EndsWith("." + isp) THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
 END FUNCTION
 
 ' Sends the question. A Connect, so it must be the last thing its handler

@@ -642,7 +642,23 @@ SUB File7 ()
     t = t + "    IF p[0].Length < 2 OR p[0].Length > 24 THEN RETURN """"" + NL
     t = t + "    IF NOT OnlyFrom(p[0], ""abcdefghijklmnopqrstuvwxyz0123456789-"") THEN RETURN """"" + NL
     t = t + "    IF p[0].StartsWith(""-"") OR p[0].EndsWith(""-"") THEN RETURN """"" + NL
+    t = t + "    ' SIM95's own ISPs (STARTHERE.56k.net is a machine's name): never for sale," + NL
+    t = t + "    ' or a record could take over every machine dialled in through one" + NL
+    t = t + "    IF IspDomain(d) THEN RETURN """"" + NL
     t = t + "    RETURN d" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Is d one of the ISPs SIM95 machines dial in through (56k.net...)?" + NL
+    t = t + "FUNCTION IspDomain (d AS String) AS Bool" + NL
+    t = t + "    VAR isp AS String" + NL
+    t = t + "    IF ""|dialup.zone|56k.net|bbs.club|modem.link|beep.boop|"".Contains(""|"" + d.Lower() + ""|"") THEN RETURN TRUE" + NL
+    t = t + "    TRY" + NL
+    t = t + "        FOR EACH isp IN NET.ISPs" + NL
+    t = t + "            IF isp.Lower() = d.Lower() THEN RETURN TRUE" + NL
+    t = t + "        NEXT" + NL
+    t = t + "    CATCH err" + NL
+    t = t + "    END TRY" + NL
+    t = t + "    RETURN FALSE" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' The line in DOMAINS.TXT for a domain, split, or an empty array. An unpaid" + NL
