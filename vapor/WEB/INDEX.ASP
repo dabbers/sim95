@@ -9,7 +9,13 @@ VAR games AS String
 VAR row AS String
 VAR client AS String
 VAR kind AS String
+VAR bridge AS String
 here = SERVER.Name.Lower()
+' stocked from GitHub by tools/vapor-bridge.js: repo|ref|commit|when
+IF FS.Exists("C:\WEB\VAPOR\BRIDGE.TXT") THEN
+    p = FS.Read("C:\WEB\VAPOR\BRIDGE.TXT").Trim().Split("|")
+    IF p.Count >= 4 THEN bridge = "The shelves were last stocked from " + p[0] + " (" + p[1] + ", " + p[2].Substring(0, MATH.Min(7, p[2].Length)) + ") on " + p[3] + "."
+END IF
 IF FS.Exists("C:\WEB\VAPOR\CATALOG.TXT") THEN
     FOR EACH line IN FS.Read("C:\WEB\VAPOR\CATALOG.TXT").Lines()
         p = line.Split("|")
@@ -67,4 +73,5 @@ Or the long way: open <a href="getvapor.asp">getvapor.asp</a> in Simxplorer, <b>
 <table width="100%" cellpadding="6"><tr><td bgcolor="#000000"><pre><font color="#A4D007"><%= SERVER.HtmlEncode(FS.Read("C:\WEB\VAPOR\GETVAPOR.TXT").Replace("%HOST%", here)) %></font></pre></td></tr></table>
 <p><font size="2" color="#8F98A0">Run your own store: any machine where Vapor's INSTALL.SPK ran is one. Keep its shelves stocked
 and up to date with Publish Apps. Half-Life 3 is coming soon.</font></p>
+<% IF bridge <> "" THEN %><p><font size="1" color="#8F98A0"><%= SERVER.HtmlEncode(bridge) %></font></p><% END IF %>
 </body></html>

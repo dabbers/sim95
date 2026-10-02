@@ -1,0 +1,746 @@
+' VAPOR|id=SIMDOOM|name=SimDOOM|kind=game|version=c0f9cfa6|category=Shooter|run=C:\GAMES\SIMDOOM\SIMDOOM.SPK|files=C:\GAMES\SIMDOOM\SIMDOOM.SPK|tasks=SIMDOOM|startup=|folder=|about=Rip and tear through E1M1 in glorious 16 colours. A real raycast 3D view, imps that chase you, a pistol, health and ammo, a face that watches you, and achievements. Type IDDQD at your own risk.
+' SIMDOOM.SPK - SimDOOM, episode one, map one: a raycaster on a GUI_Canvas.
+'
+' Walk with the arrow keys (or W A S D), fire with Space or Ctrl, use with
+' E or Enter. Find the green switch to finish the level. Kill everything if
+' you like; Vapor shows the achievements.
+'
+' The 3D view is the classic grid raycaster: for each of 80 columns a ray
+' walks the map a square at a time until it hits a wall, and the distance
+' says how tall to draw that slice. Things (imps, health, ammo) are
+' billboards, drawn back to front and clipped by each column's wall distance.
+' It draws only when something changes, so a still screen costs nothing.
+
+CONST COLS = 80                ' rays: each is 4 pixels of the 320-pixel view
+CONST VIEWH = 160
+CONST HUDH = 40
+CONST MAPW = 16
+CONST MAPH = 16
+CONST ACHFILE = "C:\GAMES\SIMDOOM\ACHIEVE.TXT"
+
+VAR win AS GUI_Window
+VAR screen AS GUI_Canvas
+VAR clock AS GUI_Timer
+VAR map AS Array OF String
+
+' the player
+VAR px AS Real
+VAR py AS Real
+VAR dirX AS Real
+VAR dirY AS Real
+VAR planeX AS Real
+VAR planeY AS Real
+VAR health AS Integer
+VAR ammo AS Integer
+VAR kills AS Integer
+VAR started AS Integer
+VAR hurtUntil AS Integer
+VAR flashUntil AS Integer
+VAR state AS String = "title"     ' title, play, dead, won
+VAR dirty AS Bool = TRUE
+VAR faceLook AS Integer
+VAR typed AS String                ' the last letters typed, for the cheat codes
+VAR god AS Bool
+VAR warp AS Bool                   ' -warp: start next to the exit, as DOOM's -warp did
+
+' things: imps, health and ammo, by kind (imp, deadimp, health, ammo)
+VAR tKind AS Array OF String
+VAR tX AS Array OF Real
+VAR tY AS Array OF Real
+VAR tHp AS Array OF Integer
+VAR tWake AS Array OF Bool
+VAR tLastHit AS Array OF Integer
+VAR zbuf AS Array OF Real
+VAR lastMove AS Integer
+
+' ================================================================ start
+
+SUB Main ()
+    VAR i AS Integer
+    win = GUI_Window.New("SimDOOM", 320, VIEWH + HUDH)
+    win.Icon = "app"
+    win.onClose = Win_OnClose
+    win.onKey = Key
+    screen = GUI_Canvas.New(win)
+    screen.SetBounds(0, 0, 320, VIEWH + HUDH)
+    screen.onKey = Key
+    screen.onDraw = Screen_OnDraw
+    FOR i = 0 TO COLS - 1
+        zbuf.Add(0)
+    NEXT
+    clock = GUI_Timer.New(win)
+    clock.Interval = 60
+    clock.onTick = Clock_OnTick
+    clock.Start()
+    IF SYS.Args.Count > 0 THEN warp = SYS.Args[0].Lower() = "-warp"
+    win.Show()
+    screen.Focus()
+    DrawTitle()
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+' E1M1, more or less: # stone, B brick, W wood, X the exit switch,
+' P you, I imps, H health, A ammo.
+SUB NewGame ()
+    VAR y AS Integer
+    VAR x AS Integer
+    VAR c AS String
+    map = ["################", _
+           "#P.....#.......#", _
+           "#......#...I...#", _
+           "#..BB..#.......#", _
+           "#..BB.....H....#", _
+           "#......#.......#", _
+           "####.###WWW.WWW#", _
+           "#......#.......#", _
+           "#..I...#...I...#", _
+           "#......#.......#", _
+           "#..A...........#", _
+           "#......#####..##", _
+           "###.####...I...#", _
+           "#..........A...#", _
+           "#..I.......#...X", _
+           "################"]
+    tKind.Clear()
+    tX.Clear()
+    tY.Clear()
+    tHp.Clear()
+    tWake.Clear()
+    tLastHit.Clear()
+    FOR y = 0 TO MAPH - 1
+        FOR x = 0 TO MAPW - 1
+            c = map[y].CharAt(x)
+            IF c = "P" THEN
+                px = x + 0.5
+                py = y + 0.5
+            ELSEIF c = "I" OR c = "H" OR c = "A" THEN
+                tKind.Add("imp|health|ammo".Split("|")["IHA".IndexOf(c)])
+                tX.Add(x + 0.5)
+                tY.Add(y + 0.5)
+                tHp.Add(2)
+                tWake.Add(FALSE)
+                tLastHit.Add(0)
+            END IF
+        NEXT
+    NEXT
+    ' facing east, with a 66-degree view
+    dirX = 1
+    dirY = 0
+    planeX = 0
+    planeY = 0.66
+    health = 100
+    ammo = 30
+    kills = 0
+    god = FALSE
+    IF warp THEN
+        px = 14.5
+        py = 14.5
+    END IF
+    started = SYS.Ticks
+    state = "play"
+    dirty = TRUE
+END SUB
+
+FUNCTION Cell (x AS Integer, y AS Integer) AS String
+    IF x < 0 OR y < 0 OR x >= MAPW OR y >= MAPH THEN RETURN "#"
+    RETURN map[y].CharAt(x)
+END FUNCTION
+
+FUNCTION Solid (x AS Real, y AS Real) AS Bool
+    VAR c AS String
+    c = Cell(Int(x), Int(y))
+    RETURN c = "#" OR c = "B" OR c = "W" OR c = "X"
+END FUNCTION
+
+' ================================================================ keys
+
+SUB Key (k AS String)
+    VAR speed AS Real = 0.25
+    VAR turnBy AS Real = 0.15
+    VAR nx AS Real
+    VAR ny AS Real
+    IF k.Length = 1 THEN
+        typed = (typed + k.Lower())
+        IF typed.Length > 6 THEN typed = typed.Substring(typed.Length - 6, 6)
+        IF typed.EndsWith("iddqd") THEN
+            god = NOT god
+            health = 100
+            Achieve("Cheater", "Type IDDQD")
+        END IF
+        IF typed.EndsWith("idkfa") THEN
+            ammo = 200
+            Achieve("Cheater", "Type IDDQD")
+        END IF
+    END IF
+    IF state = "title" OR state = "dead" OR state = "won" THEN
+        IF k = "Enter" OR k = "Space" THEN NewGame()
+        IF k = "Escape" THEN win.Close()
+        RETURN
+    END IF
+    SELECT CASE k
+        CASE "ArrowUp", "w", "W"
+            Walk(dirX * speed, dirY * speed)
+        CASE "ArrowDown", "s", "S"
+            Walk(-dirX * speed, -dirY * speed)
+        CASE "ArrowLeft"
+            Turn(-turnBy)
+        CASE "ArrowRight"
+            Turn(turnBy)
+        CASE "a", "A"
+            Walk(dirY * speed, -dirX * speed)
+        CASE "d", "D"
+            Walk(-dirY * speed, dirX * speed)
+        CASE "Space", "Ctrl+Control", "Control"
+            Fire()
+        CASE "e", "E", "Enter"
+            Use()
+        CASE "Escape"
+            state = "title"
+            DrawTitle()
+            RETURN
+    END SELECT
+    dirty = TRUE
+END SUB
+
+' Moves, sliding along walls, and picks things up.
+SUB Walk (dx AS Real, dy AS Real)
+    VAR i AS Integer
+    IF NOT Solid(px + dx * 1.6, py) THEN px = px + dx
+    IF NOT Solid(px, py + dy * 1.6) THEN py = py + dy
+    FOR i = 0 TO tKind.Count - 1
+        IF (tKind[i] = "health" OR tKind[i] = "ammo") AND MATH.Abs(tX[i] - px) < 0.6 AND MATH.Abs(tY[i] - py) < 0.6 THEN
+            IF tKind[i] = "health" THEN health = MATH.Min(100, health + 25)
+            IF tKind[i] = "ammo" THEN ammo = ammo + 15
+            tKind[i] = "taken"
+            SYS.Beep(1200, 30)
+        END IF
+    NEXT
+    faceLook = 0
+END SUB
+
+' Turning is rotating the view direction and the camera plane together.
+SUB Turn (a AS Real)
+    VAR ox AS Real
+    ox = dirX
+    dirX = dirX * MATH.Cos(a) - dirY * MATH.Sin(a)
+    dirY = ox * MATH.Sin(a) + dirY * MATH.Cos(a)
+    ox = planeX
+    planeX = planeX * MATH.Cos(a) - planeY * MATH.Sin(a)
+    planeY = ox * MATH.Sin(a) + planeY * MATH.Cos(a)
+    IF a < 0 THEN
+        faceLook = -1
+    ELSE
+        faceLook = 1
+    END IF
+END SUB
+
+' Hitscan: the nearest imp in the middle of the view, nearer than the wall there.
+SUB Fire ()
+    VAR i AS Integer
+    VAR best AS Integer = -1
+    VAR bestD AS Real = 999
+    VAR sx AS Real
+    VAR d AS Real
+    IF ammo <= 0 THEN
+        SYS.Beep(200, 40)
+        RETURN
+    END IF
+    ammo = ammo - 1
+    flashUntil = SYS.Ticks + 120
+    SYS.Beep(150, 25)
+    FOR i = 0 TO tKind.Count - 1
+        IF tKind[i] <> "imp" THEN CONTINUE
+        d = Depth(i)
+        IF d <= 0.2 THEN CONTINUE
+        sx = ScreenX(i)
+        IF MATH.Abs(sx - 160) < 140 / d + 6 AND d < zbuf[Int(COLS / 2)] + 0.3 AND d < bestD THEN
+            best = i
+            bestD = d
+        END IF
+    NEXT
+    IF best >= 0 THEN
+        tHp[best] = tHp[best] - 1
+        tWake[best] = TRUE
+        tLastHit[best] = SYS.Ticks
+        IF tHp[best] <= 0 THEN
+            tKind[best] = "deadimp"
+            kills = kills + 1
+            IF kills = 1 THEN Achieve("First Blood", "Kill your first imp")
+        END IF
+    END IF
+END SUB
+
+' Use: the switch, if you are facing it close up.
+SUB Use ()
+    IF Cell(Int(px + dirX * 0.9), Int(py + dirY * 0.9)) = "X" THEN LevelDone()
+END SUB
+
+SUB LevelDone ()
+    VAR secs AS Integer
+    VAR total AS Integer
+    VAR i AS Integer
+    state = "won"
+    win.Tag = "won|" + Str(health) + "|" + Str(ammo) + "|" + Str(kills)
+    secs = Int((SYS.Ticks - started) / 1000)
+    FOR i = 0 TO tKind.Count - 1
+        IF tKind[i] = "imp" OR tKind[i] = "deadimp" THEN total = total + 1
+    NEXT
+    Achieve("E1M1 Complete", "Reach the exit")
+    IF kills = total THEN Achieve("Rip and Tear", "Kill every imp on E1M1")
+    IF secs < 60 THEN Achieve("Speedrunner", "Finish E1M1 in under a minute")
+    IF health = 100 THEN Achieve("Untouchable", "Finish without a scratch")
+    DrawEnd("E1M1 COMPLETE", "Kills " + Str(kills) + "/" + Str(total) + "   Time " + Str(Int(secs / 60)) + ":" + ("0" + Str(secs MOD 60)).Substring(Str(secs MOD 60).Length - 1, 2), 10)
+END SUB
+
+' An achievement, for Vapor to show (each one once).
+SUB Achieve (name AS String, how AS String)
+    VAR have AS String
+    TRY
+        IF FS.Exists(ACHFILE) THEN have = FS.Read(ACHFILE)
+        IF have.Contains(name + "|") THEN RETURN
+        FS.Append(ACHFILE, name + "|" + how + "|" + TIME.Date + Chr(10))
+    CATCH err
+    END TRY
+END SUB
+
+' ================================================================ the monsters
+
+SUB Clock_OnTick ()
+    VAR i AS Integer
+    VAR d AS Real
+    VAR mx AS Real
+    VAR my AS Real
+    IF state <> "play" THEN RETURN
+    IF SYS.Ticks - lastMove > 100 THEN
+        lastMove = SYS.Ticks
+        FOR i = 0 TO tKind.Count - 1
+            IF tKind[i] <> "imp" THEN CONTINUE
+            d = MATH.Sqrt((tX[i] - px) * (tX[i] - px) + (tY[i] - py) * (tY[i] - py))
+            IF d < 5 THEN tWake[i] = TRUE
+            IF NOT tWake[i] THEN CONTINUE
+            IF d > 0.9 THEN
+                mx = (px - tX[i]) / d * 0.06
+                my = (py - tY[i]) / d * 0.06
+                IF NOT Solid(tX[i] + mx, tY[i]) THEN tX[i] = tX[i] + mx
+                IF NOT Solid(tX[i], tY[i] + my) THEN tY[i] = tY[i] + my
+                dirty = TRUE
+            ELSEIF SYS.Ticks - tLastHit[i] > 700 THEN
+                ' a swipe of claws
+                tLastHit[i] = SYS.Ticks
+                IF NOT god THEN health = health - 8 - Rnd(5)
+                hurtUntil = SYS.Ticks + 200
+                SYS.Beep(90, 40)
+                dirty = TRUE
+                IF health <= 0 THEN
+                    health = 0
+                    state = "dead"
+                    win.Tag = "dead|0|" + Str(ammo) + "|" + Str(kills)
+                    DrawEnd("YOU ARE DEAD", "Press Space to try again", 9)
+                    RETURN
+                END IF
+            END IF
+        NEXT
+    END IF
+    IF flashUntil > 0 AND SYS.Ticks > flashUntil THEN
+        flashUntil = 0
+        dirty = TRUE
+    END IF
+    IF hurtUntil > 0 AND SYS.Ticks > hurtUntil THEN
+        hurtUntil = 0
+        dirty = TRUE
+    END IF
+    IF dirty THEN Render()
+END SUB
+
+' ================================================================ drawing
+
+SUB Screen_OnDraw (canvas AS GUI_Canvas)
+    IF state = "play" THEN
+        dirty = TRUE
+        Render()
+    ELSEIF state = "title" THEN
+        DrawTitle()
+    END IF
+END SUB
+
+' Where a thing is in camera space: its depth, and its x on the screen.
+FUNCTION Depth (i AS Integer) AS Real
+    VAR sx AS Real
+    VAR sy AS Real
+    VAR inv AS Real
+    sx = tX[i] - px
+    sy = tY[i] - py
+    inv = 1.0 / (planeX * dirY - dirX * planeY)
+    RETURN inv * (-planeY * sx + planeX * sy)
+END FUNCTION
+
+FUNCTION ScreenX (i AS Integer) AS Real
+    VAR sx AS Real
+    VAR sy AS Real
+    VAR inv AS Real
+    VAR across AS Real
+    sx = tX[i] - px
+    sy = tY[i] - py
+    inv = 1.0 / (planeX * dirY - dirX * planeY)
+    across = inv * (dirY * sx - dirX * sy)
+    RETURN 160 * (1 + across / Depth(i))
+END FUNCTION
+
+SUB Render ()
+    dirty = FALSE
+    ' (what is going on, for anybody looking: state|health|ammo|kills|x|y)
+    win.Tag = state + "|" + Str(health) + "|" + Str(ammo) + "|" + Str(kills) + "|" + Str(Int(px * 10)) + "|" + Str(Int(py * 10))
+    screen.Clear()
+    ' ceiling and floor
+    screen.SetColor(0)
+    screen.FillRect(0, 0, 320, VIEWH / 2)
+    screen.SetColor(8)
+    screen.FillRect(0, VIEWH / 2, 320, VIEWH / 2)
+    Walls()
+    Things()
+    Gun()
+    IF hurtUntil > 0 THEN
+        ' a red edge when an imp gets you
+        screen.SetColor(9)
+        screen.Rect(0, 0, 320, VIEWH)
+        screen.Rect(1, 1, 318, VIEWH - 2)
+        screen.Rect(2, 2, 316, VIEWH - 4)
+    END IF
+    Hud()
+END SUB
+
+SUB Walls ()
+    VAR c AS Integer
+    VAR camX AS Real
+    VAR rx AS Real
+    VAR ry AS Real
+    VAR mapX AS Integer
+    VAR mapY AS Integer
+    VAR ddx AS Real
+    VAR ddy AS Real
+    VAR sdx AS Real
+    VAR sdy AS Real
+    VAR stepX AS Integer
+    VAR stepY AS Integer
+    VAR side AS Integer
+    VAR hit AS String
+    VAR dist AS Real
+    VAR h AS Integer
+    VAR n AS Integer
+    FOR c = 0 TO COLS - 1
+        camX = 2 * c / COLS - 1
+        rx = dirX + planeX * camX
+        ry = dirY + planeY * camX
+        mapX = Int(px)
+        mapY = Int(py)
+        ddx = 1E30
+        ddy = 1E30
+        IF rx <> 0 THEN ddx = MATH.Abs(1 / rx)
+        IF ry <> 0 THEN ddy = MATH.Abs(1 / ry)
+        IF rx < 0 THEN
+            stepX = -1
+            sdx = (px - mapX) * ddx
+        ELSE
+            stepX = 1
+            sdx = (mapX + 1 - px) * ddx
+        END IF
+        IF ry < 0 THEN
+            stepY = -1
+            sdy = (py - mapY) * ddy
+        ELSE
+            stepY = 1
+            sdy = (mapY + 1 - py) * ddy
+        END IF
+        hit = "."
+        n = 0
+        WHILE hit = "." AND n < 40
+            IF sdx < sdy THEN
+                sdx = sdx + ddx
+                mapX = mapX + stepX
+                side = 0
+            ELSE
+                sdy = sdy + ddy
+                mapY = mapY + stepY
+                side = 1
+            END IF
+            hit = Cell(mapX, mapY)
+            IF hit = "P" OR hit = "I" OR hit = "H" OR hit = "A" THEN hit = "."
+            n = n + 1
+        END WHILE
+        IF side = 0 THEN
+            dist = sdx - ddx
+        ELSE
+            dist = sdy - ddy
+        END IF
+        IF dist < 0.05 THEN dist = 0.05
+        zbuf[c] = dist
+        h = Int(VIEWH / dist)
+        IF h > VIEWH THEN h = VIEWH
+        screen.SetColor(WallColour(hit, side, dist))
+        screen.FillRect(c * 4, Int((VIEWH - h) / 2), 4, h)
+        IF hit = "X" AND dist < 6 THEN
+            ' the switch's lever
+            screen.SetColor(15)
+            screen.FillRect(c * 4 + 1, Int(VIEWH / 2 - h / 8), 2, Int(h / 4) + 1)
+        END IF
+    NEXT
+END SUB
+
+' Light and dark sides, and darker far away: all in 16 colours.
+FUNCTION WallColour (kind AS String, side AS Integer, dist AS Real) AS Integer
+    VAR far AS Bool
+    far = dist > 5
+    SELECT CASE kind
+        CASE "B"
+            IF side = 1 OR far THEN RETURN 1
+            RETURN 9
+        CASE "W"
+            IF side = 1 OR far THEN RETURN 3
+            RETURN 11
+        CASE "X"
+            IF side = 1 OR far THEN RETURN 2
+            RETURN 10
+    END SELECT
+    IF far AND side = 1 THEN RETURN 0
+    IF side = 1 OR far THEN RETURN 8
+    RETURN 7
+END FUNCTION
+
+' Things, far ones first, cut off column by column behind walls.
+SUB Things ()
+    VAR order AS Array OF Integer
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR t AS Integer
+    VAR d AS Real
+    VAR sx AS Real
+    VAR size AS Integer
+    VAR c AS Integer
+    VAR c0 AS Integer
+    VAR c1 AS Integer
+    VAR top AS Integer
+    FOR i = 0 TO tKind.Count - 1
+        IF tKind[i] <> "taken" THEN order.Add(i)
+    NEXT
+    FOR i = 0 TO order.Count - 2
+        FOR j = i + 1 TO order.Count - 1
+            IF Depth(order[j]) > Depth(order[i]) THEN
+                t = order[i]
+                order[i] = order[j]
+                order[j] = t
+            END IF
+        NEXT
+    NEXT
+    FOR EACH i IN order
+        d = Depth(i)
+        IF d < 0.2 THEN CONTINUE
+        sx = ScreenX(i)
+        size = Int(VIEWH / d)
+        c0 = Int((sx - size / 2) / 4)
+        c1 = Int((sx + size / 2) / 4)
+        FOR c = MATH.Max(0, c0) TO MATH.Min(COLS - 1, c1)
+            IF d >= zbuf[c] THEN CONTINUE
+            top = Int(VIEWH / 2 + size / 2)
+            ThingSlice(tKind[i], c, c - c0, c1 - c0 + 1, top, size, SYS.Ticks - tLastHit[i] < 120)
+        NEXT
+    NEXT
+END SUB
+
+' One 4-pixel column of a thing: u is which column of it, of w; it stands on y.
+SUB ThingSlice (kind AS String, c AS Integer, u AS Integer, w AS Integer, y AS Integer, size AS Integer, hurt AS Bool)
+    VAR f AS Real
+    VAR x AS Integer
+    x = c * 4
+    f = (u + 0.5) / w
+    SELECT CASE kind
+        CASE "imp"
+            ' a brown body, broader at the shoulders, red eyes, white when hit
+            IF f < 0.15 OR f > 0.85 THEN
+                ' arms
+                screen.SetColor(Pick(hurt, 15, 1))
+                screen.FillRect(x, y - Int(size * 0.65), 4, Int(size * 0.35))
+            ELSE
+                screen.SetColor(Pick(hurt, 15, 3))
+                screen.FillRect(x, y - Int(size * 0.8), 4, Int(size * 0.5))
+                screen.SetColor(Pick(hurt, 15, 1))
+                screen.FillRect(x, y - Int(size * 0.3), 4, Int(size * 0.3))
+                IF (f > 0.3 AND f < 0.42) OR (f > 0.58 AND f < 0.7) THEN
+                    screen.SetColor(9)
+                    screen.FillRect(x, y - Int(size * 0.72), 4, MATH.Max(2, Int(size * 0.06)))
+                END IF
+            END IF
+        CASE "deadimp"
+            screen.SetColor(1)
+            screen.FillRect(x, y - Int(size * 0.08), 4, MATH.Max(2, Int(size * 0.08)))
+        CASE "health"
+            IF f > 0.25 AND f < 0.75 THEN
+                screen.SetColor(15)
+                screen.FillRect(x, y - Int(size * 0.3), 4, Int(size * 0.3))
+                IF f > 0.42 AND f < 0.58 THEN
+                    screen.SetColor(9)
+                    screen.FillRect(x, y - Int(size * 0.27), 4, Int(size * 0.24))
+                ELSE
+                    screen.SetColor(9)
+                    screen.FillRect(x, y - Int(size * 0.18), 4, MATH.Max(1, Int(size * 0.06)))
+                END IF
+            END IF
+        CASE "ammo"
+            IF f > 0.3 AND f < 0.7 THEN
+                screen.SetColor(11)
+                screen.FillRect(x, y - Int(size * 0.2), 4, Int(size * 0.2))
+            END IF
+    END SELECT
+END SUB
+
+FUNCTION Pick (yes AS Bool, a AS Integer, b AS Integer) AS Integer
+    IF yes THEN RETURN a
+    RETURN b
+END FUNCTION
+
+SUB Gun ()
+    ' the pistol, and its flash
+    IF flashUntil > 0 THEN
+        screen.SetColor(11)
+        screen.FillCircle(160, VIEWH - 44, 10)
+        screen.SetColor(15)
+        screen.FillCircle(160, VIEWH - 44, 5)
+    END IF
+    screen.SetColor(8)
+    screen.FillRect(152, VIEWH - 36, 16, 36)
+    screen.SetColor(7)
+    screen.FillRect(155, VIEWH - 36, 4, 30)
+    screen.SetColor(0)
+    screen.FillRect(157, VIEWH - 38, 6, 4)
+    ' the hand
+    screen.SetColor(11)
+    screen.FillRect(146, VIEWH - 16, 28, 16)
+    ' crosshair
+    screen.SetColor(10)
+    screen.Pixel(160, VIEWH / 2)
+    screen.Line(156, VIEWH / 2, 158, VIEWH / 2)
+    screen.Line(162, VIEWH / 2, 164, VIEWH / 2)
+END SUB
+
+' The status bar: ammo, the face, health, and the level.
+SUB Hud ()
+    screen.SetColor(8)
+    screen.FillRect(0, VIEWH, 320, HUDH)
+    screen.SetColor(7)
+    screen.Line(0, VIEWH, 320, VIEWH)
+    screen.SetColor(0)
+    screen.FillRect(4, VIEWH + 4, 80, 32)
+    screen.FillRect(236, VIEWH + 4, 80, 32)
+    screen.SetColor(9)
+    screen.Text(10, VIEWH + 6, ("  " + Str(ammo)).Substring(Str(ammo).Length, 3))
+    screen.Text(242, VIEWH + 6, ("  " + Str(health)).Substring(Str(health).Length, 3) + "%")
+    screen.SetColor(7)
+    screen.Text(46, VIEWH + 20, "AMMO")
+    screen.Text(254, VIEWH + 20, "HLTH")
+    screen.Text(96, VIEWH + 12, "E1M1")
+    screen.Text(178, VIEWH + 12, Str(kills) + "K")
+    Face(160, VIEWH + 20)
+END SUB
+
+' The face in the middle, who looks the way you turn and fares as you do.
+SUB Face (cx AS Integer, cy AS Integer)
+    VAR look AS Integer
+    screen.SetColor(0)
+    screen.FillRect(cx - 18, cy - 17, 36, 34)
+    screen.SetColor(11)
+    screen.FillCircle(cx, cy, 14)
+    screen.SetColor(3)
+    screen.FillRect(cx - 12, cy - 15, 24, 5)
+    look = faceLook * 2
+    screen.SetColor(15)
+    screen.FillRect(cx - 9, cy - 5, 6, 4)
+    screen.FillRect(cx + 3, cy - 5, 6, 4)
+    screen.SetColor(0)
+    screen.FillRect(cx - 7 + look, cy - 5, 2, 4)
+    screen.FillRect(cx + 5 + look, cy - 5, 2, 4)
+    IF hurtUntil > 0 OR health < 40 THEN
+        ' a grimace, and blood when it is bad
+        screen.SetColor(15)
+        screen.FillRect(cx - 7, cy + 5, 14, 4)
+        screen.SetColor(0)
+        screen.Line(cx - 7, cy + 7, cx + 7, cy + 7)
+        IF health < 40 THEN
+            screen.SetColor(9)
+            screen.FillRect(cx + 4, cy - 12, 3, 10)
+            screen.FillRect(cx - 10, cy + 2, 3, 6)
+        END IF
+    ELSE
+        screen.SetColor(1)
+        screen.Line(cx - 5, cy + 7, cx + 5, cy + 7)
+    END IF
+END SUB
+
+SUB DrawTitle ()
+    VAR i AS Integer
+    screen.Clear()
+    screen.SetColor(0)
+    screen.FillRect(0, 0, 320, VIEWH + HUDH)
+    ' flames along the bottom
+    FOR i = 0 TO 39
+        screen.SetColor(Pick(i MOD 2 = 0, 9, 1))
+        screen.FillRect(i * 8, VIEWH + HUDH - 20 - Rnd(30), 8, 60)
+        screen.SetColor(11)
+        screen.FillRect(i * 8 + 2, VIEWH + HUDH - 8 - Rnd(10), 4, 20)
+    NEXT
+    ' the logo: big blocky red letters with a shadow
+    BigWord("SIMDOOM", 34, 40, 1)
+    BigWord("SIMDOOM", 32, 38, 9)
+    screen.SetColor(7)
+    screen.Text(84, 104, "EPISODE ONE")
+    screen.SetColor(15)
+    screen.Text(48, 130, "PRESS ENTER TO START")
+    screen.SetColor(8)
+    screen.Text(4, 4, "Arrows/WASD move  Space fire  E use")
+END SUB
+
+SUB DrawEnd (title AS String, line AS String, colour AS Integer)
+    screen.SetColor(0)
+    screen.FillRect(30, 40, 260, 80)
+    screen.SetColor(colour)
+    screen.Rect(30, 40, 260, 80)
+    screen.Text(160 - title.Length * 5, 54, title)
+    screen.SetColor(15)
+    screen.Text(160 - line.Length * 5, 80, line)
+    screen.SetColor(7)
+    screen.Text(70, 100, "SPACE: PLAY AGAIN")
+END SUB
+
+' Letters made of blocks, 5 by 7, each block 5 pixels.
+SUB BigWord (word AS String, x AS Integer, y AS Integer, colour AS Integer)
+    VAR i AS Integer
+    VAR r AS Integer
+    VAR k AS Integer
+    VAR rows AS Array OF String
+    screen.SetColor(colour)
+    FOR i = 0 TO word.Length - 1
+        rows = BigGlyph(word.CharAt(i)).Split("|")
+        FOR r = 0 TO 6
+            FOR k = 0 TO 4
+                IF rows[r].CharAt(k) = "#" THEN screen.FillRect(x + i * 37 + k * 6, y + r * 7, 6, 7)
+            NEXT
+        NEXT
+    NEXT
+END SUB
+
+FUNCTION BigGlyph (c AS String) AS String
+    SELECT CASE c
+        CASE "S"
+            RETURN "#####|#....|#....|#####|....#|....#|#####"
+        CASE "I"
+            RETURN "#####|..#..|..#..|..#..|..#..|..#..|#####"
+        CASE "M"
+            RETURN "#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#"
+        CASE "D"
+            RETURN "####.|#...#|#...#|#...#|#...#|#...#|####."
+        CASE "O"
+            RETURN "#####|#...#|#...#|#...#|#...#|#...#|#####"
+    END SELECT
+    RETURN ".....|.....|.....|.....|.....|.....|....."
+END FUNCTION

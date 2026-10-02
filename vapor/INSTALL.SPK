@@ -239,7 +239,13 @@ SUB File4 ()
     t = t + "VAR row AS String" + NL
     t = t + "VAR client AS String" + NL
     t = t + "VAR kind AS String" + NL
+    t = t + "VAR bridge AS String" + NL
     t = t + "here = SERVER.Name.Lower()" + NL
+    t = t + "' stocked from GitHub by tools/vapor-bridge.js: repo|ref|commit|when" + NL
+    t = t + "IF FS.Exists(""C:\WEB\VAPOR\BRIDGE.TXT"") THEN" + NL
+    t = t + "    p = FS.Read(""C:\WEB\VAPOR\BRIDGE.TXT"").Trim().Split(""|"")" + NL
+    t = t + "    IF p.Count >= 4 THEN bridge = ""The shelves were last stocked from "" + p[0] + "" ("" + p[1] + "", "" + p[2].Substring(0, MATH.Min(7, p[2].Length)) + "") on "" + p[3] + "".""" + NL
+    t = t + "END IF" + NL
     t = t + "IF FS.Exists(""C:\WEB\VAPOR\CATALOG.TXT"") THEN" + NL
     t = t + "    FOR EACH line IN FS.Read(""C:\WEB\VAPOR\CATALOG.TXT"").Lines()" + NL
     t = t + "        p = line.Split(""|"")" + NL
@@ -297,6 +303,7 @@ SUB File4 ()
     t = t + "<table width=""100%"" cellpadding=""6""><tr><td bgcolor=""#000000""><pre><font color=""#A4D007""><%= SERVER.HtmlEncode(FS.Read(""C:\WEB\VAPOR\GETVAPOR.TXT"").Replace(""%HOST%"", here)) %></font></pre></td></tr></table>" + NL
     t = t + "<p><font size=""2"" color=""#8F98A0"">Run your own store: any machine where Vapor's INSTALL.SPK ran is one. Keep its shelves stocked" + NL
     t = t + "and up to date with Publish Apps. Half-Life 3 is coming soon.</font></p>" + NL
+    t = t + "<% IF bridge <> """" THEN %><p><font size=""1"" color=""#8F98A0""><%= SERVER.HtmlEncode(bridge) %></font></p><% END IF %>" + NL
     t = t + "</body></html>" + NL
     Put("C:\WEB\VAPOR\INDEX.ASP")
 END SUB
@@ -6420,7 +6427,7 @@ END SUB
 
 SUB File26 ()
     t = ""
-    t = t + "' VAPOR|id=VAPOR|name=Vapor|kind=client|version=8500c779|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself." + NL
+    t = t + "' VAPOR|id=VAPOR|name=Vapor|kind=client|version=d0000c03|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself." + NL
     t = t + "' VAPOR.SPK - Vapor, the store and library for everything on SIM95: games," + NL
     t = t + "' programs (Simxplorer, Frostbird, Clippy...) and web apps (SimBook, ColdMail," + NL
     t = t + "' AskSim, ELIZA-95)." + NL
@@ -6440,7 +6447,11 @@ SUB File26 ()
     t = t + "'" + NL
     t = t + "' The library (C:\GAMES\LIBRARY.TXT) remembers what is installed, which" + NL
     t = t + "' version, and the time played. When the store has a newer version of" + NL
-    t = t + "' something, the Library offers Update (or Update All)." + NL
+    t = t + "' something, the Library offers Update (or Update All); otherwise Reinstall." + NL
+    t = t + "' Vapor looks at the store again every few minutes (and at once with Check for" + NL
+    t = t + "' Updates). A program or game that is on this machine already, put there by" + NL
+    t = t + "' pasting its INSTALL.SPK, goes into the library as found, and gets updated" + NL
+    t = t + "' like the rest." + NL
     t = t + "'" + NL
     t = t + "' On a store machine, Publish Apps puts every installer saved in C:\MYFILES" + NL
     t = t + "' that has a header (all the ones tools/build-installer.mjs makes) into the" + NL
@@ -6464,6 +6475,8 @@ SUB File26 ()
     t = t + "CONST PATIENCE = 8000" + NL
     t = t + "CONST PART = 15000" + NL
     t = t + "CONST WEBAPPS = ""C:\SYSTEM\WEBAPPS.INI""" + NL
+    t = t + "CONST RECHECK = 300000            ' look at the store again after this long (ms)" + NL
+    t = t + "CONST BYHAND = ""found""             ' the build in the library of something Vapor didn't install" + NL
     t = t + "" + NL
     t = t + "VAR EOL AS String" + NL
     t = t + "VAR win AS GUI_Window" + NL
@@ -6498,6 +6511,8 @@ SUB File26 ()
     t = t + "VAR fSince AS Integer" + NL
     t = t + "VAR fError AS String" + NL
     t = t + "VAR wantCatalog AS Bool" + NL
+    t = t + "VAR catalogAt AS Integer          ' when the catalog last came (0: never)" + NL
+    t = t + "VAR checking AS Bool              ' Check for Updates: say how it went" + NL
     t = t + "" + NL
     t = t + "' the download going on, and what is waiting" + NL
     t = t + "VAR dlId AS String                ' """" when none" + NL
@@ -6533,7 +6548,7 @@ SUB File26 ()
     t = t + "    bar.AddItem(""&Vapor"", ""&Downloads"" + Chr(9) + ""Ctrl+3"")" + NL
     t = t + "    bar.AddSeparator(""&Vapor"")" + NL
     t = t + "    bar.AddItem(""&Vapor"", ""&Update All"" + Chr(9) + ""Ctrl+U"")" + NL
-    t = t + "    bar.AddItem(""&Vapor"", ""&Refresh"" + Chr(9) + ""F5"")" + NL
+    t = t + "    bar.AddItem(""&Vapor"", ""&Check for Updates"" + Chr(9) + ""F5"")" + NL
     t = t + "    bar.AddItem(""&Vapor"", ""Change S&tore..."")" + NL
     t = t + "    bar.AddItem(""&Vapor"", ""&Publish Apps..."" + Chr(9) + ""Ctrl+P"")" + NL
     t = t + "    bar.AddSeparator(""&Vapor"")" + NL
@@ -6857,23 +6872,33 @@ SUB File26 ()
     t = t + "        IF kind = ""game"" THEN" + NL
     t = t + "            info.Text = Played(Int(Val(Field(lib, 3)))) + ""  -  installed "" + Field(lib, 2)" + NL
     t = t + "        ELSE" + NL
+    Put("C:\WEB\VAPOR\VAPOR\1.TXT")
+END SUB
+
+SUB File27 ()
+    t = ""
     t = t + "            info.Text = KindName(kind) + ""  -  installed "" + Field(lib, 2)" + NL
     t = t + "        END IF" + NL
-    t = t + "        IF Field(lib, 6) <> """" THEN info.Text = info.Text + ""  -  build "" + Field(lib, 6)" + NL
+    t = t + "        IF Field(lib, 6) = BYHAND THEN" + NL
+    t = t + "            info.Text = KindName(kind) + ""  -  installed without Vapor""" + NL
+    t = t + "        ELSEIF Field(lib, 6) <> """" THEN" + NL
+    t = t + "            info.Text = info.Text + ""  -  build "" + Field(lib, 6)" + NL
+    t = t + "        END IF" + NL
     t = t + "        about.Text = Wrap(Unesc(Field(lib, 5)), 66)" + NL
     t = t + "        action.Text = OpenWord(kind)" + NL
     t = t + "        IF playId.Contains(id) THEN" + NL
     t = t + "            action.Text = ""Running""" + NL
     t = t + "            action.Enabled = FALSE" + NL
     t = t + "        END IF" + NL
-    t = t + "        upd.Visible = HasUpdate(id) AND NOT Busy(id)" + NL
+    t = t + "        ' Update when the store has newer, else Reinstall (the same build again)" + NL
+    t = t + "        upd.Visible = shop <> """" AND Field(shop, 4) = ""ok"" AND NOT Busy(id)" + NL
+    t = t + "        IF HasUpdate(id) THEN" + NL
+    t = t + "            upd.Text = ""U&pdate""" + NL
+    t = t + "        ELSE" + NL
+    t = t + "            upd.Text = ""Re&install""" + NL
+    t = t + "        END IF" + NL
     t = t + "        IF kind = ""game"" THEN" + NL
     t = t + "            FOR EACH a IN ReadOr(HOME + ""\"" + id + ""\ACHIEVE.TXT"", """").Lines()" + NL
-    Put("C:\WEB\VAPOR\VAPOR\1.TXT")
-END SUB
-
-SUB File27 ()
-    t = ""
     t = t + "                IF a.Contains(""|"") THEN trophies.Add(""* "" + a.Split(""|"")[0] + "" - "" + a.Split(""|"")[1] + ""  ("" + a.Split(""|"")[2] + "")"")" + NL
     t = t + "            NEXT" + NL
     t = t + "            IF trophies.Count = 0 THEN trophies.Add(""No achievements yet. Go and play!"")" + NL
@@ -6923,11 +6948,57 @@ SUB File27 ()
     t = t + "    END IF" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
+    t = t + "' Update, or Reinstall: the store's build, in place of this one." + NL
     t = t + "SUB Update_Click ()" + NL
     t = t + "    VAR line AS String" + NL
+    t = t + "    VAR shop AS String" + NL
     t = t + "    line = Current()" + NL
     t = t + "    IF line = """" THEN RETURN" + NL
-    t = t + "    IF HasUpdate(Field(line, 0)) THEN Want(StoreLine(Field(line, 0)))" + NL
+    t = t + "    shop = StoreLine(Field(line, 0))" + NL
+    t = t + "    IF shop <> """" AND Field(shop, 4) = ""ok"" THEN Want(shop)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Vapor > Check for Updates: the store's catalog again, now." + NL
+    t = t + "SUB CheckNow ()" + NL
+    t = t + "    IF store = """" THEN RETURN" + NL
+    t = t + "    checking = TRUE" + NL
+    t = t + "    wantCatalog = TRUE" + NL
+    t = t + "    win.Status = ""Checking "" + store + "" for updates...""" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' """", or how many updates there are and where to get them." + NL
+    t = t + "FUNCTION UpdateNote () AS String" + NL
+    t = t + "    VAR l AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    FOR EACH l IN Library()" + NL
+    t = t + "        IF HasUpdate(Field(l, 0)) THEN n = n + 1" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    IF n > 0 THEN RETURN ""  -  "" + Str(n) + "" update"" + Plural(n) + "": Vapor > Update All""" + NL
+    t = t + "    IF checking THEN RETURN ""  -  everything is up to date""" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Programs and games from the store that are on this machine already, but not" + NL
+    t = t + "' in the library (their INSTALL.SPK was pasted in): every file the store" + NL
+    t = t + "' says it writes is here. They go in the library as found, so Update and" + NL
+    t = t + "' Update All bring them up to the store's build. (A web app only on a SimHost" + NL
+    t = t + "' machine, where each has its own folder: on the home page it may be one" + NL
+    t = t + "' another app has taken over.)" + NL
+    t = t + "SUB Adopt ()" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    VAR kind AS String" + NL
+    t = t + "    VAR p AS Array OF String" + NL
+    t = t + "    FOR EACH line IN catalog" + NL
+    t = t + "        IF Field(line, 4) <> ""ok"" OR Installed(Field(line, 0)) OR Busy(Field(line, 0)) THEN CONTINUE" + NL
+    t = t + "        kind = Field(line, 7)" + NL
+    t = t + "        IF kind = """" THEN kind = ""game""" + NL
+    t = t + "        IF kind = ""client"" THEN CONTINUE" + NL
+    t = t + "        IF kind = ""web"" AND NOT (Folders() AND Field(line, 13) <> """") THEN CONTINUE" + NL
+    t = t + "        IF NOT AllThere(Field(line, 10), Field(line, 13)) THEN CONTINUE" + NL
+    t = t + "        p = line.Split(""|"")" + NL
+    t = t + "        IF p.Count > 8 THEN p[8] = BYHAND" + NL
+    t = t + "        Keep(p.Join(""|""))" + NL
+    t = t + "    NEXT" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "' Into the download queue. A web app asks first: it takes the home page." + NL
@@ -7159,6 +7230,8 @@ SUB File27 ()
     t = t + "        IF fDone OR SYS.Ticks - fSince > PATIENCE THEN Arrived()" + NL
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL
+    t = t + "    ' now and then, the store again: anything new there shows as an update" + NL
+    t = t + "    IF store <> """" AND catalogAt <> 0 AND dlId = """" AND queue.Count = 0 AND SYS.Ticks - catalogAt > RECHECK THEN wantCatalog = TRUE" + NL
     t = t + "    IF wantCatalog AND store <> """" THEN" + NL
     t = t + "        ' a SimDNS name: ask first, in a tick of its own" + NL
     t = t + "        IF RsNext(StoreHost()) THEN RETURN" + NL
@@ -7232,6 +7305,11 @@ SUB File27 ()
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' The store's machine as written in its address (alpha, store.coolsite.sim)." + NL
+    Put("C:\WEB\VAPOR\VAPOR\2.TXT")
+END SUB
+
+SUB File28 ()
+    t = ""
     t = t + "FUNCTION StoreHost () AS String" + NL
     t = t + "    VAR h AS String" + NL
     t = t + "    IF NOT store.Lower().StartsWith(""http://"") THEN RETURN """"" + NL
@@ -7302,15 +7380,19 @@ SUB File27 ()
     t = t + "    END TRY" + NL
     t = t + "    text = Body()" + NL
     t = t + "    IF fWhat = ""catalog"" THEN" + NL
-    t = t + "        catalog.Clear()" + NL
+    t = t + "        ' (a store that doesn't answer keeps the list it had)" + NL
     t = t + "        IF text = """" THEN" + NL
     t = t + "            win.Status = ""The store at "" + store + "" did not answer ("" + fError + "").""" + NL
     t = t + "        ELSE" + NL
+    t = t + "            catalog.Clear()" + NL
     t = t + "            FOR EACH line IN text.Lines()" + NL
     t = t + "                IF line.Split(""|"").Count >= 7 THEN catalog.Add(line)" + NL
     t = t + "            NEXT" + NL
-    t = t + "            win.Status = ""Store: "" + store + ""  -  "" + Str(catalog.Count) + "" items""" + NL
+    t = t + "            Adopt()" + NL
+    t = t + "            win.Status = ""Store: "" + store + ""  -  "" + Str(catalog.Count) + "" items"" + UpdateNote()" + NL
     t = t + "        END IF" + NL
+    t = t + "        catalogAt = MATH.Max(1, SYS.Ticks)" + NL
+    t = t + "        checking = FALSE" + NL
     t = t + "        IF tab <> ""DOWNLOADS"" THEN ShowTab(tab)" + NL
     t = t + "        ' a newer Vapor? ask once" + NL
     t = t + "        mine = MyVersion()" + NL
@@ -7321,11 +7403,6 @@ SUB File27 ()
     t = t + "            box.Title = ""Vapor""" + NL
     t = t + "            box.Kind = ""confirm""" + NL
     t = t + "            box.Buttons = ""yesno""" + NL
-    Put("C:\WEB\VAPOR\VAPOR\2.TXT")
-END SUB
-
-SUB File28 ()
-    t = ""
     t = t + "            box.Text = ""A new version of Vapor is in the store (build "" + Field(line, 8) + ""; this is "" + mine + "")."" + EOL + EOL + ""Update Vapor now? It will restart.""" + NL
     t = t + "            IF box.Show() THEN queue.Insert(0, line)" + NL
     t = t + "        END IF" + NL
@@ -7660,8 +7737,15 @@ SUB File28 ()
     t = t + "            ChangeStore()" + NL
     t = t + "        CASE ""Publish Apps...""" + NL
     t = t + "            Publish()" + NL
+    Put("C:\WEB\VAPOR\VAPOR\3.TXT")
+END SUB
+
+SUB File29 ()
+    t = ""
+    t = t + "        CASE ""Check for Updates""" + NL
+    t = t + "            CheckNow()" + NL
     t = t + "        CASE ""Refresh""" + NL
-    t = t + "            wantCatalog = TRUE" + NL
+    t = t + "            CheckNow()" + NL
     t = t + "        CASE ""Exit""" + NL
     t = t + "            win.Close()" + NL
     t = t + "        CASE ""About Vapor""" + NL
@@ -7739,11 +7823,6 @@ SUB File28 ()
     t = t + "' How to use it without ever waiting in the wrong place (SIM95-NOTES.md):" + NL
     t = t + "'   1. RsWants(host)  - does this name need asking? FALSE for addresses," + NL
     t = t + "'                       plain machine names, names already known, or when" + NL
-    Put("C:\WEB\VAPOR\VAPOR\3.TXT")
-END SUB
-
-SUB File29 ()
-    t = ""
     t = t + "'                       there is no name server (or it isn't answering)." + NL
     t = t + "'   2. RsAsk(host, address) - sends the question to the name server at that" + NL
     t = t + "'                       address. It is a Connect: let it be the last thing" + NL
@@ -8083,6 +8162,11 @@ SUB File29 ()
     t = t + "SUB RsTake (host AS String, reply AS String)" + NL
     t = t + "    VAR lines AS Array OF String" + NL
     t = t + "    VAR w AS Array OF String" + NL
+    Put("C:\WEB\VAPOR\VAPOR\4.TXT")
+END SUB
+
+SUB File30 ()
+    t = ""
     t = t + "    VAR cur AS String" + NL
     t = t + "    VAR onward AS String" + NL
     t = t + "    VAR target AS String" + NL
@@ -8183,11 +8267,6 @@ SUB File29 ()
     t = t + "    IF RsKnown(domain) THEN" + NL
     t = t + "        RsKeep(key, domain, RsFull(domain), RSNEG)" + NL
     t = t + "    ELSE" + NL
-    Put("C:\WEB\VAPOR\VAPOR\4.TXT")
-END SUB
-
-SUB File30 ()
-    t = ""
     t = t + "        RsKeep(key, """", """", RSNEG)" + NL
     t = t + "    END IF" + NL
     t = t + "END SUB" + NL
@@ -8289,13 +8368,13 @@ SUB File31 ()
     t = t + "HL3|Half-Life 3|0|0|soon|Shooter|The long-awaited conclusion. Coming soon.|game|||||" + NL
     t = t + "SIMPLAYR|SimPlayer|6|85553|ok|Multimedia|The movie player for SIM95: plays SimMovies from the disk or streams them from the web, like the ones on SimTube. (Simxplorer has it built in.)|program|1b95d304|C:\PROGRAMS\PLAYER.SPK|C:\PROGRAMS\PLAYER.SPK|PLAYER||" + NL
     t = t + "SIMWEB|simweb|12|175779|ok|Internet|Personal Web Manager and a web server that serves many sites by name: coolsite.sim for your own pages, coolbook.sim for SimBook. Register and point the names at SimNIC; then add them here. With DIG, to ask the name server.|program|b51300fc|C:\PROGRAMS\PWM.SPK|C:\PROGRAMS\PWM.SPK;C:\PROGRAMS\DIG.SPK;C:\PROGRAMS\RESOLVE.SPK|PWM||" + NL
-    t = t + "VAPOR|Vapor|5|62480|ok|Vapor|The Vapor program itself.|client|8500c779|C:\PROGRAMS\VAPOR.SPK|C:\PROGRAMS\VAPOR.SPK|VAPOR||" + NL
+    t = t + "VAPOR|Vapor|5|65612|ok|Vapor|The Vapor program itself.|client|d0000c03|C:\PROGRAMS\VAPOR.SPK|C:\PROGRAMS\VAPOR.SPK|VAPOR||" + NL
     Put("C:\WEB\VAPOR\CATALOG.TXT")
 END SUB
 
 SUB File32 ()
     t = ""
-    t = t + "' VAPOR|id=VAPOR|name=Vapor|kind=client|version=8500c779|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself." + NL
+    t = t + "' VAPOR|id=VAPOR|name=Vapor|kind=client|version=d0000c03|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself." + NL
     t = t + "' VAPOR.SPK - Vapor, the store and library for everything on SIM95: games," + NL
     t = t + "' programs (Simxplorer, Frostbird, Clippy...) and web apps (SimBook, ColdMail," + NL
     t = t + "' AskSim, ELIZA-95)." + NL
@@ -8315,7 +8394,11 @@ SUB File32 ()
     t = t + "'" + NL
     t = t + "' The library (C:\GAMES\LIBRARY.TXT) remembers what is installed, which" + NL
     t = t + "' version, and the time played. When the store has a newer version of" + NL
-    t = t + "' something, the Library offers Update (or Update All)." + NL
+    t = t + "' something, the Library offers Update (or Update All); otherwise Reinstall." + NL
+    t = t + "' Vapor looks at the store again every few minutes (and at once with Check for" + NL
+    t = t + "' Updates). A program or game that is on this machine already, put there by" + NL
+    t = t + "' pasting its INSTALL.SPK, goes into the library as found, and gets updated" + NL
+    t = t + "' like the rest." + NL
     t = t + "'" + NL
     t = t + "' On a store machine, Publish Apps puts every installer saved in C:\MYFILES" + NL
     t = t + "' that has a header (all the ones tools/build-installer.mjs makes) into the" + NL
@@ -8339,6 +8422,8 @@ SUB File32 ()
     t = t + "CONST PATIENCE = 8000" + NL
     t = t + "CONST PART = 15000" + NL
     t = t + "CONST WEBAPPS = ""C:\SYSTEM\WEBAPPS.INI""" + NL
+    t = t + "CONST RECHECK = 300000            ' look at the store again after this long (ms)" + NL
+    t = t + "CONST BYHAND = ""found""             ' the build in the library of something Vapor didn't install" + NL
     t = t + "" + NL
     t = t + "VAR EOL AS String" + NL
     t = t + "VAR win AS GUI_Window" + NL
@@ -8373,6 +8458,8 @@ SUB File32 ()
     t = t + "VAR fSince AS Integer" + NL
     t = t + "VAR fError AS String" + NL
     t = t + "VAR wantCatalog AS Bool" + NL
+    t = t + "VAR catalogAt AS Integer          ' when the catalog last came (0: never)" + NL
+    t = t + "VAR checking AS Bool              ' Check for Updates: say how it went" + NL
     t = t + "" + NL
     t = t + "' the download going on, and what is waiting" + NL
     t = t + "VAR dlId AS String                ' """" when none" + NL
@@ -8408,7 +8495,7 @@ SUB File32 ()
     t = t + "    bar.AddItem(""&Vapor"", ""&Downloads"" + Chr(9) + ""Ctrl+3"")" + NL
     t = t + "    bar.AddSeparator(""&Vapor"")" + NL
     t = t + "    bar.AddItem(""&Vapor"", ""&Update All"" + Chr(9) + ""Ctrl+U"")" + NL
-    t = t + "    bar.AddItem(""&Vapor"", ""&Refresh"" + Chr(9) + ""F5"")" + NL
+    t = t + "    bar.AddItem(""&Vapor"", ""&Check for Updates"" + Chr(9) + ""F5"")" + NL
     t = t + "    bar.AddItem(""&Vapor"", ""Change S&tore..."")" + NL
     t = t + "    bar.AddItem(""&Vapor"", ""&Publish Apps..."" + Chr(9) + ""Ctrl+P"")" + NL
     t = t + "    bar.AddSeparator(""&Vapor"")" + NL
@@ -8734,14 +8821,24 @@ SUB File32 ()
     t = t + "        ELSE" + NL
     t = t + "            info.Text = KindName(kind) + ""  -  installed "" + Field(lib, 2)" + NL
     t = t + "        END IF" + NL
-    t = t + "        IF Field(lib, 6) <> """" THEN info.Text = info.Text + ""  -  build "" + Field(lib, 6)" + NL
+    t = t + "        IF Field(lib, 6) = BYHAND THEN" + NL
+    t = t + "            info.Text = KindName(kind) + ""  -  installed without Vapor""" + NL
+    t = t + "        ELSEIF Field(lib, 6) <> """" THEN" + NL
+    t = t + "            info.Text = info.Text + ""  -  build "" + Field(lib, 6)" + NL
+    t = t + "        END IF" + NL
     t = t + "        about.Text = Wrap(Unesc(Field(lib, 5)), 66)" + NL
     t = t + "        action.Text = OpenWord(kind)" + NL
     t = t + "        IF playId.Contains(id) THEN" + NL
     t = t + "            action.Text = ""Running""" + NL
     t = t + "            action.Enabled = FALSE" + NL
     t = t + "        END IF" + NL
-    t = t + "        upd.Visible = HasUpdate(id) AND NOT Busy(id)" + NL
+    t = t + "        ' Update when the store has newer, else Reinstall (the same build again)" + NL
+    t = t + "        upd.Visible = shop <> """" AND Field(shop, 4) = ""ok"" AND NOT Busy(id)" + NL
+    t = t + "        IF HasUpdate(id) THEN" + NL
+    t = t + "            upd.Text = ""U&pdate""" + NL
+    t = t + "        ELSE" + NL
+    t = t + "            upd.Text = ""Re&install""" + NL
+    t = t + "        END IF" + NL
     t = t + "        IF kind = ""game"" THEN" + NL
     t = t + "            FOR EACH a IN ReadOr(HOME + ""\"" + id + ""\ACHIEVE.TXT"", """").Lines()" + NL
     t = t + "                IF a.Contains(""|"") THEN trophies.Add(""* "" + a.Split(""|"")[0] + "" - "" + a.Split(""|"")[1] + ""  ("" + a.Split(""|"")[2] + "")"")" + NL
@@ -8793,11 +8890,57 @@ SUB File32 ()
     t = t + "    END IF" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
+    t = t + "' Update, or Reinstall: the store's build, in place of this one." + NL
     t = t + "SUB Update_Click ()" + NL
     t = t + "    VAR line AS String" + NL
+    t = t + "    VAR shop AS String" + NL
     t = t + "    line = Current()" + NL
     t = t + "    IF line = """" THEN RETURN" + NL
-    t = t + "    IF HasUpdate(Field(line, 0)) THEN Want(StoreLine(Field(line, 0)))" + NL
+    t = t + "    shop = StoreLine(Field(line, 0))" + NL
+    t = t + "    IF shop <> """" AND Field(shop, 4) = ""ok"" THEN Want(shop)" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' Vapor > Check for Updates: the store's catalog again, now." + NL
+    t = t + "SUB CheckNow ()" + NL
+    t = t + "    IF store = """" THEN RETURN" + NL
+    t = t + "    checking = TRUE" + NL
+    t = t + "    wantCatalog = TRUE" + NL
+    t = t + "    win.Status = ""Checking "" + store + "" for updates...""" + NL
+    t = t + "END SUB" + NL
+    t = t + "" + NL
+    t = t + "' """", or how many updates there are and where to get them." + NL
+    t = t + "FUNCTION UpdateNote () AS String" + NL
+    t = t + "    VAR l AS String" + NL
+    t = t + "    VAR n AS Integer" + NL
+    t = t + "    FOR EACH l IN Library()" + NL
+    t = t + "        IF HasUpdate(Field(l, 0)) THEN n = n + 1" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    IF n > 0 THEN RETURN ""  -  "" + Str(n) + "" update"" + Plural(n) + "": Vapor > Update All""" + NL
+    t = t + "    IF checking THEN RETURN ""  -  everything is up to date""" + NL
+    t = t + "    RETURN """"" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Programs and games from the store that are on this machine already, but not" + NL
+    t = t + "' in the library (their INSTALL.SPK was pasted in): every file the store" + NL
+    t = t + "' says it writes is here. They go in the library as found, so Update and" + NL
+    t = t + "' Update All bring them up to the store's build. (A web app only on a SimHost" + NL
+    t = t + "' machine, where each has its own folder: on the home page it may be one" + NL
+    t = t + "' another app has taken over.)" + NL
+    t = t + "SUB Adopt ()" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    VAR kind AS String" + NL
+    t = t + "    VAR p AS Array OF String" + NL
+    t = t + "    FOR EACH line IN catalog" + NL
+    t = t + "        IF Field(line, 4) <> ""ok"" OR Installed(Field(line, 0)) OR Busy(Field(line, 0)) THEN CONTINUE" + NL
+    t = t + "        kind = Field(line, 7)" + NL
+    t = t + "        IF kind = """" THEN kind = ""game""" + NL
+    t = t + "        IF kind = ""client"" THEN CONTINUE" + NL
+    t = t + "        IF kind = ""web"" AND NOT (Folders() AND Field(line, 13) <> """") THEN CONTINUE" + NL
+    t = t + "        IF NOT AllThere(Field(line, 10), Field(line, 13)) THEN CONTINUE" + NL
+    t = t + "        p = line.Split(""|"")" + NL
+    t = t + "        IF p.Count > 8 THEN p[8] = BYHAND" + NL
+    t = t + "        Keep(p.Join(""|""))" + NL
+    t = t + "    NEXT" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
     t = t + "' Into the download queue. A web app asks first: it takes the home page." + NL
@@ -9029,6 +9172,8 @@ SUB File32 ()
     t = t + "        IF fDone OR SYS.Ticks - fSince > PATIENCE THEN Arrived()" + NL
     t = t + "        RETURN" + NL
     t = t + "    END IF" + NL
+    t = t + "    ' now and then, the store again: anything new there shows as an update" + NL
+    t = t + "    IF store <> """" AND catalogAt <> 0 AND dlId = """" AND queue.Count = 0 AND SYS.Ticks - catalogAt > RECHECK THEN wantCatalog = TRUE" + NL
     t = t + "    IF wantCatalog AND store <> """" THEN" + NL
     t = t + "        ' a SimDNS name: ask first, in a tick of its own" + NL
     t = t + "        IF RsNext(StoreHost()) THEN RETURN" + NL
@@ -9172,15 +9317,19 @@ SUB File32 ()
     t = t + "    END TRY" + NL
     t = t + "    text = Body()" + NL
     t = t + "    IF fWhat = ""catalog"" THEN" + NL
-    t = t + "        catalog.Clear()" + NL
+    t = t + "        ' (a store that doesn't answer keeps the list it had)" + NL
     t = t + "        IF text = """" THEN" + NL
     t = t + "            win.Status = ""The store at "" + store + "" did not answer ("" + fError + "").""" + NL
     t = t + "        ELSE" + NL
+    t = t + "            catalog.Clear()" + NL
     t = t + "            FOR EACH line IN text.Lines()" + NL
     t = t + "                IF line.Split(""|"").Count >= 7 THEN catalog.Add(line)" + NL
     t = t + "            NEXT" + NL
-    t = t + "            win.Status = ""Store: "" + store + ""  -  "" + Str(catalog.Count) + "" items""" + NL
+    t = t + "            Adopt()" + NL
+    t = t + "            win.Status = ""Store: "" + store + ""  -  "" + Str(catalog.Count) + "" items"" + UpdateNote()" + NL
     t = t + "        END IF" + NL
+    t = t + "        catalogAt = MATH.Max(1, SYS.Ticks)" + NL
+    t = t + "        checking = FALSE" + NL
     t = t + "        IF tab <> ""DOWNLOADS"" THEN ShowTab(tab)" + NL
     t = t + "        ' a newer Vapor? ask once" + NL
     t = t + "        mine = MyVersion()" + NL
@@ -9525,8 +9674,10 @@ SUB File32 ()
     t = t + "            ChangeStore()" + NL
     t = t + "        CASE ""Publish Apps...""" + NL
     t = t + "            Publish()" + NL
+    t = t + "        CASE ""Check for Updates""" + NL
+    t = t + "            CheckNow()" + NL
     t = t + "        CASE ""Refresh""" + NL
-    t = t + "            wantCatalog = TRUE" + NL
+    t = t + "            CheckNow()" + NL
     t = t + "        CASE ""Exit""" + NL
     t = t + "            win.Close()" + NL
     t = t + "        CASE ""About Vapor""" + NL

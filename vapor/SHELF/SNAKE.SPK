@@ -1,0 +1,217 @@
+' VAPOR|id=SNAKE|name=Snake 95|kind=game|version=aa5d9aeb|category=Arcade|run=C:\GAMES\SNAKE\SNAKE.SPK|files=C:\GAMES\SNAKE\SNAKE.SPK|tasks=SNAKE|startup=|folder=|about=Eat the dots. Grow longer. Don't eat yourself. The game that sold a million phones, now on SIM95.
+' SNAKE.SPK - Snake 95. Eat the dots; don't eat yourself.
+' Arrow keys steer, Space pauses. The best score is kept for Vapor to show.
+
+CONST CELL = 12
+CONST GW = 26
+CONST GH = 18
+CONST BESTFILE = "C:\GAMES\SNAKE\BEST.TXT"
+CONST ACHFILE = "C:\GAMES\SNAKE\ACHIEVE.TXT"
+
+VAR win AS GUI_Window
+VAR board AS GUI_Canvas
+VAR clock AS GUI_Timer
+VAR bodyX AS Array OF Integer
+VAR bodyY AS Array OF Integer
+VAR dx AS Integer = 1
+VAR dy AS Integer
+VAR nextDx AS Integer = 1
+VAR nextDy AS Integer
+VAR foodX AS Integer
+VAR foodY AS Integer
+VAR score AS Integer
+VAR state AS String = "title"
+
+SUB Main ()
+    win = GUI_Window.New("Snake 95", GW * CELL, GH * CELL + 20)
+    win.Icon = "app"
+    win.onClose = Win_OnClose
+    win.onKey = Key
+    board = GUI_Canvas.New(win)
+    board.SetBounds(0, 0, GW * CELL, GH * CELL + 20)
+    board.onKey = Key
+    board.onDraw = Board_OnDraw
+    clock = GUI_Timer.New(win)
+    clock.Interval = 110
+    clock.onTick = Clock_OnTick
+    clock.Start()
+    win.Show()
+    board.Focus()
+    Draw()
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(0)
+END SUB
+
+SUB NewGame ()
+    VAR i AS Integer
+    bodyX.Clear()
+    bodyY.Clear()
+    FOR i = 0 TO 3
+        bodyX.Add(8 - i)
+        bodyY.Add(9)
+    NEXT
+    dx = 1
+    dy = 0
+    nextDx = 1
+    nextDy = 0
+    score = 0
+    Food()
+    state = "play"
+END SUB
+
+SUB Food ()
+    VAR i AS Integer
+    VAR clash AS Bool = TRUE
+    WHILE clash
+        foodX = Rnd(GW)
+        foodY = Rnd(GH)
+        clash = FALSE
+        FOR i = 0 TO bodyX.Count - 1
+            IF bodyX[i] = foodX AND bodyY[i] = foodY THEN clash = TRUE
+        NEXT
+    END WHILE
+END SUB
+
+SUB Key (k AS String)
+    IF state <> "play" THEN
+        IF k = "Enter" OR k = "Space" THEN
+            IF state = "paused" THEN
+                state = "play"
+            ELSE
+                NewGame()
+            END IF
+            Draw()
+        END IF
+        RETURN
+    END IF
+    SELECT CASE k
+        CASE "ArrowUp"
+            IF dy = 0 THEN
+                nextDx = 0
+                nextDy = -1
+            END IF
+        CASE "ArrowDown"
+            IF dy = 0 THEN
+                nextDx = 0
+                nextDy = 1
+            END IF
+        CASE "ArrowLeft"
+            IF dx = 0 THEN
+                nextDx = -1
+                nextDy = 0
+            END IF
+        CASE "ArrowRight"
+            IF dx = 0 THEN
+                nextDx = 1
+                nextDy = 0
+            END IF
+        CASE "Space"
+            state = "paused"
+            Draw()
+    END SELECT
+END SUB
+
+SUB Clock_OnTick ()
+    VAR hx AS Integer
+    VAR hy AS Integer
+    VAR i AS Integer
+    IF state <> "play" THEN RETURN
+    dx = nextDx
+    dy = nextDy
+    hx = bodyX[0] + dx
+    hy = bodyY[0] + dy
+    IF hx < 0 OR hy < 0 OR hx >= GW OR hy >= GH THEN
+        GameOver()
+        RETURN
+    END IF
+    FOR i = 0 TO bodyX.Count - 2
+        IF bodyX[i] = hx AND bodyY[i] = hy THEN
+            GameOver()
+            RETURN
+        END IF
+    NEXT
+    bodyX.Insert(0, hx)
+    bodyY.Insert(0, hy)
+    IF hx = foodX AND hy = foodY THEN
+        score = score + 10
+        SYS.Beep(1000, 20)
+        IF score = 100 THEN Achieve("Hungry", "Score 100")
+        IF score = 300 THEN Achieve("Long Boi", "Score 300")
+        Food()
+    ELSE
+        bodyX.RemoveAt(bodyX.Count - 1)
+        bodyY.RemoveAt(bodyY.Count - 1)
+    END IF
+    Draw()
+END SUB
+
+SUB GameOver ()
+    state = "over"
+    SYS.Beep(120, 200)
+    IF score > Best() THEN
+        TRY
+            FS.Write(BESTFILE, Str(score))
+        CATCH err
+        END TRY
+    END IF
+    Achieve("Ouroboros", "Lose a game of Snake")
+    Draw()
+END SUB
+
+FUNCTION Best () AS Integer
+    IF FS.Exists(BESTFILE) THEN RETURN Int(Val(FS.Read(BESTFILE)))
+    RETURN 0
+END FUNCTION
+
+SUB Achieve (name AS String, how AS String)
+    VAR have AS String
+    TRY
+        IF FS.Exists(ACHFILE) THEN have = FS.Read(ACHFILE)
+        IF have.Contains(name + "|") THEN RETURN
+        FS.Append(ACHFILE, name + "|" + how + "|" + TIME.Date + Chr(10))
+    CATCH err
+    END TRY
+END SUB
+
+SUB Board_OnDraw (canvas AS GUI_Canvas)
+    Draw()
+END SUB
+
+SUB Draw ()
+    VAR i AS Integer
+    board.Clear()
+    board.SetColor(0)
+    board.FillRect(0, 0, GW * CELL, GH * CELL)
+    IF state = "title" THEN
+        board.SetColor(10)
+        board.Text(100, 70, "SNAKE 95")
+        board.SetColor(7)
+        board.Text(40, 110, "PRESS ENTER TO PLAY")
+    ELSE
+        board.SetColor(9)
+        board.FillCircle(foodX * CELL + 6, foodY * CELL + 6, 5)
+        FOR i = bodyX.Count - 1 TO 0 STEP -1
+            IF i = 0 THEN
+                board.SetColor(10)
+            ELSE
+                board.SetColor(2)
+            END IF
+            board.FillRect(bodyX[i] * CELL + 1, bodyY[i] * CELL + 1, CELL - 2, CELL - 2)
+        NEXT
+        IF state = "over" THEN
+            board.SetColor(15)
+            board.Text(90, 90, "GAME OVER")
+            board.Text(40, 120, "ENTER TO PLAY AGAIN")
+        ELSEIF state = "paused" THEN
+            board.SetColor(15)
+            board.Text(120, 100, "PAUSED")
+        END IF
+    END IF
+    board.SetColor(8)
+    board.FillRect(0, GH * CELL, GW * CELL, 20)
+    board.SetColor(15)
+    board.Text(4, GH * CELL + 2, "SCORE " + Str(score) + "   BEST " + Str(MATH.Max(score, Best())))
+    win.Tag = state + "|" + Str(score)
+END SUB

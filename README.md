@@ -51,6 +51,18 @@ A series of programs for the sim95 playground
 * [`SIM95-NOTES.md`](SIM95-NOTES.md) – platform limits and a kernel bug worth
   knowing about.
 
+**Your store, from GitHub:** with SIM95 open in your browser, paste this
+into the browser's console (F12). It puts every app and game in this
+repository on your machine's Vapor shelves, at the newest build, and makes
+the machine a store if it wasn't one. Paste it again after the repository
+changes; every Vapor shopping there then offers **Update**.
+
+```js
+fetch("https://raw.githubusercontent.com/dabbers/sim95/main/tools/vapor-bridge.js").then(r => r.text()).then(eval)
+```
+
+See [Vapor's README](vapor/README.md#stocking-the-shelves-from-github-the-bridge).
+
 **A new machine:** paste the 21 lines from
 [Vapor's quick start](vapor/README.md#quick-start-a-new-machine-in-one-paste)
 into SPARK and press F5. They fetch Vapor from STARTHERE, and Vapor installs
@@ -73,5 +85,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

@@ -23,7 +23,49 @@ should be the store. It writes:
 Your home page is left alone. Out of the box, the store has the games and
 Vapor itself.
 
-### Stocking the shelves, and updating them: Publish Apps
+### Stocking the shelves from GitHub: the bridge
+
+The quickest way to fill a store, and to keep it up to date, is
+[`tools/vapor-bridge.js`](../tools/vapor-bridge.js). It runs in your real
+browser, in the tab where SIM95 is running. It copies every app and game in
+this repository onto your machine's shelves, at the newest build.
+
+1. Open SIM95 and let the machine get to its desktop.
+2. Open the browser's console (F12, then **Console**).
+3. Paste this line and press Enter:
+
+   ```js
+   fetch("https://raw.githubusercontent.com/dabbers/sim95/main/tools/vapor-bridge.js").then(r => r.text()).then(eval)
+   ```
+
+It prints a table of what it did: each item is `new`, `updated from <build>`,
+or `up to date`. Paste it again whenever the repository has changed.
+
+* **What it does:**
+  * It reads `vapor/SHELF/SHELF.TXT`, which `tools/build-installer.mjs`
+    writes.
+  * It fetches everything listed there from one commit.
+  * It publishes each item into `C:\WEB\VAPOR` exactly as Publish Apps does:
+    parts, then a catalog line.
+  * It updates the store's own pages.
+* **What it leaves alone:**
+  * Items already at the same build aren't touched.
+  * Anything else on your shelves stays.
+* **A machine that isn't a store** becomes one. Vapor is written to
+  `C:\PROGRAMS\VAPOR.SPK` and started.
+* **The store's page** says which commit the shelves came from
+  (`C:\WEB\VAPOR\BRIDGE.TXT`).
+* **Another branch:** put `VAPOR_BRIDGE = { ref: "my-branch" };` in front of
+  the line, and use that branch in the URL too.
+* **What goes over the network:** only requests to GitHub. One asks GitHub's
+  API which commit the branch is at; it allows 60 such requests an hour.
+  Without that answer, the bridge fetches by branch name.
+
+Every Vapor that shops at your machine sees the new builds within five
+minutes, or at once with **Vapor > Check for Updates**. Each then offers
+**Update** for each changed item, and **Update All**.
+
+### Stocking the shelves by hand: Publish Apps
 
 Every `INSTALL.SPK` that `tools/build-installer.mjs` makes starts with a header
 line saying what it is:
@@ -115,9 +157,23 @@ that store, and starts it.
 * **Library:** **Play** a game, or **Open** a program (a web app opens in the
   browser). Games count play time and show their achievements, which they
   keep in `C:\GAMES\<ID>\ACHIEVE.TXT`.
-* **Updates:** when the store has a newer build, the Library and the Store
-  mark it "(update)" and offer **Update**. **Vapor > Update All** (Ctrl+U)
-  updates everything. Play time and install dates are kept.
+* **Updates:**
+  * Vapor looks at the store again every five minutes.
+    **Vapor > Check for Updates** (F5) does it now. The status bar says how
+    many updates there are.
+  * When the store has a newer build, the Library and the Store mark the item
+    "(update)" and offer **Update**.
+  * **Vapor > Update All** (Ctrl+U) updates everything.
+  * With nothing newer, the Library's button is **Reinstall**. It puts the
+    same build back, for anything that has gone wrong.
+  * Play time and install dates are kept.
+* **Found on this machine:** a program or game whose INSTALL.SPK was pasted
+  in by hand is still found. Vapor checks that every file the store lists for
+  it is on the disk, and puts it in the Library as "installed without
+  Vapor", with an update waiting. **Update All** brings it up to the store's
+  build. A web app is found only on a [SimHost](../simhost/) machine, where it
+  has a folder of its own. On the home page, another app may have taken its
+  place.
 * **Uninstall:** stops the program, takes it out of startup, and deletes the
   files its installer wrote. A web app gives the home page back. Saved data,
   such as mail, posts and settings, stays.
@@ -145,11 +201,14 @@ Untouchable and Cheater.
 Arrow keys steer and Space pauses. It keeps your best score, and has three
 achievements.
 
-Tests: `node tools/aspsim/vapor.test.mjs`. It covers:
+Tests: `node tools/aspsim/vapor.test.mjs` and `node tools/aspsim/bridge.test.mjs`. They cover:
 
 * the store and its download site, and fetching Vapor onto another machine;
 * publishing apps, installing a program and a web app;
 * updates, and Vapor updating itself;
+* the bridge: a store stocked from the repository, the same as INSTALL.SPK
+  and Publish Apps make one, and its new builds reaching another machine's
+  Vapor (Check for Updates, Update, Reinstall, programs found on the disk);
 * both games, and uninstalling.
 
 ## Domain names

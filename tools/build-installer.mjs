@@ -632,8 +632,38 @@ END SUB
   return { text: out, files: files.length };
 }
 
+// vapor/SHELF: everything a store built from this repository stocks, for
+// tools/vapor-bridge.js to copy from GitHub into a store machine. SHELF.TXT
+// lists it, one thing a line:
+//   item <repo path> <version>       a file with a Vapor header, to publish
+//   soon <catalog line>               on the shelf, not out yet (Half-Life 3)
+//   site <repo path> <SIM95 path>     the store's own web pages
+// The Vapor program and the games have no INSTALL.SPK of their own, so they
+// are written here with their headers on, as a store gets them.
+function shelf() {
+  const dir = path.join(root, "vapor", "SHELF");
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = [];
+  const item = (rel, text) => lines.push(`item ${rel} ${/\|version=([^|]*)/.exec(text.split("\n")[0])[1]}`);
+  const own = (name, text) => { fs.writeFileSync(path.join(dir, name), text); item("vapor/SHELF/" + name, text); };
+  own("VAPOR.SPK", vaporClient());
+  for (const g of vaporGames) {
+    if (g.soon) lines.push("soon " + [g.id, g.name, 0, 0, "soon", g.genre, g.about, "game", "", "", "", "", ""].join("|"));
+    else own(g.id + ".SPK", gameText(g));
+  }
+  for (const key of Object.keys(apps)) {
+    if (!apps[key].vapor) continue;
+    const file = path.join(root, key, "INSTALL.SPK");
+    if (fs.existsSync(file)) item(key + "/INSTALL.SPK", fs.readFileSync(file, "utf8"));
+  }
+  for (const f of fs.readdirSync(path.join(root, "vapor/WEB")).sort()) lines.push(`site vapor/WEB/${f} C:\\WEB\\VAPOR\\${f.toUpperCase()}`);
+  fs.writeFileSync(path.join(dir, "SHELF.TXT"), "# What a Vapor store built from this repository stocks. Made by tools/build-installer.mjs;\n# tools/vapor-bridge.js reads it. (item <path> <version> | soon <catalog line> | site <path> <SIM95 path>)\n" + lines.join("\n") + "\n");
+  console.log(`vapor/SHELF/SHELF.TXT: ${lines.filter((l) => l.startsWith("item")).length} items`);
+}
+
 const wanted = process.argv.slice(2);
 for (const key of wanted.length ? wanted : Object.keys(apps)) {
   if (!apps[key]) throw new Error("No app called " + key + "; there are " + Object.keys(apps).join(", "));
   build(key);
 }
+shelf();
