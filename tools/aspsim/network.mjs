@@ -21,12 +21,20 @@ class Hub {
     const t = {
       connected: true, addr: null, packetFns: [], openFns: [],
       onPacket(f) { t.packetFns.push(f); }, onOpen(f) { t.openFns.push(f); setTimeout(f, 0); }, onClose() {},
-      send(p) { setTimeout(() => hub.route(t, p), 0); },
-      deliver(p) { for (const f of t.packetFns) f(p); },
+      send(p) { if (!t.gone) setTimeout(() => hub.route(t, p), 0); },
+      deliver(p) { if (!t.gone) for (const f of t.packetFns) f(p); },
     };
     return t;
   }
+  // A machine that goes away without a word (its tab closed): nothing more
+  // to it or from it, and no connection of its says goodbye.
+  unplug(t) {
+    t.gone = true;
+    this.ends.delete(t.addr);
+    for (const [k, v] of [...this.names]) if (v === t.addr) this.names.delete(k);
+  }
   route(from, p) {
+    if (from.gone) return;
     if (p.dst === SERVER && p.kind === "name") {
       const q = JSON.parse(p.payload);
       if (q.hello || q.rename) {
@@ -163,7 +171,8 @@ export class Network {
 
   async boot(hostname) {
     const S = await load();
-    const stack = new S.Stack({ hostname, jitter: () => 1, transport: this.hub.transport() });
+    const transport = this.hub.transport();
+    const stack = new S.Stack({ hostname, jitter: () => 1, transport });
     const m = await machine(hostname, stack);
     // SIM95_HTTPD=file: every machine has that web server instead of the stock
     // one, so a suite can be run again against a replacement (simweb's).
@@ -201,6 +210,12 @@ export class Network {
       conn.send(`GET ${path} HTTP/1.0\nHost: ${host.toLowerCase()}\nUser-Agent: test`);
       await done;
       return parts.join("\n");
+    };
+    // Gone from the network at once, as when its browser tab is closed: its
+    // programs stop, and the other machines' connections to it just go quiet.
+    m.unplug = () => {
+      this.hub.unplug(transport);
+      for (const p of kernel.ps()) kernel.kill(p.pid);
     };
     this.machines.push(m);
     return m;

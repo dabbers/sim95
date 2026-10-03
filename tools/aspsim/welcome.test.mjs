@@ -9,6 +9,8 @@
 //   REGULAR            chats on STARTHERE's own #general
 //   NOCHAT             has its Chat service turned off
 //   CLASH              somebody there calls themselves regular too
+//   TAKEN              somebody there calls themselves StartHereBot
+//   CH0..CH5           machines that come and go
 //   node tools/aspsim/welcome.test.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -90,6 +92,7 @@ const journal = () => hub.widgets(bot(), "ListBox")[0].get("Items").join("\n");
 const N = chat(newbie);
 const R = chat(regular);
 const BOT = "StartHereBot";
+const QUIETWAIT = 15500; // sites and who: at most once in 15 s in a room
 const hellos = (c, nick) => c.from(BOT).filter((l) => l.startsWith("Hi " + nick + ",")).length;
 
 await test("somebody already in their own Chat room is greeted when the bot comes round, and told the room is linked", async () => {
@@ -102,7 +105,7 @@ await test("somebody already in their own Chat room is greeted when the bot come
     "Hi newbie, welcome to SIM95! I'm the greeter bot from STARTHERE.",
     "Open Voyager and go to http://starthere/ for AskSim, SimBook and Vapor.",
     "This room is linked to #general on every machine: whoever comes in anywhere on the network will be here too, and see what you say.",
-    "Say sites for the list, unlink to keep this room to this machine, or bye and I'll leave it alone.",
+    "Say sites for the list, who for who's here, unlink to keep this room to this machine, or bye and I'll leave it alone.",
   ]);
   assert.ok(N.lines().includes("*** StartHereBot joined #general"));
   await wait(() => N.users().includes(BOT), "the bot in the list");
@@ -138,7 +141,7 @@ await test("STARTHERE's own #general: greeted without the sales talk, and told w
     "Hi regular, welcome to SIM95! I'm the greeter bot from STARTHERE.",
     "Open Voyager and go to http://starthere/ for AskSim, SimBook and Vapor.",
     "This room is linked to #general on every machine: 1 person elsewhere on the network can talk with you here, and see what you say.",
-    "Say sites for the list.",
+    "Say sites for the list, or who for who's here.",
   ]);
   await R.say("bye");
   await sleep(1500);
@@ -161,6 +164,12 @@ await test("the rooms are one: each sees the other under their own name, and wha
   assert.equal(N.from(BOT).length, 7);
   assert.ok(N.from("regular").includes("bye"), "(regular's bye went across: it's chat)");
   assert.ok(N.users().includes(BOT), "and the bot didn't take it for NEWBIE's");
+});
+
+await test("who says who is in the conversation, and where", async () => {
+  await R.say("who");
+  await wait(() => R.from(BOT).some((l) => l.startsWith("Here now:")), "the answer: " + R.from(BOT).join(" / "));
+  assert.equal(R.from(BOT).find((l) => l.startsWith("Here now:")), "Here now: newbie (newbie), regular (starthere)");
 });
 
 let late, L;
@@ -239,9 +248,64 @@ await test("bye: it leaves that machine alone, for good, and its room leaves the
   assert.equal(L.users().length, 1, "it doesn't come back: " + L.users());
 });
 
+await test("the bot's name is taken: it takes the next one, and still answers", async () => {
+  const taken = await net.boot("TAKEN");
+  taken.run("C:\\PROGRAMS\\CHATSVC.SPK");
+  const T = chat(taken);
+  await T.open(undefined, "StartHereBot"); // before the bot comes round
+  await wait(() => T.users().includes("StartHereBo2"), "the bot as StartHereBo2: " + T.users(), 20000);
+  await wait(() => T.from("StartHereBo2").length >= 4, "its greeting: " + T.lines().join(" / "));
+  assert.match(T.from("StartHereBo2")[0], /^Hi StartHereBot, welcome to SIM95!/);
+  await T.say("StartHereBo2: who");
+  await wait(() => T.from("StartHereBo2").some((l) => l.startsWith("Here now:")), "an answer to its new name");
+  taken.unplug();
+});
+
+await test("a machine that vanishes (no goodbye from any connection): its people leave the conversation", async () => {
+  await wait(() => R.users().includes("clasher") && N.users().includes("clasher"), "clasher about");
+  clash.unplug();
+  await wait(() => !R.users().includes("clasher") && !N.users().includes("clasher"), "clasher gone: " + R.users() + " | " + N.users(), 15000);
+  assert.match(journal(), /CLASH has left the network/);
+});
+
+await test("machines coming and going fast: the lists end up right, and commands still work", async () => {
+  const comers = [];
+  for (let i = 0; i < 6; i++) {
+    const m = await net.boot("CH" + i);
+    m.run("C:\\PROGRAMS\\CHATSVC.SPK");
+    const c = chat(m);
+    await c.open();
+    comers.push([m, c]);
+    if (i % 2 === 1) await sleep(700);
+  }
+  await sleep(2500); // linked, or on the way
+  for (const i of [0, 2, 3, 5]) comers[i][0].unplug();
+  const staying = ["newbie", "regular", "ch1", "ch4"];
+  const right = (users) => [...users].filter((u) => u !== BOT).sort().join(",") === staying.slice().sort().join(",");
+  await wait(() => right(N.users()) && right(R.users()) && right(comers[1][1].users()) && right(comers[4][1].users()),
+    "the lists: " + [N, R, comers[1][1], comers[4][1]].map((c) => c.users().join(",")).join(" | "), 30000);
+  // everybody in four rooms: three stand-ins each
+  await wait(() => / 12 stand-ins /.test(hub.widgets(bot(), "Window")[0].get("Status")), "12 stand-ins: " + hub.widgets(bot(), "Window")[0].get("Status"), 15000);
+  await sleep(QUIETWAIT);
+  await N.say("who");
+  await wait(() => N.from(BOT).some((l) => l.startsWith("Here now:") && ["ch1", "ch4", "newbie", "regular"].every((n) => l.includes(n + " (")) && !l.includes("ch0")), "who after the churn: " + N.from(BOT).slice(-2).join(" / "));
+  await comers[4][1].say("still here");
+  await wait(() => N.from("ch4").includes("still here") && R.from("ch4").includes("still here"), "ch4 heard");
+});
+
+await test("a machine that comes back under its old name: back in the conversation, not greeted again", async () => {
+  const again = await net.boot("CH0");
+  again.run("C:\\PROGRAMS\\CHATSVC.SPK");
+  const c = chat(again);
+  await c.open();
+  await wait(() => N.users().includes("ch0") && c.users().includes("newbie"), "ch0 back: " + N.users() + " | " + c.users(), 20000);
+  await sleep(2000);
+  assert.equal(hellos(c, "ch0"), 0, "seen before");
+});
+
 await test("a Chat service that restarts gets the bot back, and its people back in the conversation", async () => {
   newbie.kernel.kill(proc(newbie, "CHATSVC"));
-  await wait(() => /Left NEWBIE \(closed\)/.test(journal()), "the room closed");
+  await wait(() => /The room on NEWBIE closed/.test(journal()), "the room closed");
   await wait(() => !R.users().includes("newbie"), "newbie gone from the hub");
   newbie.run("C:\\PROGRAMS\\CHATSVC.SPK");
   await N.close();

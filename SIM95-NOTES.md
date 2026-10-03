@@ -214,6 +214,17 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
 * **The Chat program defaults to this machine's own service, in
   `#general`.** So a newcomer who opens Chat and presses Connect is alone,
   unless something else is already waiting in that room.
+* **A machine that leaves says nothing.** When a machine drops off the
+  network (its tab is closed), the other machines' connections to it don't
+  close: they just go quiet. A program that waits to be told someone left
+  will list them forever. This was seen on the live network as people still
+  listed after their machine had gone. The Welcome Wagon notices instead:
+  * a machine missing from two `NET.Machines()` looks in a row has gone;
+  * a room that hasn't answered `WHO` for three looks round is presumed
+    dead.
+
+  The test network's `m.unplug()` does the same to a machine, so this can
+  be tested.
 * **`NET.Machines()` is a broadcast ping.** It waits about 0.7 s for the
   answers and returns them as `NAME ADDRESS MS`. Every machine sees the ping
   in Monitor, so calling it every half minute is fine, and calling it every
