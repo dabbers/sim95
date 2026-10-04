@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         SIM95 bridge (keeps STARTHERE up to date from GitHub)
 // @namespace    https://github.com/dabbers/sim95
-// @version      1
+// @version      2
 // @description  Runs tools/bridge-resident.js in the SIM95 tab of the machine named below: it brings the newest apps from GitHub every 15 minutes, and when asked from Sim Shell (bridge update), over ssh too.
 // @match        https://sim95.kippy.io/*
 // @run-at       document-idle
 // @grant        none
+// @sandbox      raw
+// @inject-into  page
 // ==/UserScript==
 //
 // Install: in Tampermonkey (or Violentmonkey), Create a new script, paste this
@@ -22,7 +24,10 @@
   // The machine to keep up to date: its name, or the first part of it. ""
   // for whichever machine runs in this browser.
   const MACHINE = "STARTHERE";
-  const FROM = "https://raw.githubusercontent.com/dabbers/sim95/main/tools/bridge-resident.js";
+  // Where the bridge itself comes from: main, or the branch it's on until
+  // that's merged (then also "bridge follow BRANCH" in Sim Shell).
+  const BRANCH = "main";
+  const FROM = `https://raw.githubusercontent.com/dabbers/sim95/${BRANCH}/tools/bridge-resident.js`;
 
   function findMachine() {
     for (const el of document.querySelectorAll("body *")) {
