@@ -909,7 +909,7 @@ END FUNCTION
   // sends QUIT and closes at once). This replaces it with the same service
   // that lets that pass, if it's the stock one, and restarts it.
   chatfix: {
-    vapor: { id: "CHATFIX", name: "Chat Fix: No More Crashes", kind: "program", category: "System", run: "C:\\PROGRAMS\\CHAT.SPK", tasks: "", startup: "", about: "SIM95's Chat service stops with \"Runtime error: Connection closed\" when someone disconnects at the wrong moment, and the machine's chat is gone until it restarts. This fixes it: an answer to someone who has already left is simply dropped." },
+    vapor: { id: "CHATFIX", name: "Chat Fix: No More Crashes", kind: "program", category: "System", run: "C:\\PROGRAMS\\CHAT.SPK", tasks: "", startup: "", about: "SIM95's Chat service stops with \"Runtime error: Connection closed\" when someone disconnects at the wrong moment, and the machine's chat is gone until it restarts. This fixes it: an answer to someone who has already left is simply dropped. And lines are handled strictly in the order they came." },
     title: "the Chat fix",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It fixes the
 ' Chat service (C:\\PROGRAMS\\CHATSVC.SPK, port 6667), which stops with

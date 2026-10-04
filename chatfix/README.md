@@ -24,6 +24,17 @@ it if the client is still there and lets a failure pass. Catching a failed
 `Send` is safe: unlike a failed `Connect` or `Receive` (see `SIM95-NOTES.md`),
 it doesn't spoil the rest of the handler.
 
+**And lines are handled in the order they came.** Each message to the stock
+service is a task of its own, and SIM95 pauses a task every 512 statements, so
+a slow line's task could be overtaken by a quick one sent after it. That was
+seen while building the Welcome Wagon: messages reached the room shuffled, and
+a `JOIN` right after `NICK` went out under the old name. Now a message, or a
+goodbye, only joins a queue. Whichever task finds nobody working on the
+queue works through it, first come first served. So the service keeps the
+order whatever the pauses do. (With today's SIM95 the shuffle hasn't
+happened again in tests, even with bursts of 30 lines, so the stock service
+may already keep the order in practice; the queue makes sure of it.)
+
 ## Installing
 
 Paste `INSTALL.SPK` into SPARK on any machine and press F5. It's also in the
@@ -38,4 +49,7 @@ Vapor stores, under System.
 Tests: `node tools/aspsim/chatfix.test.mjs`:
 * makes the stock service crash with quick disconnects;
 * installs the fix;
-* sends 40 more quick disconnects, and checks that chat still works.
+* sends 40 more quick disconnects, and checks that chat still works;
+* checks the order: `NICK` then `JOIN` at once, four messages of very
+  different lengths in a row, and a message just before a disconnect, which
+  goes out before the goodbye.

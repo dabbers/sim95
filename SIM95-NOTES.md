@@ -192,7 +192,11 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
       `NICK #chan old new` that comes in the meantime.
   * **A fix in the service** would be to handle a connection's lines one at
     a time, in order: keep a queue per connection, and work through it from
-    one task.
+    one task. [`chatfix/`](chatfix/) does this (one queue for all, which
+    keeps each connection's order).
+  * **Later:** with the SIM95 of October 2026, the shuffle didn't happen again
+    in `tools/aspsim`, not even with bursts of 30 lines of mixed length, to
+    the stock service or the fixed one.
 * **Bug: Disconnect in Chat often crashes the Chat service, with an error
   box.**
   * **Symptom:** the newcomer presses Disconnect and gets

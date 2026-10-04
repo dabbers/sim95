@@ -97,6 +97,32 @@ await test("with the fix: rude goodbyes by the dozen, and chat carries on", asyn
   await wait(() => ann.heard.includes("MSG #general bob hello ann"), "the message: " + ann.heard.join(" | "));
 });
 
+await test("with the fix: lines are handled in the order they were sent", async () => {
+  const ann = await client(bravo, "ALPHA");
+  ann.say("NICK ann2");
+  await wait(() => ann.heard.includes("OK You are now ann2"), "ann's nick");
+  ann.say("JOIN #order");
+  await sleep(300);
+  // a NICK then a JOIN at once: the room hears the new name
+  const cat = await client(charlie, "ALPHA");
+  cat.say("NICK cat");
+  cat.say("JOIN #order");
+  const joins = () => ann.heard.filter((t) => t.startsWith("JOIN #order ") && t !== "JOIN #order ann2");
+  await wait(() => joins().length > 0, "cat joins");
+  assert.deepEqual(joins(), ["JOIN #order cat"]);
+  // long and short lines, one straight after another
+  const lines = ["x".repeat(390), "two", "y".repeat(300), "four"];
+  for (const l of lines) cat.say("MSG #order " + l);
+  await wait(() => ann.heard.filter((t) => t.startsWith("MSG #order cat ")).length === 4, "four messages");
+  assert.deepEqual(ann.heard.filter((t) => t.startsWith("MSG #order cat ")).map((t) => t.slice(15)), lines);
+  // a message, then gone: the message still goes out, and then the goodbye
+  cat.say("MSG #order bye now");
+  cat.close();
+  await wait(() => ann.heard.includes("PART #order cat"), "cat's goodbye");
+  assert.ok(ann.heard.indexOf("MSG #order cat bye now") >= 0 && ann.heard.indexOf("MSG #order cat bye now") < ann.heard.indexOf("PART #order cat"));
+  assert.equal(crashed(alpha), false);
+});
+
 net.shutdown();
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

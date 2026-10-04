@@ -7,11 +7,21 @@
 ' Disconnect sends QUIT and closes at once, so "OK Bye" went to a closed
 ' connection, and that stopped the whole service with "Connection closed".
 ' Every line to a client now goes through Tell, which lets that pass.
+'
+' And lines are handled in the order they came. Each message is a task of
+' its own, and a task is paused every 512 statements, so a long line's task
+' could finish after a short one sent later: four MSGs reached the room
+' shuffled, and a JOIN right after NICK went out under the old name. Now a
+' message (or a goodbye) only joins a queue, and whichever task finds no one
+' working on the queue works through it, first come first served.
 
 VAR sock AS NET_Socket
 VAR conns AS Array OF NET_Connection
 VAR nicks AS Array OF String
 VAR chans AS Array OF String      ' per client: ",#a,#b," so a channel is found with Contains
+VAR qConn AS Array OF NET_Connection   ' lines waiting their turn, and who sent them
+VAR qLine AS Array OF String            ' (Chr(0) for a goodbye: the connection closed)
+VAR working AS Bool
 
 SUB Main ()
     sock = NET_Socket.New()
@@ -22,14 +32,47 @@ SUB Main ()
 END SUB
 
 SUB Sock_OnConnect (conn AS NET_Connection)
-    conn.Accept()
+    ' (the client is known before anything it sends can be handled)
     conns.Add(conn)
     nicks.Add("guest" + Str(100 + Rnd(900)))
     chans.Add(",")
+    conn.Accept()
     Tell(conn, "OK Welcome to " + NET.HostName + " chat. You are " + nicks[nicks.Count - 1] + ". Commands: NICK, JOIN, MSG, WHO, QUIT")
 END SUB
 
 SUB Sock_OnClose (conn AS NET_Connection)
+    Queue(conn, Chr(0))
+END SUB
+
+SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+    Queue(conn, message)
+END SUB
+
+' Into the queue; then, if nobody is working through it, this task does.
+' (Looked at again after stopping: a line that came in just then isn't left.)
+SUB Queue (conn AS NET_Connection, message AS String)
+    VAR c AS NET_Connection
+    VAR m AS String
+    qConn.Add(conn)
+    qLine.Add(message)
+    WHILE qLine.Count > 0 AND NOT working
+        working = TRUE
+        WHILE qLine.Count > 0
+            c = qConn[0]
+            m = qLine[0]
+            qConn.RemoveAt(0)
+            qLine.RemoveAt(0)
+            IF m = Chr(0) THEN
+                Gone(c)
+            ELSE
+                Handle(c, m)
+            END IF
+        END WHILE
+        working = FALSE
+    END WHILE
+END SUB
+
+SUB Gone (conn AS NET_Connection)
     VAR i AS Integer
     i = conns.IndexOf(conn)
     IF i < 0 THEN RETURN
@@ -94,7 +137,7 @@ SUB LeaveAll (i AS Integer)
     chans[i] = ","
 END SUB
 
-SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+SUB Handle (conn AS NET_Connection, message AS String)
     VAR i AS Integer
     VAR sp AS Integer
     VAR cmd AS String
