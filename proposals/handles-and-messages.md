@@ -8,7 +8,8 @@ become ordinary SPARK programs that anyone can write:
 * window managers, taskbars and launchers;
 * automation and testing tools;
 * programs that talk to each other (IPC);
-* remote desktop.
+* remote desktop and screen sharing;
+* replacement desktops: taskbars, docks, launchers, whole shells.
 
 The idea is the one Windows is built on: everything is a *handle*, and you
 work with a handle by *sending it messages*.
@@ -22,6 +23,11 @@ SIM95 is most of the way there already:
 
 This proposal exposes those ids, and lets one program fire another
 program's events, with permission checks.
+
+**One principle runs through it: no program has powers the others lack.**
+That includes the desktop itself (section 7). Anything the built-in parts
+of SIM95 do, a SPARK program can do the same way, so anyone can build the
+next thing without waiting for it to be built in.
 
 ## 1. Handles
 
@@ -67,6 +73,46 @@ Events, so nothing has to poll. The program asks for them once, with
 ```
 onWindow(h AS Integer, what AS String)      what: open, close, move, state, title, focus
 ```
+
+### Watching everything that changes
+
+Window events say when windows come and go. To keep a faithful copy of a
+window, a program also needs to know when anything *inside* it changes:
+* a label's text;
+* a list's items;
+* a check box;
+* a progress bar;
+* a control appearing, moving or going.
+
+```
+SYS.Watch(h AS Integer, TRUE)                     everything in window h
+onProperty(h AS Integer, name AS String, value AS String)
+onControl(h AS Integer, what AS String)           what: add, remove
+```
+
+* **Where it comes from:** SIM95 already marks a control as changed on every
+  property change; that's what redraws the screen. These events come from
+  the same place.
+* **Everyone sees the same changes:** the screen, a remote viewer, an
+  automation script and a screen reader all get them.
+
+### Canvases
+
+A Canvas already keeps the list of drawing calls made on it since it was
+last cleared: `Line`, `FillRect`, `Text`, `Picture`. So:
+
+```
+SYS.Drawing(h AS Integer) AS Array OF String   the calls since the last Clear, one a line
+onDrawing(h AS Integer, call AS String)        each new call, while watched
+```
+
+These are drawing commands, not pixels. They are small, exact and the same
+at any size. Windows' remote desktop worked this way before it sent
+pictures.
+
+Between them, the window tree, the change events and the drawing commands
+capture **everything on the screen**. No screenshots are needed, because
+the screen *is* this data.
 
 ## 3. Doing: messages
 
@@ -133,7 +179,7 @@ Examples, from programs that exist now:
 
 | Right | Covers | Granted |
 |---|---|---|
-| see | `Windows`, `Children`, `Info`, `Text`, `Items`, `onWindow` | to every program on the machine |
+| see | `Windows`, `Children`, `Info`, `Text`, `Items`, `Drawing`, `onWindow`, `onProperty`, `onControl`, `onDrawing` | to every program on the machine |
 | manage | `Move`, `State`, `Focus`, `Close` | to every program on the machine (it's what the taskbar does) |
 | input | `Click`, `SetText`, `Key`, `Select` | only when the owner allows it: once per program, remembered in `C:\SYSTEM\RIGHTS.INI` |
 | message | custom messages | to every program, but a receiver can refuse by its return value |
@@ -154,6 +200,8 @@ fit (Windows' RPC). One message each way, like the Files service:
 -> SEND h name data               <- OK + the answer, or ERR why
 -> POST h name data
 -> WATCH                          <- WINDOW h what, as things happen
+-> WATCH h                        <- PROP h name value / CTRL h what / DRAW h call
+-> DRAWING h                      <- OK + its drawing calls
 ```
 
 * **A remote handle is machine + handle.** A SPARK wrapper could make
@@ -166,12 +214,71 @@ fit (Windows' RPC). One message each way, like the Files service:
   border round the screen while someone is in control.
 
 Remote desktop is then an app:
-1. `WATCH` and `INFO` give the windows.
-2. `CHILDREN` and `TEXT` give their contents. That's text, which redraws
-   well over 64K messages; pictures would not.
+1. `WINDOWS`, `CHILDREN` and `INFO` give the windows and what's in them.
+2. **The viewer builds the same controls locally,** from that information.
+   * Remote windows look native and stay sharp at any size.
+   * Only changes cross the network after that: `PROP`, `CTRL`, and `DRAW`
+     for canvases. That's text, which fits well in 64K messages; pictures
+     would not.
 3. `SEND` carries the clicks and keys back.
+   * They go through the same steps as a person's own input (see
+     `input-and-interaction.md`), so the remote program can't tell the
+     difference.
 
-## 7. In stages
+The same pieces make other things:
+* screen sharing that only watches;
+* a teacher seeing several machines at once;
+* a recorder that saves a session as text and plays it back;
+* a screen reader;
+* tests that check what a program shows.
+
+## 7. The desktop is a program
+
+Today the desktop, taskbar and Start menu are built into SIM95. Instead, the
+shell can be an ordinary SPARK program, like Explorer in Windows:
+* chosen in `C:\SYSTEM\SYSTEM.INI`;
+* edited, closed and run again like anything else;
+* with handles like anything else, so it can be watched, captured and sent
+  messages.
+
+The current desktop would be the first such program. It would ship as SPARK
+source anyone can read, copy and change.
+
+The few things only a shell needs, all general enough for docks, kiosks and
+launchers too:
+
+| Primitive | What it does |
+|---|---|
+| `shell=` in `[boot]` of `SYSTEM.INI` | the program started as the desktop, as in Windows 3.1 and 95 |
+| `GUI_Window.Style = "desktop"` | full screen, behind every other window, no title bar, not on the taskbar |
+| `SYS.ReserveEdge(edge, size)` | keeps a strip of the screen that windows don't cover when maximized: taskbars, docks, toolbars |
+| `SYS.Hotkey(key)` | a key combination that reaches this program from anywhere: Ctrl+Esc for Start, Alt+Tab |
+| handles, `onWindow`, `SYS.Send` (sections 2-4) | the taskbar's buttons, and what they do |
+| popup windows (`input-and-interaction.md`) | the Start menu and its sub-menus |
+| `SYS.Register` / `SYS.Find` (section 4) | other programs find the tray, and send it their icons as messages |
+
+**A shell has no other special powers.** So a new shell can be run as an
+ordinary window while the current one stays in charge:
+* it lists the windows, switches between them and starts programs;
+* `ReserveEdge` and `Hotkey` simply do nothing for a program that isn't the
+  shell, so it can be tested and restarted;
+* once it works, it goes in `SYSTEM.INI`.
+
+People ran replacement shells the same way on Windows 3.1.
+
+**Nothing here protects anyone,** in keeping with SIM95: a broken shell
+breaks the machine, like deleting system files does. Two things from
+Windows 95 make developing one bearable:
+* **Ctrl+Alt+Del is handled by SIM95 itself,** not the shell, as it was by
+  Windows. So Task Manager still opens when the shell has died, and the
+  shell can be started again from it.
+* **Safe Mode:** holding a key at boot (F8, as in 95) starts the built-in
+  desktop and skips `C:\SYSTEM\STARTUP`.
+  * It changes no files, so the developer fixes `SYSTEM.INI` or the shell
+    and reboots normally.
+  * Full recovery stays for real disasters.
+
+## 8. In stages
 
 Each stage is useful without the next:
 
@@ -179,15 +286,21 @@ Each stage is useful without the next:
    security tools.
 2. **Messages** (section 3): window managers, automation, testing.
 3. **IPC** (section 4): programs that work together.
-4. **The shell service** (section 6): remote administration, remote
+4. **Watching everything** (the rest of section 2): faithful copies of
+   windows, recorders, screen readers, testing.
+5. **The shell service** (section 6): remote administration, remote
    desktop, dashboards over several machines.
+6. **The desktop as a program** (section 7): replacement shells, docks,
+   kiosks.
 
 ## Open questions
 
 * **Controls:** does every control get a handle, or only on request?
   Windows gives every control a handle; that's simple, but costs a little.
 * **Menus:** are they controls, for `Select`, or something of their own?
-* **Canvases** (games, Sketch): send their drawing as a list of commands,
-  or leave them out of remote desktop at first?
+* **Canvases with a lot of drawing** (games redrawing every frame): send
+  every call, or let the viewer ask for a snapshot of the call list now and
+  then?
+* **Which key opens Safe Mode,** and does the boot screen show it?
 * **Where the network rights live:** in `USERS.INI`, beside the password,
   or a file of their own?
