@@ -132,6 +132,7 @@ const portal = {
   WIKI: ["The encyclopedia: hundreds of articles from Wikipedia, as of 1996.", "#000040"],
   STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
   NIC: ["Register your own domain name (.sim, .com, .net, .org) and point it at your machine.", "#000066"],
+  WALL: ["One wall of pixels the whole network draws on together, a pixel at a time.", "#800080"],
 };
 const appInf = (app) => {
   const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
@@ -547,6 +548,67 @@ FUNCTION WelcomeHere () AS Bool
     SYS.Exit(0)
     RETURN FALSE
 END FUNCTION
+`,
+  },
+  // The Pixel Wall: one wall of pixels the whole network draws on, on the
+  // central host. Plain HTML for Voyager; live in Simxplorer.
+  pixelwall: {
+    folder: "WALL",
+    into: "WALL",
+    title: "The Pixel Wall",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5 - on the central
+' host, ${CENTRAL.toUpperCase()}. It puts the Pixel Wall in C:\\WEB\\WALL:
+' http://${CENTRAL}/wall/. Everyone on the network draws on the one 64 by 64
+' wall, a pixel at a time. Voyager gets plain pages; in Simxplorer the wall is
+' live. The wall is kept in C:\\WALLDATA and left alone, so running this again
+' upgrades the pages. (On any other machine it warns you first: a second wall
+' would split the people drawing.)`,
+    copy: [["pixelwall/WEB", "C:\\WEB"]],
+    dirs: [],
+    first: ["IF NOT WallHere() THEN RETURN", "WallSetup()"],
+    last: [],
+    code: () => `
+VAR wallWin AS GUI_Window
+
+' The central host, or a yes to installing it somewhere else anyway.
+FUNCTION WallHere () AS Bool
+    VAR box AS GUI_MessageBox
+    IF NET.HostName.Lower() = "${CENTRAL}" THEN RETURN TRUE
+    wallWin = GUI_Window.New("Pixel Wall Setup", 10, 10)
+    box = GUI_MessageBox.New(wallWin)
+    box.Title = "Pixel Wall Setup"
+    box.Kind = "warn"
+    box.Buttons = "yesno"
+    box.Text = "This machine is " + NET.HostName.Upper() + ", not ${CENTRAL.toUpperCase()}." + NL + NL _
+        + "The Pixel Wall is meant for the central host, so that everybody draws on the same wall." + NL + NL _
+        + "Install it here anyway (for testing, say)?"
+    IF box.Show() THEN
+        wallWin.Close()
+        Print("  (not the central host, ${CENTRAL}: installing anyway)")
+        RETURN TRUE
+    END IF
+    Print("The Pixel Wall was not installed: it belongs on ${CENTRAL}.")
+    SYS.Exit(0)
+    RETURN FALSE
+END FUNCTION
+
+' Where the wall is kept: made, with a white wall, the first time only.
+SUB WallSetup ()
+    VAR row AS String
+    VAR wall AS String
+    VAR k AS Integer
+    IF NOT FS.Exists("C:\\WALLDATA") THEN FS.MakeDir("C:\\WALLDATA")
+    IF FS.Exists("C:\\WALLDATA\\WALL.TXT") THEN RETURN
+    FOR k = 1 TO 64
+        row = row + "F"
+    NEXT
+    FOR k = 1 TO 64
+        wall = wall + row + NL
+    NEXT
+    FS.Write("C:\\WALLDATA\\WALL.TXT", wall)
+    FS.Write("C:\\WALLDATA\\VER.TXT", "0")
+    Print("  made a white wall in C:\\WALLDATA")
+END SUB
 `,
   },
   // simweb: for every machine with a web site. The web server with sites by

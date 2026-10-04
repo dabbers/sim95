@@ -52,6 +52,10 @@ A series of programs for the sim95 playground
   newcomers, and points them at STARTHERE's sites. It also links every
   machine's `#general` into one conversation, with people under their own
   names.
+* [`pixelwall/`](pixelwall/) – the Pixel Wall, on STARTHERE: one 64 by 64
+  wall the whole network draws on, a pixel every 15 seconds. Plain pages for
+  Voyager; live in Simxplorer, where other people's pixels appear by
+  themselves.
 * [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
   scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
@@ -95,5 +99,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

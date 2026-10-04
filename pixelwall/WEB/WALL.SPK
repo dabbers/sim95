@@ -1,0 +1,273 @@
+' WALL.SPK - the Pixel Wall's library, shared by its pages.
+'
+' The wall is 64 by 64 pixels in SIM95's 16 colours, one hex digit each:
+' C:\WALLDATA\WALL.TXT is 64 lines of 64 digits. Anyone may set one pixel
+' every COOLDOWN seconds (each machine, by its address).
+'   VER.TXT    a number that goes up with every pixel, so a page can tell
+'              whether the wall has changed
+'   COOL.TXT   address|when (seconds since 1970) each machine last placed one
+'   LOG.TXT    the latest pixels, oldest first: name|x|y|colour|clock
+'   NAMES.TXT  machine names by address (NAME ADDRESS), and when they were
+'              last looked up, so the log can say who
+' The wall is seen 16 by 16 at a time: region r (0-15) is column r MOD 4,
+' row r \ 4 of a 4 by 4 grid.
+
+CONST DATADIR = "C:\WALLDATA"
+CONST SIZE = 64
+CONST TILE = 16
+CONST COOLDOWN = 15
+CONST LOGKEEP = 40
+CONST FEEDROWS = 8
+CONST HEXDIGITS = "0123456789ABCDEF"
+
+FUNCTION ReadOr (p AS String, fallback AS String) AS String
+    IF FS.Exists(p) THEN RETURN FS.Read(p)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION ColourHex (c AS Integer) AS String
+    VAR all AS Array OF String
+    all = ["#000000", "#800000", "#008000", "#808000", "#000080", "#800080", "#008080", "#C0C0C0", "#808080", "#FF0000", "#00FF00", "#FFFF00", "#0000FF", "#FF00FF", "#00FFFF", "#FFFFFF"]
+    RETURN all[c]
+END FUNCTION
+
+FUNCTION ColourName (c AS Integer) AS String
+    VAR all AS Array OF String
+    all = ["Black", "Maroon", "Green", "Olive", "Navy", "Purple", "Teal", "Silver", "Gray", "Red", "Lime", "Yellow", "Blue", "Magenta", "Cyan", "White"]
+    RETURN all[c]
+END FUNCTION
+
+' A number from a query or a form, kept between lo and hi ("" or junk: dflt).
+FUNCTION Num (s AS String, lo AS Integer, hi AS Integer, dflt AS Integer) AS Integer
+    VAR k AS Integer
+    VAR t AS String
+    t = s.Trim()
+    IF t = "" OR t.Length > 6 THEN RETURN dflt
+    FOR k = 0 TO t.Length - 1
+        IF Asc(t.CharAt(k)) < 48 OR Asc(t.CharAt(k)) > 57 THEN RETURN dflt
+    NEXT
+    k = Int(Val(t))
+    IF k < lo OR k > hi THEN RETURN dflt
+    RETURN k
+END FUNCTION
+
+' Where ch is last in s, or -1.
+FUNCTION LastAt (s AS String, ch AS String) AS Integer
+    VAR k AS Integer
+    FOR k = s.Length - 1 TO 0 STEP -1
+        IF s.CharAt(k) = ch THEN RETURN k
+    NEXT
+    RETURN -1
+END FUNCTION
+
+FUNCTION Blank () AS String
+    VAR line AS String
+    VAR out AS Array OF String
+    VAR k AS Integer
+    FOR k = 1 TO SIZE
+        line = line + "F"
+    NEXT
+    FOR k = 1 TO SIZE
+        out.Add(line)
+    NEXT
+    RETURN out.Join(Chr(10)) + Chr(10)
+END FUNCTION
+
+' The wall's 64 rows (a missing or damaged one is white).
+FUNCTION WallRows () AS Array OF String
+    VAR out AS Array OF String
+    VAR got AS Array OF String
+    VAR k AS Integer
+    VAR row AS String
+    got = ReadOr(DATADIR + "\WALL.TXT", Blank()).Replace(Chr(13), "").Split(Chr(10))
+    FOR k = 0 TO SIZE - 1
+        row = ""
+        IF k < got.Count THEN row = got[k].Upper()
+        WHILE row.Length < SIZE
+            row = row + "F"
+        END WHILE
+        out.Add(row.Substring(0, SIZE))
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION Version () AS Integer
+    RETURN Int(Val(ReadOr(DATADIR + "\VER.TXT", "0")))
+END FUNCTION
+
+' Region r's 256 digits, row by row.
+FUNCTION RegionDigits (rows AS Array OF String, r AS Integer) AS String
+    VAR out AS String
+    VAR y AS Integer
+    FOR y = 0 TO TILE - 1
+        out = out + rows[Int(r / 4) * TILE + y].Substring((r MOD 4) * TILE, TILE)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Seconds before addr may place another pixel (0: now).
+FUNCTION CoolLeft (addr AS String) AS Integer
+    VAR line AS String
+    VAR left AS Integer
+    FOR EACH line IN ReadOr(DATADIR + "\COOL.TXT", "").Split(Chr(10))
+        IF line.StartsWith(addr + "|") THEN
+            left = Int(Val(line.Substring(addr.Length + 1, line.Length - addr.Length - 1))) + COOLDOWN - TIME.Now
+            ' (a clock that went back is no reason to wait longer)
+            IF left > COOLDOWN THEN RETURN 0
+            IF left > 0 THEN RETURN left
+            RETURN 0
+        END IF
+    NEXT
+    RETURN 0
+END FUNCTION
+
+' The latest pixels, newest first, as "NAME put Red at 12,40 (14:05)".
+FUNCTION Feed () AS Array OF String
+    VAR lines AS Array OF String
+    VAR out AS Array OF String
+    VAR k AS Integer
+    VAR p AS Array OF String
+    lines = ReadOr(DATADIR + "\LOG.TXT", "").Replace(Chr(13), "").Split(Chr(10))
+    FOR k = lines.Count - 1 TO 0 STEP -1
+        p = lines[k].Split("|")
+        IF p.Count < 5 THEN CONTINUE
+        out.Add(p[0] + " put " + ColourName(Num(p[3], 0, 15, 0)) + " at " + p[1] + "," + p[2] + " (" + p[4] + ")")
+        IF out.Count >= FEEDROWS THEN BREAK
+    NEXT
+    RETURN out
+END FUNCTION
+
+' What a page polls for, and what placing a pixel answers with: the version,
+' the seconds to wait, region r's digits, then the feed, a line each.
+FUNCTION State (r AS Integer, addr AS String) AS String
+    RETURN Str(Version()) + Chr(10) + Str(CoolLeft(addr)) + Chr(10) + RegionDigits(WallRows(), r) + Chr(10) + Feed().Join(Chr(10))
+END FUNCTION
+
+' The machine at addr, by name. Looking every machine up takes a moment, so
+' names are kept, and looked up again at most once a minute.
+FUNCTION WhoIs (addr AS String) AS String
+    VAR text AS String
+    VAR line AS String
+    VAR p AS Array OF String
+    VAR found AS String
+    text = ReadOr(DATADIR + "\NAMES.TXT", "0" + Chr(10))
+    FOR EACH line IN text.Split(Chr(10))
+        p = line.Trim().Split(" ")
+        IF p.Count >= 2 AND p[p.Count - 1] = addr THEN RETURN p[0]
+    NEXT
+    IF TIME.Now - Int(Val(text.Split(Chr(10))[0])) < 60 THEN RETURN addr
+    TRY
+        text = Str(TIME.Now) + Chr(10)
+        FOR EACH line IN NET.Machines()
+            p = line.Trim().Split(" ")
+            IF p.Count >= 2 THEN
+                text = text + p[0].Upper() + " " + p[1] + Chr(10)
+                IF p[1] = addr THEN found = p[0].Upper()
+            END IF
+        NEXT
+        FS.Write(DATADIR + "\NAMES.TXT", text)
+    CATCH err
+    END TRY
+    IF found <> "" THEN RETURN found
+    RETURN addr
+END FUNCTION
+
+' Two pixels may arrive at once, and each rewrites the wall. The lock is a
+' folder (FS.MakeDir fails when it's there); one left by a page that died is
+' cleared after a few seconds.
+FUNCTION TakeLock () AS Bool
+    VAR tries AS Integer
+    VAR at AS String
+    WHILE tries < 100
+        tries = tries + 1
+        TRY
+            FS.MakeDir(DATADIR + "\LOCK")
+            FS.Write(DATADIR + "\LOCK\AT.TXT", Str(TIME.Now))
+            RETURN TRUE
+        CATCH err
+            at = ReadOr(DATADIR + "\LOCK\AT.TXT", "")
+            IF (at <> "" AND TIME.Now - Int(Val(at)) > 5) OR (at = "" AND tries MOD 25 = 0) THEN
+                DropLock()
+            ELSE
+                SYS.Sleep(10)
+            END IF
+        END TRY
+    END WHILE
+    RETURN FALSE
+END FUNCTION
+
+SUB DropLock ()
+    TRY
+        IF FS.Exists(DATADIR + "\LOCK\AT.TXT") THEN FS.Delete(DATADIR + "\LOCK\AT.TXT")
+        IF FS.Exists(DATADIR + "\LOCK") THEN FS.Delete(DATADIR + "\LOCK")
+    CATCH err
+    END TRY
+END SUB
+
+' A pixel from addr: "OK", "WAIT" (too soon) or "BUSY" (the wall couldn't
+' be had).
+FUNCTION Place (addr AS String, x AS Integer, y AS Integer, c AS Integer) AS String
+    VAR rows AS Array OF String
+    VAR cool AS Array OF String
+    VAR line AS String
+    VAR logRows AS Array OF String
+    VAR who AS String
+    IF CoolLeft(addr) > 0 THEN RETURN "WAIT"
+    who = WhoIs(addr)
+    IF NOT TakeLock() THEN RETURN "BUSY"
+    IF CoolLeft(addr) > 0 THEN
+        DropLock()
+        RETURN "WAIT"
+    END IF
+    rows = WallRows()
+    rows[y] = rows[y].Substring(0, x) + HEXDIGITS.CharAt(c) + rows[y].Substring(x + 1, SIZE - x - 1)
+    FS.Write(DATADIR + "\WALL.TXT", rows.Join(Chr(10)) + Chr(10))
+    FS.Write(DATADIR + "\VER.TXT", Str(Version() + 1))
+    cool.Add(addr + "|" + Str(TIME.Now))
+    FOR EACH line IN ReadOr(DATADIR + "\COOL.TXT", "").Replace(Chr(13), "").Split(Chr(10))
+        ' (others who are still waiting; the rest are forgotten)
+        IF line.Contains("|") AND NOT line.StartsWith(addr + "|") THEN
+            IF TIME.Now - Int(Val(line.Split("|")[1])) < COOLDOWN THEN cool.Add(line)
+        END IF
+    NEXT
+    FS.Write(DATADIR + "\COOL.TXT", cool.Join(Chr(10)) + Chr(10))
+    FOR EACH line IN ReadOr(DATADIR + "\LOG.TXT", "").Replace(Chr(13), "").Split(Chr(10))
+        IF line <> "" THEN logRows.Add(line)
+    NEXT
+    logRows.Add(who.Replace("|", " ") + "|" + Str(x) + "|" + Str(y) + "|" + Str(c) + "|" + TIME.Clock.Substring(0, 5))
+    WHILE logRows.Count > LOGKEEP
+        logRows.RemoveAt(0)
+    END WHILE
+    FS.Write(DATADIR + "\LOG.TXT", logRows.Join(Chr(10)) + Chr(10))
+    DropLock()
+    RETURN "OK"
+END FUNCTION
+
+' The wall as a picture: 64 by 64, a hex digit a pixel.
+FUNCTION Picture () AS String
+    RETURN "SIM95PIC " + Str(SIZE) + " " + Str(SIZE) + Chr(10) + WallRows().Join(Chr(10)) + Chr(10)
+END FUNCTION
+
+' Is it Simxplorer asking (and not asking for the plain page)?
+FUNCTION Fancy () AS Bool
+    IF REQUEST.Query("plain") <> "" THEN RETURN FALSE
+    RETURN REQUEST.Header("User-Agent").Contains("Simxplorer")
+END FUNCTION
+
+' Text as JavaScript's escape() makes it, for unescape() to read back.
+FUNCTION JsEscape (s AS String) AS String
+    VAR out AS String
+    VAR k AS Integer
+    VAR c AS Integer
+    VAR ch AS String
+    FOR k = 0 TO s.Length - 1
+        ch = s.CharAt(k)
+        c = Asc(ch)
+        IF (c >= 48 AND c <= 57) OR (c >= 65 AND c <= 90) OR (c >= 97 AND c <= 122) OR ch = "@" OR ch = "*" OR ch = "_" OR ch = "+" OR ch = "-" OR ch = "." OR ch = "/" THEN
+            out = out + ch
+        ELSEIF c < 256 THEN
+            out = out + "%" + HEXDIGITS.CharAt(Int(c / 16)) + HEXDIGITS.CharAt(c MOD 16)
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
