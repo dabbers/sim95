@@ -231,6 +231,7 @@ SUB File17 ()
     t = t + "VAR left AS Integer" + NL
     t = t + "VAR msg AS String" + NL
     t = t + "VAR here AS String" + NL
+    t = t + "VAR pics AS String" + NL
     t = t + "VAR line AS String" + NL
     t = t + "VAR mark AS String" + NL
     t = t + "r = Num(REQUEST.Query(""r""), 0, 15, 5)" + NL
@@ -262,6 +263,12 @@ SUB File17 ()
     t = t + "rows = WallRows()" + NL
     t = t + "digits = RegionDigits(rows, r)" + NL
     t = t + "here = REQUEST.Path.Substring(0, LastAt(REQUEST.Path, ""/"") + 1)" + NL
+    t = t + "' The pictures by this machine's address, not its name: Voyager asks for them" + NL
+    t = t + "' all at once, and when several lookups of one name are out at once, the" + NL
+    t = t + "' network keeps only the last (SIM95-NOTES.md). By name, one picture came." + NL
+    t = t + "' (A site served by name, under simweb, keeps them by name, as it must.)" + NL
+    t = t + "pics = """"" + NL
+    t = t + "IF REQUEST.Header(""X-Base-Path"") = """" AND NET.LocalAddress <> """" THEN pics = ""http://"" + NET.LocalAddress + here" + NL
     t = t + "%><html><head><title>The Pixel Wall</title><meta name=""robots"" content=""nofollow""></head>" + NL
     t = t + "<body bgcolor=""#C0C0C0"" link=""#000080"" vlink=""#000080"" onload=""Page_Load"">" + NL
     t = t + "<script type=""spark"">" + NL
@@ -275,10 +282,10 @@ SUB File17 ()
     t = t + "<p><table cellspacing=""10"" border=""0""><tr><td valign=""top"">" + NL
     t = t + "<table cellspacing=""1"" cellpadding=""0"" border=""0"" bgcolor=""#808080"">" + NL
     t = t + "<% FOR y = 0 TO TILE - 1 %><tr><% FOR x = 0 TO TILE - 1" + NL
-    t = t + "    k = HEXDIGITS.IndexOf(digits.CharAt(y * TILE + x)) %><td bgcolor=""<%= ColourHex(k) %>""><a href=""place.asp?x=<%= (r MOD 4) * TILE + x %>&y=<%= Int(r / 4) * TILE + y %>&c=<%= c %>&r=<%= r %>""><img src=""c<%= HEXDIGITS.CharAt(k) %>.pic"" width=""20"" height=""20"" alt=""""></a></td><% NEXT %></tr>" + NL
+    t = t + "    k = HEXDIGITS.IndexOf(digits.CharAt(y * TILE + x)) %><td bgcolor=""<%= ColourHex(k) %>""><a href=""place.asp?x=<%= (r MOD 4) * TILE + x %>&y=<%= Int(r / 4) * TILE + y %>&c=<%= c %>&r=<%= r %>""><img src=""<%= pics %>c<%= HEXDIGITS.CharAt(k) %>.pic"" width=""20"" height=""20"" alt=""""></a></td><% NEXT %></tr>" + NL
     t = t + "<% NEXT %></table>" + NL
     t = t + "</td><td valign=""top"">" + NL
-    t = t + "<b>The whole wall</b><br><img src=""wall.asp?v=<%= Version() %>"" width=""128"" height=""128"" alt=""the wall""><br>" + NL
+    t = t + "<b>The whole wall</b><br><img src=""<%= pics %>wall.asp?v=<%= Version() %>"" width=""128"" height=""128"" alt=""the wall""><br>" + NL
     t = t + "<font size=""2"">Go to another part:</font><br>" + NL
     t = t + "<table cellspacing=""1"" cellpadding=""0"" border=""0"" bgcolor=""#808080"">" + NL
     t = t + "<% FOR k = 0 TO 15" + NL
@@ -293,7 +300,7 @@ SUB File17 ()
     t = t + "    ' (a one-colour picture in each link, which a link doesn't underline;" + NL
     t = t + "    ' the colour in use has a dot in it)" + NL
     t = t + "    mark = ""c""" + NL
-    t = t + "    IF k = c THEN mark = ""s"" %><td bgcolor=""<%= ColourHex(k) %>""><a href=""index.asp?r=<%= r %>&c=<%= k %>""><img src=""<%= mark + HEXDIGITS.CharAt(k) %>.pic"" width=""20"" height=""20"" alt=""""></a></td><%" + NL
+    t = t + "    IF k = c THEN mark = ""s"" %><td bgcolor=""<%= ColourHex(k) %>""><a href=""index.asp?r=<%= r %>&c=<%= k %>""><img src=""<%= pics %><%= mark + HEXDIGITS.CharAt(k) %>.pic"" width=""20"" height=""20"" alt=""""></a></td><%" + NL
     t = t + "    IF k MOD 8 = 7 THEN RESPONSE.Write(""</tr>"")" + NL
     t = t + "NEXT %></table>" + NL
     t = t + "<p><b><% IF left > 0 THEN %>Next pixel in <%= left %> seconds<% ELSE %>Ready: click a square<% END IF %></b><br>" + NL

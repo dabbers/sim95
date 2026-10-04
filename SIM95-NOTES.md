@@ -145,6 +145,13 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
   the machine's own name and the first part of it are its own address, also
   without asking. Connecting to an address sidesteps the "two lookups of one
   name" problem above.
+* **Voyager asks for a page's pictures all at once,** each by the name in its
+  URL. So on a page served by name (`http://starthere/wall/`), only one
+  picture arrived; the other lookups never came back, and those pictures
+  show as broken. A page with several pictures gives them by the server's
+  address instead (`"http://" + NET.LocalAddress + ...`, which an ASP page
+  can read), as the Pixel Wall does now. Simxplorer fetches one at a time,
+  so it never showed.
 * **SPARK has no file times.** `FS` has `Size`, but nothing says when a file
   changed. A program that wants to notice changes (NAMED.SPK reloading its
   zones) keeps the text and compares.

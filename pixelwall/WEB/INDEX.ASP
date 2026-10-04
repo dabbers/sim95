@@ -19,6 +19,7 @@ VAR k AS Integer
 VAR left AS Integer
 VAR msg AS String
 VAR here AS String
+VAR pics AS String
 VAR line AS String
 VAR mark AS String
 r = Num(REQUEST.Query("r"), 0, 15, 5)
@@ -50,6 +51,12 @@ END IF
 rows = WallRows()
 digits = RegionDigits(rows, r)
 here = REQUEST.Path.Substring(0, LastAt(REQUEST.Path, "/") + 1)
+' The pictures by this machine's address, not its name: Voyager asks for them
+' all at once, and when several lookups of one name are out at once, the
+' network keeps only the last (SIM95-NOTES.md). By name, one picture came.
+' (A site served by name, under simweb, keeps them by name, as it must.)
+pics = ""
+IF REQUEST.Header("X-Base-Path") = "" AND NET.LocalAddress <> "" THEN pics = "http://" + NET.LocalAddress + here
 %><html><head><title>The Pixel Wall</title><meta name="robots" content="nofollow"></head>
 <body bgcolor="#C0C0C0" link="#000080" vlink="#000080" onload="Page_Load">
 <script type="spark">
@@ -63,10 +70,10 @@ END SUB
 <p><table cellspacing="10" border="0"><tr><td valign="top">
 <table cellspacing="1" cellpadding="0" border="0" bgcolor="#808080">
 <% FOR y = 0 TO TILE - 1 %><tr><% FOR x = 0 TO TILE - 1
-    k = HEXDIGITS.IndexOf(digits.CharAt(y * TILE + x)) %><td bgcolor="<%= ColourHex(k) %>"><a href="place.asp?x=<%= (r MOD 4) * TILE + x %>&y=<%= Int(r / 4) * TILE + y %>&c=<%= c %>&r=<%= r %>"><img src="c<%= HEXDIGITS.CharAt(k) %>.pic" width="20" height="20" alt=""></a></td><% NEXT %></tr>
+    k = HEXDIGITS.IndexOf(digits.CharAt(y * TILE + x)) %><td bgcolor="<%= ColourHex(k) %>"><a href="place.asp?x=<%= (r MOD 4) * TILE + x %>&y=<%= Int(r / 4) * TILE + y %>&c=<%= c %>&r=<%= r %>"><img src="<%= pics %>c<%= HEXDIGITS.CharAt(k) %>.pic" width="20" height="20" alt=""></a></td><% NEXT %></tr>
 <% NEXT %></table>
 </td><td valign="top">
-<b>The whole wall</b><br><img src="wall.asp?v=<%= Version() %>" width="128" height="128" alt="the wall"><br>
+<b>The whole wall</b><br><img src="<%= pics %>wall.asp?v=<%= Version() %>" width="128" height="128" alt="the wall"><br>
 <font size="2">Go to another part:</font><br>
 <table cellspacing="1" cellpadding="0" border="0" bgcolor="#808080">
 <% FOR k = 0 TO 15
@@ -81,7 +88,7 @@ NEXT %></table>
     ' (a one-colour picture in each link, which a link doesn't underline;
     ' the colour in use has a dot in it)
     mark = "c"
-    IF k = c THEN mark = "s" %><td bgcolor="<%= ColourHex(k) %>"><a href="index.asp?r=<%= r %>&c=<%= k %>"><img src="<%= mark + HEXDIGITS.CharAt(k) %>.pic" width="20" height="20" alt=""></a></td><%
+    IF k = c THEN mark = "s" %><td bgcolor="<%= ColourHex(k) %>"><a href="index.asp?r=<%= r %>&c=<%= k %>"><img src="<%= pics %><%= mark + HEXDIGITS.CharAt(k) %>.pic" width="20" height="20" alt=""></a></td><%
     IF k MOD 8 = 7 THEN RESPONSE.Write("</tr>")
 NEXT %></table>
 <p><b><% IF left > 0 THEN %>Next pixel in <%= left %> seconds<% ELSE %>Ready: click a square<% END IF %></b><br>

@@ -88,15 +88,15 @@ await test("installing: the wall in C:\\WEB\\WALL, a white wall in C:\\WALLDATA,
 await test("Voyager: the page, a 16 by 16 part of the wall as links, the whole wall as a picture, colours and parts", async () => {
   const r = ok(await http(alpha, "/wall/"));
   assert.ok(r.raw.length < MESSAGE_LIMIT, "fits in one message: " + r.raw.length);
-  const squares = [...r.body.matchAll(/<td bgcolor="(#[0-9A-F]{6})"><a href="place\.asp\?x=(\d+)&y=(\d+)&c=0&r=5"><img src="c([0-9A-F])\.pic" width="20" height="20" alt=""><\/a><\/td>/g)];
+  const squares = [...r.body.matchAll(/<td bgcolor="(#[0-9A-F]{6})"><a href="place\.asp\?x=(\d+)&y=(\d+)&c=0&r=5"><img src="(?:http:\/\/[\d.]+\/wall\/)?c([0-9A-F])\.pic" width="20" height="20" alt=""><\/a><\/td>/g)];
   assert.equal(squares.length, 256, "B2's squares");
   assert.deepEqual([squares[0][2], squares[0][3]], ["16", "16"]);
   assert.deepEqual([squares[255][2], squares[255][3]], ["31", "31"]);
   assert.ok(squares.every((s) => s[1] === "#FFFFFF" && s[4] === "F"));
-  assert.match(r.body, /<img src="wall\.asp\?v=0" width="128" height="128"/);
+  assert.match(r.body, /<img src="(?:http:\/\/[\d.]+\/wall\/)?wall\.asp\?v=0" width="128" height="128"/);
   assert.match(r.body, /<b>Colour:<\/b> Black/);
-  assert.match(r.body, /<td bgcolor="#FF0000"><a href="index\.asp\?r=5&c=9"><img src="c9\.pic" width="20" height="20" alt=""><\/a><\/td>/, "a link for Red");
-  assert.match(r.body, /<td bgcolor="#000000"><a href="index\.asp\?r=5&c=0"><img src="s0\.pic"/, "Black, in use, with its dot");
+  assert.match(r.body, /<td bgcolor="#FF0000"><a href="index\.asp\?r=5&c=9"><img src="(?:http:\/\/[\d.]+\/wall\/)?c9\.pic" width="20" height="20" alt=""><\/a><\/td>/, "a link for Red");
+  assert.match(r.body, /<td bgcolor="#000000"><a href="index\.asp\?r=5&c=0"><img src="(?:http:\/\/[\d.]+\/wall\/)?s0\.pic"/, "Black, in use, with its dot");
   console.log("      (the page is " + r.raw.length + " bytes)");
   assert.match(r.body, /bgcolor="#000080"><font size="2" color="#FFFFFF"><b>B2<\/b>/, "B2 is where we are");
   assert.match(r.body, /<a href="index\.asp\?r=0&c=0">A1<\/a>/);
@@ -117,7 +117,7 @@ await test("Voyager: a square placed, the wait before the next, and someone else
   assert.match(r.body, /ALPHA put Red at 20,17 \(\d\d:\d\d\)/);
   assert.equal(pixel(20, 17), "9");
   assert.match(r.body, /<td bgcolor="#FF0000"><a href="place\.asp\?x=20&y=17&c=9&r=5">/);
-  assert.match(r.body, /<img src="wall\.asp\?v=1"/);
+  assert.match(r.body, /<img src="(?:http:\/\/[\d.]+\/wall\/)?wall\.asp\?v=1"/);
   // too soon
   r = await click(alpha, "place.asp?x=21&y=17&c=9&r=5");
   assert.match(r.body, /Not yet: one pixel every 15 seconds\./);
@@ -147,6 +147,28 @@ const el = (id) => view().elements.get(id);
 // the page's cells with a handler, in order: the 256 squares come first
 const cells = () => html().split("<").filter((t) => /^td\b/i.test(t) && /onclick="js:\d+"/.test(t)).map((t) => ({ colour: /bgcolor="?(#[0-9A-Fa-f]{6})/.exec(t)?.[1], js: /onclick="(js:\d+)"/.exec(t)[1], tag: t }));
 const fire = (js) => view().fire("onScript", "onclick", js);
+
+await test("Voyager's pictures: all asked for at once, all arrive (by address: lookups of one name at once are lost)", async () => {
+  const page = ok(await http(charlie, "/wall/index.asp?r=0&c=9")).body;
+  const srcs = [...new Set([...page.matchAll(/<img[^>]*src="([^"]+)"/g)].map((m) => m[1]))];
+  assert.ok(srcs.length >= 17, srcs.length + " pictures");
+  for (const s of srcs) assert.match(s, /^http:\/\/65\.16\.0\.\d+\/wall\//, s);
+  // as Voyager fetches them: every one at the same moment, each connecting to the host in its URL
+  const fetchPic = async (url) => {
+    const m = /^http:\/\/([^/]+)(\/.*)$/.exec(url);
+    const conn = await charlie.stack.connect(0, m[1], 80);
+    const parts = [];
+    const done = new Promise((r) => conn.onClose(r));
+    conn.onMessage((t) => parts.push(t));
+    conn.send(`GET ${m[2]} HTTP/1.0\nHost: ${m[1]}\nUser-Agent: Voyager/1.1 (SIM95)`);
+    await Promise.race([done, sleep(8000)]);
+    const raw = parts.join("\n");
+    return raw.slice(raw.indexOf("\n\n") + 2);
+  };
+  const bodies = await Promise.all(srcs.map((u) => Promise.race([fetchPic(u), sleep(10000).then(() => "never came")])));
+  const bad = srcs.filter((u, i) => !bodies[i].startsWith("SIM95PIC"));
+  assert.deepEqual(bad, []);
+});
 
 await test("robots don't draw: AskSim's crawler is turned away, and the page asks not to be followed", async () => {
   const before = host.read("C:\\WALLDATA\\WALL.TXT");
