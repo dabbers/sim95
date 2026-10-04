@@ -209,6 +209,10 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
     a `TRY` with an empty `CATCH`, or check `conn.IsOpen` first. (Or, in the
     program, wait for `OK Bye` before closing.) `Broadcast` already checks
     `IsOpen`; the replies to the sender don't.
+  * **Any reply can do it,** not only `OK Bye`: "Nick in use" (line 112) was
+    seen on STARTHERE. [`chatfix/`](chatfix/) sends every line through one
+    SUB that lets a closed connection pass. A failed `Send` caught with `TRY`
+    doesn't spoil the handler the way a failed `Connect` or `Receive` does.
 * **There is no history.** A line goes only to whoever is in the channel at
   that moment. Somebody who joins later sees nothing that was said before.
 * **The Chat program defaults to this machine's own service, in

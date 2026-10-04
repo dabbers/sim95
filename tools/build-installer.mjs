@@ -904,6 +904,63 @@ END FUNCTION
     last: [],
     code: () => npmSeedCode(),
   },
+  // The Chat fix: SIM95's Chat service (CHATSVC.SPK) stops with "Connection
+  // closed" when it answers someone who has already gone (Chat's Disconnect
+  // sends QUIT and closes at once). This replaces it with the same service
+  // that lets that pass, if it's the stock one, and restarts it.
+  chatfix: {
+    vapor: { id: "CHATFIX", name: "Chat Fix: No More Crashes", kind: "program", category: "System", run: "C:\\PROGRAMS\\CHAT.SPK", tasks: "", startup: "", about: "SIM95's Chat service stops with \"Runtime error: Connection closed\" when someone disconnects at the wrong moment, and the machine's chat is gone until it restarts. This fixes it: an answer to someone who has already left is simply dropped." },
+    title: "the Chat fix",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It fixes the
+' Chat service (C:\\PROGRAMS\\CHATSVC.SPK, port 6667), which stops with
+' "Runtime error in Sock_OnMessage: Connection closed" when it answers someone
+' who has just disconnected. Only if it is the one SIM95 made: the original is
+' kept as C:\\PROGRAMS\\CHATSVC.ORG. The service is restarted (whoever is
+' connected has to connect again).`,
+    copy: [],
+    generated: [{ dest: "C:\\SYSTEM\\CHATFIX.TXT", text: () => "The Chat fix is installed: the Chat service no longer stops when someone disconnects.\nThe original is C:\\PROGRAMS\\CHATSVC.ORG.\n" }],
+    dirs: [],
+    first: [],
+    last: ["ChatFix()"],
+    done: `Print("The Chat service is fixed and running.")`,
+    code: () => {
+      const text = (f) => read(f).replace(/\r/g, "").replace(/\n+$/, "").split("\n").map((l) => `    s = s + ${lit(l)} + NL`).join("\n");
+      return `
+FUNCTION StockChat () AS String
+    VAR s AS String
+${text("chatfix/src/OLD.SPK")}
+    RETURN s
+END FUNCTION
+
+FUNCTION FixedChat () AS String
+    VAR s AS String
+${text("chatfix/src/NEW.SPK")}
+    RETURN s
+END FUNCTION
+${startService}
+SUB ChatFix ()
+    VAR now AS String
+    IF NOT FS.Exists("C:\\PROGRAMS\\CHATSVC.SPK") THEN
+        Print("There's no C:\\PROGRAMS\\CHATSVC.SPK to fix.")
+        RETURN
+    END IF
+    now = FS.Read("C:\\PROGRAMS\\CHATSVC.SPK").Replace(Chr(13), "")
+    IF now.Trim() = FixedChat().Trim() THEN
+        Print("The Chat service already has the fix.")
+        RETURN
+    END IF
+    IF now.Trim() <> StockChat().Trim() AND NOT now.Contains("(CHATFIX)") THEN
+        Print("The Chat service has been changed since SIM95 made it, so it was left alone.")
+        RETURN
+    END IF
+    IF NOT FS.Exists("C:\\PROGRAMS\\CHATSVC.ORG") AND NOT now.Contains("(CHATFIX)") THEN FS.Write("C:\\PROGRAMS\\CHATSVC.ORG", now)
+    FS.Write("C:\\PROGRAMS\\CHATSVC.SPK", FixedChat())
+    Print("Fixed C:\\PROGRAMS\\CHATSVC.SPK (the original is CHATSVC.ORG).")
+    StartService("CHATSVC", "C:\\PROGRAMS\\CHATSVC.SPK", "CHAT.RUN")
+END SUB
+`;
+    },
+  },
   // The Pixel Wall: one wall of pixels the whole network draws on, on the
   // central host. Plain HTML for Voyager; live in Simxplorer.
   pixelwall: {

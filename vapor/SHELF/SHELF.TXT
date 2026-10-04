@@ -22,6 +22,7 @@ item vspark/INSTALL.SPK 680a32c3
 item node/INSTALL.SPK d1d2f68d
 item filefix/INSTALL.SPK e030bb75
 item explorer/INSTALL.SPK 6c2a7437
+item chatfix/INSTALL.SPK c9d5d04c
 item simweb/INSTALL.SPK b51300fc
 item eliza/INSTALL.SPK c6f091b3
 site vapor/WEB/GETVAPOR.ASP C:\WEB\VAPOR\GETVAPOR.ASP

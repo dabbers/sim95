@@ -59,6 +59,9 @@ A series of programs for the sim95 playground
 * [`filefix/`](filefix/) – the Files fix: Copy in one Files window and Paste
   in another, such as another machine's disk opened from Network. In SIM95's
   Files that paste does nothing.
+* [`chatfix/`](chatfix/) – the Chat fix: SIM95's Chat service stops with
+  "Connection closed" when someone disconnects at the wrong moment. This
+  replaces it with one that lets that pass, and restarts it.
 * [`node/`](node/) – Node.js for SIM95: `node app.js` in Sim Shell, or Node's
   prompt. Servers and clients on SIM95's network (`http`, `net`), `fs`,
   `events`, `readline` and the rest, on Simxplorer's JavaScript engine (now
@@ -116,5 +119,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix, node, npm, explorer). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix, node, npm, explorer, chatfix). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

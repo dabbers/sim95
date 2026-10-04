@@ -1,0 +1,162 @@
+' CHATSVC.SPK - the Chat service, port 6667. Plain text lines:
+'   NICK name | JOIN #chan | PART #chan | MSG #chan text | WHO #chan | QUIT
+' Everyone in a channel gets: MSG #chan nick text | JOIN #chan nick | PART #chan nick |
+' NICK #chan old new | WHO #chan a,b,c
+
+VAR sock AS NET_Socket
+VAR conns AS Array OF NET_Connection
+VAR nicks AS Array OF String
+VAR chans AS Array OF String      ' per client: ",#a,#b," so a channel is found with Contains
+
+SUB Main ()
+    sock = NET_Socket.New()
+    sock.onConnect = Sock_OnConnect
+    sock.onMessage = Sock_OnMessage
+    sock.onClose = Sock_OnClose
+    sock.Listen(6667)
+END SUB
+
+SUB Sock_OnConnect (conn AS NET_Connection)
+    conn.Accept()
+    conns.Add(conn)
+    nicks.Add("guest" + Str(100 + Rnd(900)))
+    chans.Add(",")
+    conn.Send("OK Welcome to " + NET.HostName + " chat. You are " + nicks[nicks.Count - 1] + ". Commands: NICK, JOIN, MSG, WHO, QUIT")
+END SUB
+
+SUB Sock_OnClose (conn AS NET_Connection)
+    VAR i AS Integer
+    i = conns.IndexOf(conn)
+    IF i < 0 THEN RETURN
+    LeaveAll(i)
+    conns.RemoveAt(i)
+    nicks.RemoveAt(i)
+    chans.RemoveAt(i)
+END SUB
+
+FUNCTION Clean (s AS String, allowed AS String, max AS Integer) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR c AS String
+    out = ""
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i)
+        IF allowed.Contains(c.Upper()) AND out.Length < max THEN out = out + c
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION Channel (s AS String) AS String
+    VAR c AS String
+    VAR name AS String
+    c = s.Trim().Split(" ")[0]
+    IF c = "" THEN RETURN ""
+    IF NOT c.StartsWith("#") THEN c = "#" + c
+    name = Clean(c, "#ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", 16).Lower()
+    IF name.Length > 1 THEN RETURN name
+    RETURN ""
+END FUNCTION
+
+FUNCTION Members (ch AS String) AS String
+    VAR i AS Integer
+    VAR out AS Array OF String
+    FOR i = 0 TO conns.Count - 1
+        IF chans[i].Contains("," + ch + ",") THEN out.Add(nicks[i])
+    NEXT
+    RETURN out.Join(",")
+END FUNCTION
+
+SUB Broadcast (ch AS String, line AS String)
+    VAR i AS Integer
+    FOR i = 0 TO conns.Count - 1
+        IF chans[i].Contains("," + ch + ",") AND conns[i].IsOpen THEN conns[i].Send(line)
+    NEXT
+END SUB
+
+SUB LeaveAll (i AS Integer)
+    VAR ch AS String
+    FOR EACH ch IN chans[i].Split(",")
+        IF ch <> "" THEN Broadcast(ch, "PART " + ch + " " + nicks[i])
+    NEXT
+    chans[i] = ","
+END SUB
+
+SUB Sock_OnMessage (conn AS NET_Connection, message AS String)
+    VAR i AS Integer
+    VAR sp AS Integer
+    VAR cmd AS String
+    VAR rest AS String
+    VAR ch AS String
+    VAR nick AS String
+    VAR old AS String
+    VAR j AS Integer
+    VAR text AS String
+    i = conns.IndexOf(conn)
+    IF i < 0 THEN RETURN
+    sp = message.IndexOf(" ")
+    cmd = message.Upper()
+    rest = ""
+    IF sp >= 0 THEN
+        cmd = message.Substring(0, sp).Upper()
+        rest = message.Substring(sp + 1, message.Length - sp - 1)
+    END IF
+    SELECT CASE cmd
+        CASE "NICK"
+            nick = Clean(rest.Trim(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", 12)
+            IF nick = "" THEN
+                conn.Send("ERR Bad nick")
+                RETURN
+            END IF
+            FOR j = 0 TO nicks.Count - 1
+                IF j <> i AND nicks[j].Lower() = nick.Lower() THEN
+                    conn.Send("ERR Nick in use")
+                    RETURN
+                END IF
+            NEXT
+            old = nicks[i]
+            nicks[i] = nick
+            conn.Send("OK You are now " + nick)
+            FOR EACH ch IN chans[i].Split(",")
+                IF ch <> "" THEN Broadcast(ch, "NICK " + ch + " " + old + " " + nick)
+            NEXT
+        CASE "JOIN"
+            ch = Channel(rest)
+            IF ch = "" THEN
+                conn.Send("ERR Bad channel")
+                RETURN
+            END IF
+            IF NOT chans[i].Contains("," + ch + ",") THEN chans[i] = chans[i] + ch + ","
+            Broadcast(ch, "JOIN " + ch + " " + nicks[i])
+            conn.Send("WHO " + ch + " " + Members(ch))
+        CASE "PART"
+            ch = Channel(rest)
+            IF ch <> "" AND chans[i].Contains("," + ch + ",") THEN
+                chans[i] = chans[i].Replace("," + ch + ",", ",")
+                Broadcast(ch, "PART " + ch + " " + nicks[i])
+            END IF
+        CASE "MSG"
+            sp = rest.IndexOf(" ")
+            text = ""
+            ch = Channel(rest)
+            IF sp >= 0 THEN text = rest.Substring(sp + 1, rest.Length - sp - 1)
+            IF ch = "" OR NOT chans[i].Contains("," + ch + ",") THEN
+                conn.Send("ERR Join the channel first")
+                RETURN
+            END IF
+            IF text.Length > 400 THEN text = text.Substring(0, 400)
+            IF text.Trim() <> "" THEN Broadcast(ch, "MSG " + ch + " " + nicks[i] + " " + text)
+        CASE "WHO"
+            ch = Channel(rest)
+            IF ch <> "" THEN
+                conn.Send("WHO " + ch + " " + Members(ch))
+            ELSE
+                conn.Send("WHO * " + nicks.Join(","))
+            END IF
+        CASE "QUIT"
+            LeaveAll(i)
+            conn.Send("OK Bye")
+            conn.Close()
+        CASE ELSE
+            conn.Send("ERR Unknown command")
+    END SELECT
+END SUB
