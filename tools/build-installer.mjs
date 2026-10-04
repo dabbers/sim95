@@ -133,11 +133,122 @@ const portal = {
   STATS: ["Web statistics for any site: hits, visitors, top pages, referrers and a hit counter.", "#003366"],
   NIC: ["Register your own domain name (.sim, .com, .net, .org) and point it at your machine.", "#000066"],
   WALL: ["One wall of pixels the whole network draws on together, a pixel at a time.", "#800080"],
+  NPM: ["JavaScript packages for Node: search them, npm install them, publish your own.", "#CB3837"],
 };
 const appInf = (app) => {
   const [blurb, colour] = portal[app.folder] || [String(app.vapor?.about || app.title).split(/(?<=\.) /)[0], "#000080"];
   return [app.vapor?.name || app.title, blurb, colour].map((v) => v.replace(/[|\r\n]/g, " ")).join("|");
 };
+
+
+// The registry's first packages (npmreg/seed/<NAME>): each made into a bundle
+// as npm publish makes one (node/lib/NPM.JS: pack, cut and sum), and written
+// into C:\\NPMDATA by the installer unless that name is published already.
+const NPMPART = 30000;
+function npmPack(dir) {
+  const out = ["NPMPACK 1"];
+  const walk = (d, rel) => {
+    for (const n of fs.readdirSync(d).sort()) {
+      const full = path.join(d, n), r = rel ? rel + "/" + n.toUpperCase() : n.toUpperCase();
+      if (fs.statSync(full).isDirectory()) { walk(full, r); continue; }
+      let text = fs.readFileSync(full, "utf8").replace(/\r/g, "");
+      const nl = text.endsWith("\n");
+      if (nl) text = text.slice(0, -1);
+      const lines = text === "" && !nl ? [] : text.split("\n");
+      out.push("@@F " + r + " " + (nl ? 1 : 0) + " " + lines.length);
+      for (const l of lines) out.push("|" + l);
+    }
+  };
+  walk(dir, "");
+  return out.join("\n") + "\n";
+}
+function npmCut(text) {
+  const parts = [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  let cur = "";
+  for (const line of lines) {
+    if (cur.length + line.length + 1 > NPMPART) { parts.push(cur); cur = ""; }
+    cur += line + "\n";
+  }
+  if (cur !== "") parts.push(cur);
+  return parts;
+}
+function npmSum(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 4294967296;
+  return h.toString(16).padStart(8, "0");
+}
+function npmSeedCode() {
+  const seeds = fs.readdirSync(path.join(root, "npmreg/seed")).sort();
+  const strip = (s) => String(s).replace(/[|\r\n]/g, " ");
+  const textSub = (text) => {
+    const lines = text.split("\n");
+    if (lines[lines.length - 1] === "") lines.pop();
+    return "    t = \"\"\n" + lines.map((l) => `    t = t + ${lit(l)} + NL\n`).join("");
+  };
+  let code = `
+VAR npmWin AS GUI_Window
+
+' The central host, or a yes to installing it somewhere else anyway.
+FUNCTION NpmHere () AS Bool
+    VAR box AS GUI_MessageBox
+    IF NET.HostName.Lower() = "${CENTRAL}" THEN RETURN TRUE
+    npmWin = GUI_Window.New("npm Registry Setup", 10, 10)
+    box = GUI_MessageBox.New(npmWin)
+    box.Title = "npm Registry Setup"
+    box.Kind = "warn"
+    box.Buttons = "yesno"
+    box.Text = "This machine is " + NET.HostName.Upper() + ", not ${CENTRAL.toUpperCase()}." + NL + NL _
+        + "The npm registry is meant for the central host, so that everybody's packages are in one place." + NL + NL _
+        + "Install it here anyway (for testing, say)?"
+    IF box.Show() THEN
+        npmWin.Close()
+        Print("  (not the central host, ${CENTRAL}: installing anyway)")
+        RETURN TRUE
+    END IF
+    Print("The npm registry was not installed: it belongs on ${CENTRAL}.")
+    SYS.Exit(0)
+    RETURN FALSE
+END FUNCTION
+
+' Where packages and accounts are kept, and the first packages, the first time.
+SUB NpmSetup ()
+    IF NOT FS.Exists("C:\\NPMDATA") THEN FS.MakeDir("C:\\NPMDATA")
+    IF NOT FS.Exists("C:\\NPMDATA\\P") THEN FS.MakeDir("C:\\NPMDATA\\P")
+    IF NOT FS.Exists("C:\\NPMDATA\\UP") THEN FS.MakeDir("C:\\NPMDATA\\UP")
+    ' the seed packages' owner, an account nobody can log in to
+    IF NOT FS.Exists("C:\\NPMDATA\\USERS.TXT") THEN FS.Write("C:\\NPMDATA\\USERS.TXT", "sim95|-|-|" + Hex(Rnd(2000000000)) + Hex(Rnd(2000000000)) + Hex(Rnd(2000000000)) + "||" + Str(TIME.Now) + NL)
+${seeds.map((n, i) => `    NpmSeed${i}()`).join("\n")}
+END SUB
+
+' A seed package, unless that name is published here already.
+FUNCTION NpmFresh (name AS String) AS Bool
+    VAR dir AS String
+    dir = "C:\\NPMDATA\\P\\" + name.Upper()
+    IF FS.Exists(dir + "\\VERSIONS.TXT") THEN RETURN FALSE
+    IF NOT FS.Exists(dir) THEN FS.MakeDir(dir)
+    IF NOT FS.Exists(dir + "\\V1") THEN FS.MakeDir(dir + "\\V1")
+    RETURN TRUE
+END FUNCTION
+`;
+  seeds.forEach((n, i) => {
+    const dir = path.join(root, "npmreg/seed", n);
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "PACKAGE.JSN"), "utf8"));
+    const text = npmPack(dir), parts = npmCut(text);
+    const readme = fs.existsSync(path.join(dir, "README.MD")) ? fs.readFileSync(path.join(dir, "README.MD"), "utf8").replace(/\r/g, "") : "";
+    const deps = Object.entries(pkg.dependencies || {}).map(([k, v]) => k + "=" + v).join(";");
+    const pdir = "C:\\NPMDATA\\P\\" + n.toUpperCase();
+    code += `\nSUB NpmSeed${i} ()\n    IF NOT NpmFresh(${lit(pkg.name)}) THEN RETURN\n`;
+    parts.forEach((part, k) => { code += textSub(part) + `    FS.Write(${lit(pdir + "\\V1\\" + (k + 1) + ".TXT")}, t)\n`; });
+    code += textSub(readme) + `    FS.Write(${lit(pdir + "\\V1\\README.TXT")}, t)\n`;
+    code += `    FS.Write(${lit(pdir + "\\VERSIONS.TXT")}, ${lit([pkg.version, "V1", parts.length, text.length, npmSum(text)].join("|") + "|")} + Str(TIME.Now) + "|" + TIME.Date + ${lit("|sim95|" + deps)} + NL)\n`;
+    code += `    FS.Write(${lit(pdir + "\\NEXT.TXT")}, "2")\n`;
+    code += `    FS.Append("C:\\NPMDATA\\PACKAGES.TXT", ${lit([pkg.name, pkg.version, strip(pkg.description || ""), "sim95"].join("|") + "|")} + Str(TIME.Now) + "|" + TIME.Date + ${lit("|" + strip((pkg.keywords || []).join(" ")))} + NL)\n`;
+    code += `    Print(${lit("  npm: " + pkg.name + "@" + pkg.version)})\nEND SUB\n`;
+  });
+  return code;
+}
 
 const apps = {
   simbook: {
@@ -564,11 +675,12 @@ END FUNCTION
     copy: [["node/lib", "C:\\NODE\\LIB"]],
     generated: [
       { dest: "C:\\PROGRAMS\\NODE.SPK", text: () => read("node/src/NODEHOST.SPK") + "\n" + read("simxplorer/src/JSCRIPT.SPK") },
+      { dest: "C:\\PROGRAMS\\NPM.SPK", text: () => read("node/src/NPM.SPK") },
     ],
     dirs: ["C:\\NODE", "C:\\NODE\\LIB", "C:\\NODE\\MODULES"],
     first: [],
     last: [],
-    done: `Print("Node is installed. In Sim Shell: node -v, node app.js, or node for its prompt.")`,
+    done: `Print("Node is installed. In Sim Shell: node -v, node app.js, or node for its prompt; npm install, npm search, npm publish.")`,
     code: () => "",
   },
   // The Files fix: Copy and Paste in SIM95's own file manager (FILES.SPK)
@@ -626,6 +738,26 @@ SUB FilesFix ()
 END SUB
 `;
     },
+  },
+  // The npm registry: JavaScript packages for Node on SIM95, on the central
+  // host. npm (node/lib/NPM.JS) talks to API.ASP; people browse INDEX.ASP.
+  // The first install stocks it with a few packages (npmreg/seed).
+  npmreg: {
+    folder: "NPM",
+    into: "NPM",
+    title: "the npm registry",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5 - on the central
+' host, ${CENTRAL.toUpperCase()}. It puts the npm registry in C:\\WEB\\NPM:
+' http://${CENTRAL}/npm/, where npm (it comes with Node) finds, installs and
+' publishes packages. Packages and accounts are kept in C:\\NPMDATA and left
+' alone, so running this again upgrades the pages; the first time, it stocks
+' the registry with a few packages (leftpad, cowsay, express, lodash...). On
+' any other machine it asks first: a second registry would split the packages.`,
+    copy: [["npmreg/WEB", "C:\\WEB"]],
+    dirs: [],
+    first: ["IF NOT NpmHere() THEN RETURN", "NpmSetup()"],
+    last: [],
+    code: () => npmSeedCode(),
   },
   // The Pixel Wall: one wall of pixels the whole network draws on, on the
   // central host. Plain HTML for Voyager; live in Simxplorer.

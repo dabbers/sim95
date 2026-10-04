@@ -7,7 +7,7 @@ soon HL3|Half-Life 3|0|0|soon|Shooter|The long-awaited conclusion. Coming soon.|
 item simbook/INSTALL.SPK cd4a7574
 item coldmail/INSTALL.SPK 756d6ef5
 item asksim/INSTALL.SPK b0f619e7
-item simxplorer/INSTALL.SPK 6d14b80f
+item simxplorer/INSTALL.SPK 75d1a6b5
 item simplayer/INSTALL.SPK 1b95d304
 item frostbird/INSTALL.SPK 43583306
 item clippy/INSTALL.SPK 9e573165
@@ -19,7 +19,7 @@ item simstats/INSTALL.SPK b9240bbb
 item simsh/INSTALL.SPK 9b64061c
 item wikisim/INSTALL.SPK 4998e899
 item vspark/INSTALL.SPK 680a32c3
-item node/INSTALL.SPK 7203161f
+item node/INSTALL.SPK d1d2f68d
 item filefix/INSTALL.SPK e030bb75
 item simweb/INSTALL.SPK b51300fc
 item eliza/INSTALL.SPK c6f091b3

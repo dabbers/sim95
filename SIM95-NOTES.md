@@ -259,3 +259,18 @@ Two more things worth knowing, found while building Node:
   the program runs (timers wait). Handlers only interleave where something
   waits (`Connect`, `NET.Machines`, `ReadLine`...).
 
+Found while building npm:
+* **ASP pages can take a raw body.** `REQUEST.Body` is a POST's body exactly
+  as sent, line breaks and all; `REQUEST.Form` decodes a form. npm publishes
+  each 30K part of a package as a body, with the rest in the query string.
+* **Everything after an ASP page's last `%>` is sent too**, its line break
+  included. A page that answers a program, rather than a person, ends with
+  `RESPONSE.End()`, so nothing stray follows.
+* **`who` is a built-in name**, so it can't be a variable.
+* **The JavaScript engine kept every property of every object in one list**,
+  searched from the start each time, and every array method copied the whole
+  array first. So a `push` cost as much as all the properties in the program,
+  and building a 1,800-line array took 77 seconds. Now each object has an
+  index of its own (a string of names and slots, searched with `IndexOf`),
+  freed slots are used again, and `push` and `pop` touch only the end. The
+  same array takes under 2 seconds, and pages in Simxplorer are faster too.

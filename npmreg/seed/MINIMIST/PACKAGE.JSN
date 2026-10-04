@@ -1,0 +1,9 @@
+{
+  "name": "minimist",
+  "version": "1.2.8",
+  "description": "Parse command-line arguments: --name=value, -abc, --no-color, and the rest in _.",
+  "main": "INDEX.JS",
+  "keywords": ["argv", "arguments", "options", "parser", "command", "cli"],
+  "author": "sim95",
+  "license": "MIT"
+}

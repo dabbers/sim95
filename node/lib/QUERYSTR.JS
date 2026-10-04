@@ -1,12 +1,7 @@
 // querystring - a=1&b=two
-function unesc(s) { return decodeComponent(s.split("+").join(" ")); }
-function decodeComponent(s) { return unescape(s); }
-function esc(s) {
-  const keep = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()";
-  let out = "";
-  for (const c of String(s)) out += keep.indexOf(c) >= 0 ? c : escape(c);
-  return out;
-}
+// (a malformed %XX is left as it is, as Node does)
+function unesc(s) { s = s.split("+").join(" "); try { return decodeURIComponent(s); } catch (e) { return unescape(s); } }
+function esc(s) { return encodeURIComponent(String(s)); }
 function parse(str, sep, eq) {
   sep = sep || "&";
   eq = eq || "=";

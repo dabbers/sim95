@@ -1,0 +1,11 @@
+{
+  "name": "cowsay",
+  "version": "1.0.0",
+  "description": "A cow says what you tell it. Install it with -g for the cowsay command.",
+  "main": "INDEX.JS",
+  "bin": { "cowsay": "CLI.JS" },
+  "keywords": ["cow", "fun", "ascii", "say"],
+  "dependencies": { "wrap": "^1.0.0" },
+  "author": "sim95",
+  "license": "MIT"
+}

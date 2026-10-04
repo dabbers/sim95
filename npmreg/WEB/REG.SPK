@@ -1,0 +1,514 @@
+' REG.SPK - the npm registry's library, shared by its pages (INDEX.ASP,
+' PKG.ASP and API.ASP, the one npm talks to).
+'
+' Everything is kept in C:\NPMDATA, out of the web server's reach:
+'   USERS.TXT     name|password hash|salt|token|email|joined (seconds)
+'   PACKAGES.TXT  name|latest|description|owner|updated (seconds)|date|keywords
+'   P\<NAME>\     one folder for each package (names are 8.3 folder names)
+'     VERSIONS.TXT  version|folder|parts|bytes|sum|when (seconds)|date|publisher|deps
+'                   deps is name=range;name=range
+'     NEXT.TXT      the number of the next version's folder (V1, V2...)
+'     DL.TXT        how many times it has been downloaded
+'     V<n>\         a version: its parts (1.TXT, 2.TXT...) and README.TXT
+'   UP\<ticket>\  a publish on its way: INFO.TXT, README.TXT and the parts
+'
+' A package is a bundle (npm makes it): a text file holding every file in the
+' package, cut into parts of whole lines that each fit in a network message,
+' as Vapor cuts its installers. npm sends the parts one at a time, and fetches
+' them the same way; it checks the sum, so the registry needn't read them.
+
+CONST DATADIR = "C:\NPMDATA"
+CONST PARTMAX = 40000           ' the most one part may hold
+CONST MAXPARTS = 40             ' so a package is at most about 1.2 MB
+CONST NAMEMAX = 8               ' package names are folder names
+CONST USERMAX = 16
+CONST STALE = 3600              ' a publish not finished within this long is cleared away
+
+FUNCTION ReadOr (p AS String, fallback AS String) AS String
+    IF FS.Exists(p) THEN RETURN FS.Read(p)
+    RETURN fallback
+END FUNCTION
+
+FUNCTION Field (line AS String, i AS Integer) AS String
+    VAR f AS Array OF String
+    f = line.Split("|")
+    IF i < f.Count THEN RETURN f[i]
+    RETURN ""
+END FUNCTION
+
+' A whole number from a query or a form, kept between lo and hi ("" or junk: dflt).
+FUNCTION Num (s AS String, lo AS Integer, hi AS Integer, dflt AS Integer) AS Integer
+    VAR k AS Integer
+    VAR t AS String
+    t = s.Trim()
+    IF t = "" OR t.Length > 9 THEN RETURN dflt
+    FOR k = 0 TO t.Length - 1
+        IF Asc(t.CharAt(k)) < 48 OR Asc(t.CharAt(k)) > 57 THEN RETURN dflt
+    NEXT
+    k = Int(Val(t))
+    IF k < lo OR k > hi THEN RETURN dflt
+    RETURN k
+END FUNCTION
+
+' Only these characters in s?
+FUNCTION Only (s AS String, allowed AS String) AS Bool
+    VAR k AS Integer
+    FOR k = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(k)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' Package names: 1 to 8 of a-z, 0-9, - and _, starting with a letter or digit,
+' since each is a folder (NODE_MOD\<NAME>) on every machine that installs it.
+FUNCTION GoodName (n AS String) AS Bool
+    IF n.Length < 1 OR n.Length > NAMEMAX THEN RETURN FALSE
+    IF n.StartsWith("-") OR n.StartsWith("_") THEN RETURN FALSE
+    RETURN Only(n, "abcdefghijklmnopqrstuvwxyz0123456789-_")
+END FUNCTION
+
+FUNCTION GoodUser (n AS String) AS Bool
+    IF n.Length < 1 OR n.Length > USERMAX THEN RETURN FALSE
+    RETURN Only(n, "abcdefghijklmnopqrstuvwxyz0123456789-_")
+END FUNCTION
+
+' 1.2.3, or 1.2.3-beta.1
+FUNCTION GoodVersion (v AS String) AS Bool
+    VAR main AS String
+    VAR pre AS String
+    VAR bits AS Array OF String
+    VAR b AS String
+    IF v.Length < 5 OR v.Length > 24 THEN RETURN FALSE
+    main = v
+    IF v.Contains("-") THEN
+        main = v.Substring(0, v.IndexOf("-"))
+        pre = v.Substring(v.IndexOf("-") + 1, v.Length - v.IndexOf("-") - 1)
+        IF pre = "" OR NOT Only(pre, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") THEN RETURN FALSE
+    END IF
+    bits = main.Split(".")
+    IF bits.Count <> 3 THEN RETURN FALSE
+    FOR EACH b IN bits
+        IF b = "" OR b.Length > 6 OR NOT Only(b, "0123456789") THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' -1, 0 or 1, as version a comes before, is, or comes after b. A prerelease
+' (1.0.0-beta) comes before its release.
+FUNCTION CompareVersions (a AS String, b AS String) AS Integer
+    VAR pa AS String
+    VAR pb AS String
+    VAR na AS Array OF String
+    VAR nb AS Array OF String
+    VAR k AS Integer
+    IF a.Contains("-") THEN
+        pa = a.Substring(a.IndexOf("-") + 1, a.Length - a.IndexOf("-") - 1)
+        a = a.Substring(0, a.IndexOf("-"))
+    END IF
+    IF b.Contains("-") THEN
+        pb = b.Substring(b.IndexOf("-") + 1, b.Length - b.IndexOf("-") - 1)
+        b = b.Substring(0, b.IndexOf("-"))
+    END IF
+    na = a.Split(".")
+    nb = b.Split(".")
+    FOR k = 0 TO 2
+        IF Val(na[k]) < Val(nb[k]) THEN RETURN -1
+        IF Val(na[k]) > Val(nb[k]) THEN RETURN 1
+    NEXT
+    IF pa = pb THEN RETURN 0
+    IF pa = "" THEN RETURN 1
+    IF pb = "" THEN RETURN -1
+    IF pa < pb THEN RETURN -1
+    RETURN 1
+END FUNCTION
+
+' The same sum npm works out (31 * sum + each character's code, kept to 32
+' bits), as 8 hex digits: for passwords here.
+FUNCTION Sum (s AS String) AS String
+    VAR h AS Real
+    VAR k AS Integer
+    VAR out AS String
+    VAR d AS Integer
+    FOR k = 0 TO s.Length - 1
+        h = h * 31 + Asc(s.CharAt(k))
+        h = h - MATH.Floor(h / 4294967296) * 4294967296
+    NEXT
+    FOR k = 1 TO 8
+        d = Int(h - MATH.Floor(h / 16) * 16)
+        out = "0123456789abcdef".CharAt(d) + out
+        h = MATH.Floor(h / 16)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION Fresh () AS String
+    RETURN Sum(Str(TIME.Now) + "|" + Str(SYS.Ticks) + "|" + Str(Rnd(1000000000))) + Sum(Str(Rnd(1000000000)) + REQUEST.From)
+END FUNCTION
+
+' ---------------------------------------------------------------- JSON out
+
+FUNCTION Js (s AS String) AS String
+    VAR out AS String
+    VAR k AS Integer
+    VAR c AS String
+    VAR q AS String
+    q = Chr(34)
+    FOR k = 0 TO s.Length - 1
+        c = s.CharAt(k)
+        IF c = q OR c = "\" THEN
+            out = out + "\" + c
+        ELSEIF c = Chr(10) THEN
+            out = out + "\n"
+        ELSEIF c = Chr(13) THEN
+            out = out + "\r"
+        ELSEIF c = Chr(9) THEN
+            out = out + "\t"
+        ELSEIF Asc(c) < 32 THEN
+            out = out + " "
+        ELSE
+            out = out + c
+        END IF
+    NEXT
+    RETURN q + out + q
+END FUNCTION
+
+' "a=^1.0.0;b=2.x" as {"a":"^1.0.0","b":"2.x"}
+FUNCTION DepsJson (deps AS String) AS String
+    VAR d AS String
+    VAR out AS Array OF String
+    FOR EACH d IN deps.Split(";")
+        IF d.Contains("=") THEN out.Add(Js(d.Substring(0, d.IndexOf("="))) + ":" + Js(d.Substring(d.IndexOf("=") + 1, d.Length - d.IndexOf("=") - 1)))
+    NEXT
+    RETURN "{" + out.Join(",") + "}"
+END FUNCTION
+
+' ---------------------------------------------------------------- users
+
+FUNCTION UserLine (name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\USERS.TXT", "").Lines()
+        IF Field(line, 0) = name AND name <> "" THEN RETURN line
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION UserCount () AS Integer
+    VAR line AS String
+    VAR n AS Integer
+    FOR EACH line IN ReadOr(DATADIR + "\USERS.TXT", "").Lines()
+        IF line.Contains("|") THEN n = n + 1
+    NEXT
+    RETURN n
+END FUNCTION
+
+' The user whose token this is, or "".
+FUNCTION Who (name AS String, token AS String) AS String
+    VAR line AS String
+    line = UserLine(name)
+    IF line = "" OR token = "" OR Field(line, 3) <> token THEN RETURN ""
+    RETURN name
+END FUNCTION
+
+' ---------------------------------------------------------------- packages
+
+FUNCTION PkgDir (name AS String) AS String
+    RETURN DATADIR + "\P\" + name.Upper()
+END FUNCTION
+
+FUNCTION Packages () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(DATADIR + "\PACKAGES.TXT", "").Lines()
+        IF line.Contains("|") THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION PkgLine (name AS String) AS String
+    VAR line AS String
+    FOR EACH line IN Packages()
+        IF Field(line, 0) = name THEN RETURN line
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' In place of the package's line (a new one goes on the end; "" takes it out).
+SUB SetPkgLine (name AS String, entry AS String)
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR found AS Bool
+    FOR EACH line IN Packages()
+        IF Field(line, 0) = name THEN
+            found = TRUE
+            IF entry <> "" THEN out.Add(entry)
+        ELSE
+            out.Add(line)
+        END IF
+    NEXT
+    IF NOT found AND entry <> "" THEN out.Add(entry)
+    FS.Write(DATADIR + "\PACKAGES.TXT", out.Join(Chr(10)) + Chr(10))
+END SUB
+
+FUNCTION Versions (name AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN ReadOr(PkgDir(name) + "\VERSIONS.TXT", "").Lines()
+        IF line.Contains("|") THEN out.Add(line)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION VersionLine (name AS String, v AS String) AS String
+    VAR line AS String
+    FOR EACH line IN Versions(name)
+        IF Field(line, 0) = v THEN RETURN line
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' The highest release (or, with none, the highest of all).
+FUNCTION Latest (lines AS Array OF String) AS String
+    VAR best AS String
+    VAR line AS String
+    VAR v AS String
+    FOR EACH line IN lines
+        v = Field(line, 0)
+        IF v.Contains("-") THEN CONTINUE
+        IF best = "" THEN
+            best = v
+        ELSEIF CompareVersions(v, best) > 0 THEN
+            best = v
+        END IF
+    NEXT
+    IF best <> "" THEN RETURN best
+    FOR EACH line IN lines
+        v = Field(line, 0)
+        IF best = "" THEN
+            best = v
+        ELSEIF CompareVersions(v, best) > 0 THEN
+            best = v
+        END IF
+    NEXT
+    RETURN best
+END FUNCTION
+
+FUNCTION Downloads (name AS String) AS Integer
+    RETURN Int(Val(ReadOr(PkgDir(name) + "\DL.TXT", "0")))
+END FUNCTION
+
+' Packages, most recently updated first.
+FUNCTION Newest (lines AS Array OF String) AS Array OF String
+    VAR keyed AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR k AS Integer
+    FOR k = 0 TO lines.Count - 1
+        keyed.Add(Str(9999999999 - Int(Val(Field(lines[k], 4)))).PadLeft(12) + "|" + Str(k))
+    NEXT
+    keyed.Sort()
+    FOR EACH line IN keyed
+        out.Add(lines[Int(Val(line.Substring(13, line.Length - 13)))])
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Packages that match every word of q, in the name, description, keywords
+' or owner; the best first (a name that is q, then names with it in them).
+FUNCTION Search (q AS String) AS Array OF String
+    VAR words AS Array OF String
+    VAR w AS String
+    VAR line AS String
+    VAR hay AS String
+    VAR ok AS Bool
+    VAR exact AS Array OF String
+    VAR named AS Array OF String
+    VAR rest AS Array OF String
+    q = q.Lower().Trim()
+    FOR EACH w IN q.Split(" ")
+        IF w <> "" THEN words.Add(w)
+    NEXT
+    FOR EACH line IN Newest(Packages())
+        hay = (Field(line, 0) + " " + Field(line, 2) + " " + Field(line, 6) + " " + Field(line, 3)).Lower()
+        ok = TRUE
+        FOR EACH w IN words
+            IF NOT hay.Contains(w) THEN ok = FALSE
+        NEXT
+        IF NOT ok THEN CONTINUE
+        IF Field(line, 0) = q THEN
+            exact.Add(line)
+        ELSEIF q <> "" AND Field(line, 0).Contains(q) THEN
+            named.Add(line)
+        ELSE
+            rest.Add(line)
+        END IF
+    NEXT
+    FOR EACH line IN named
+        exact.Add(line)
+    NEXT
+    FOR EACH line IN rest
+        exact.Add(line)
+    NEXT
+    RETURN exact
+END FUNCTION
+
+' Who depends on this package (in their latest version).
+FUNCTION Dependents (name AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR v AS String
+    VAR d AS String
+    FOR EACH line IN Packages()
+        v = VersionLine(Field(line, 0), Field(line, 1))
+        FOR EACH d IN Field(v, 8).Split(";")
+            IF d.StartsWith(name + "=") THEN out.Add(Field(line, 0))
+        NEXT
+    NEXT
+    RETURN out
+END FUNCTION
+
+' "3 days ago"
+FUNCTION Ago (seconds AS Integer) AS String
+    VAR d AS Integer
+    d = TIME.Now - seconds
+    IF d < 90 THEN RETURN "just now"
+    IF d < 5400 THEN RETURN Str(Int(d / 60)) + " minutes ago"
+    IF d < 129600 THEN RETURN Str(Int(d / 3600)) + " hours ago"
+    RETURN Str(Int(d / 86400)) + " days ago"
+END FUNCTION
+
+FUNCTION Size (bytes AS Integer) AS String
+    IF bytes < 1024 THEN RETURN Str(bytes) + " B"
+    RETURN Str(Int(bytes * 10 / 1024) / 10) + " KB"
+END FUNCTION
+
+' ---------------------------------------------------------------- the lock
+
+' Two publishes may arrive at once, and each rewrites PACKAGES.TXT. The lock
+' is a folder (FS.MakeDir fails when it's there); one left by a page that
+' died is cleared after a few seconds.
+FUNCTION TakeLock () AS Bool
+    VAR tries AS Integer
+    VAR at AS String
+    WHILE tries < 100
+        tries = tries + 1
+        TRY
+            FS.MakeDir(DATADIR + "\LOCK")
+            FS.Write(DATADIR + "\LOCK\AT.TXT", Str(TIME.Now))
+            RETURN TRUE
+        CATCH err
+            at = ReadOr(DATADIR + "\LOCK\AT.TXT", "")
+            IF (at <> "" AND TIME.Now - Int(Val(at)) > 5) OR (at = "" AND tries MOD 25 = 0) THEN
+                DropLock()
+            ELSE
+                SYS.Sleep(10)
+            END IF
+        END TRY
+    END WHILE
+    RETURN FALSE
+END FUNCTION
+
+SUB DropLock ()
+    TRY
+        IF FS.Exists(DATADIR + "\LOCK\AT.TXT") THEN FS.Delete(DATADIR + "\LOCK\AT.TXT")
+        IF FS.Exists(DATADIR + "\LOCK") THEN FS.Delete(DATADIR + "\LOCK")
+    CATCH err
+    END TRY
+END SUB
+
+' A folder and everything in it.
+SUB Wipe (dir AS String)
+    VAR f AS String
+    IF NOT FS.Exists(dir) THEN RETURN
+    FOR EACH f IN FS.List(dir)
+        IF f.EndsWith("\") THEN
+            Wipe(dir + "\" + f.Substring(0, f.Length - 1))
+        ELSE
+            FS.Delete(dir + "\" + f)
+        END IF
+    NEXT
+    FS.Delete(dir)
+END SUB
+
+SUB MakeDirs ()
+    IF NOT FS.Exists(DATADIR) THEN FS.MakeDir(DATADIR)
+    IF NOT FS.Exists(DATADIR + "\P") THEN FS.MakeDir(DATADIR + "\P")
+    IF NOT FS.Exists(DATADIR + "\UP") THEN FS.MakeDir(DATADIR + "\UP")
+END SUB
+
+' ---------------------------------------------------------------- READMEs
+
+' Markdown, a little of it, as HTML Voyager can show: # headings, ``` code
+' blocks, - lists, `code`, and paragraphs.
+FUNCTION Markdown (text AS String) AS String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR para AS Array OF String
+    VAR code AS Bool
+    VAR list AS Bool
+    FOR EACH line IN text.Replace(Chr(13), "").Split(Chr(10))
+        IF line.Trim().StartsWith("```") THEN
+            IF code THEN
+                out.Add("</pre>")
+                code = FALSE
+            ELSE
+                IF para.Count > 0 THEN out.Add("<p>" + para.Join(" ") + "</p>")
+            para.Clear()
+                IF list THEN out.Add("</ul>")
+                list = FALSE
+                out.Add("<pre>")
+                code = TRUE
+            END IF
+            CONTINUE
+        END IF
+        IF code THEN
+            out.Add(SERVER.HtmlEncode(line))
+            CONTINUE
+        END IF
+        IF line.Trim() = "" THEN
+            IF para.Count > 0 THEN out.Add("<p>" + para.Join(" ") + "</p>")
+            para.Clear()
+            IF list THEN out.Add("</ul>")
+            list = FALSE
+        ELSEIF line.StartsWith("#") THEN
+            IF para.Count > 0 THEN out.Add("<p>" + para.Join(" ") + "</p>")
+            para.Clear()
+            IF line.StartsWith("###") THEN
+                out.Add("<h4>" + Inline(line.Substring(3, line.Length - 3).Trim()) + "</h4>")
+            ELSEIF line.StartsWith("##") THEN
+                out.Add("<h3>" + Inline(line.Substring(2, line.Length - 2).Trim()) + "</h3>")
+            ELSE
+                out.Add("<h2>" + Inline(line.Substring(1, line.Length - 1).Trim()) + "</h2>")
+            END IF
+        ELSEIF line.StartsWith("- ") OR line.StartsWith("* ") THEN
+            IF para.Count > 0 THEN out.Add("<p>" + para.Join(" ") + "</p>")
+            para.Clear()
+            IF NOT list THEN out.Add("<ul>")
+            list = TRUE
+            out.Add("<li>" + Inline(line.Substring(2, line.Length - 2)) + "</li>")
+        ELSE
+            para.Add(Inline(line))
+        END IF
+    NEXT
+    IF para.Count > 0 THEN out.Add("<p>" + para.Join(" ") + "</p>")
+    IF list THEN out.Add("</ul>")
+    IF code THEN out.Add("</pre>")
+    RETURN out.Join(Chr(10))
+END FUNCTION
+
+' `code` in a line
+FUNCTION Inline (s AS String) AS String
+    VAR bits AS Array OF String
+    VAR k AS Integer
+    VAR out AS String
+    bits = s.Split("`")
+    FOR k = 0 TO bits.Count - 1
+        IF k MOD 2 = 1 AND k < bits.Count - 1 THEN
+            out = out + "<tt>" + SERVER.HtmlEncode(bits[k]) + "</tt>"
+        ELSEIF k MOD 2 = 1 THEN
+            out = out + "`" + SERVER.HtmlEncode(bits[k])
+        ELSE
+            out = out + SERVER.HtmlEncode(bits[k])
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION

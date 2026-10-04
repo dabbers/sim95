@@ -410,5 +410,23 @@ const Point = class { constructor(x) { this.x = x; } twice() { return this.x * 2
 document.write(caught + ' ' + new Point(21).twice());`), "AppError:nope:42:truetrue 42");
 });
 
+await test("URIs, Date.now, and objects and arrays that grow and shrink", async () => {
+  const cases = [
+    ["encodeURIComponent('a b&c=d/é?')", "a%20b%26c%3Dd%2F%C3%A9%3F"],
+    ["encodeURI('http://x/a b?q=1&r=é')", "http://x/a%20b?q=1&r=%C3%A9"],
+    ["decodeURIComponent('a%20b%26c%3Dd%2F%C3%A9')", "a b&c=d/é"],
+    ["decodeURI('a%20b%26c')", "a b%26c"],
+    ["(function () { try { decodeURIComponent('%E0%A4%A'); return 'no'; } catch (e) { return 'URIError'; } })()", "URIError"],
+    ["typeof Date.now() === 'number' && Date.now() > 1e12", "true"],
+    ["(function () { const a = []; for (let i = 0; i < 500; i++) a.push(i); let s = 0; while (a.length > 250) s += a.pop(); return [a.length, s, a[249], a[250]].join(); })()", "250,93625,249,"],
+    ["(function () { const o = {}; for (let i = 0; i < 50; i++) o['k' + i] = i; for (let i = 0; i < 50; i += 2) delete o['k' + i]; o.k0 = 'back'; return [Object.keys(o).length, o.k1, o.k2, o.k0, o.k49].join(); })()", "26,1,,back,49"],
+    ["(function () { const a = [1, 2, 3]; a.length = 1; a.push(9); return a.join() + '|' + Object.keys(a).join(); })()", "1,9|0,1"],
+    ["(function () { function f(n) { const local = {n}; return n ? f(n - 1) + local.n : 0; } let t = 0; for (let i = 0; i < 30; i++) t += f(5); return t; })()", "450"],
+  ];
+  const res = await js(...cases.map(([e]) => W(e)));
+  const bad = cases.map(([e, want], i) => (res[i].out === want && !res[i].err ? null : `${e}: wanted ${want}, got ${res[i].out} ${res[i].err}`)).filter(Boolean);
+  assert.deepEqual(bad, []);
+});
+
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

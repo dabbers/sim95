@@ -1,0 +1,9 @@
+{
+  "name": "uuid",
+  "version": "9.0.0",
+  "description": "Random IDs: uuid.v4() is like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed.",
+  "main": "INDEX.JS",
+  "keywords": ["uuid", "guid", "id", "random", "unique"],
+  "author": "sim95",
+  "license": "MIT"
+}

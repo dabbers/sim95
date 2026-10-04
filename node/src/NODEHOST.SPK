@@ -190,7 +190,7 @@ SUB StartJs ()
     jsDefer = TRUE
     ' the natives, for BOOT.JS (which takes them and hides them)
     natives = JsNewObject("Object", jsObjectProto)
-    JsMethods(natives, "node.", "write,args,info,chdir,title,exit,fullpath,fsRead,fsWrite,fsAppend,fsStat,fsList,fsMkdir,fsDelete,fsRename,compile,eval,listen,unlisten,connect,send,end,peer,lookup,readLine,stopReading,spawn,kill,tasks")
+    JsMethods(natives, "node.", "write,args,info,chdir,title,exit,fullpath,fsRead,fsWrite,fsAppend,fsStat,fsList,fsMkdir,fsDelete,fsRename,compile,eval,listen,unlisten,connect,send,end,peer,lookup,readLine,stopReading,spawn,kill,tasks,sum")
     JsPutOwn(jsGlobal, "__node", JsO(natives))
     IF NOT FS.Exists(NODEDIR + "\LIB\BOOT.JS") THEN
         con.WriteLine("Node isn't installed properly: " + NODEDIR + "\LIB\BOOT.JS is missing.")
@@ -871,9 +871,28 @@ FUNCTION HostNative (name AS String, thisVal AS String, args AS Array OF String)
             RETURN "t"
         CASE "node.tasks"
             RETURN StrList(SYS.Tasks())
+        ' ---- npm's sum of a package (as the registry works it out), here for speed
+        CASE "node.sum"
+            RETURN JsS(TextSum(JsStr(a)))
     END SELECT
     THROW Str(jsLine) + "|Object doesn't support this property or method"
     RETURN "u"
+END FUNCTION
+
+' 31 * sum + each character's code, kept to 32 bits, as 8 hex digits
+FUNCTION TextSum (s AS String) AS String
+    VAR h AS Real
+    VAR k AS Integer
+    VAR out AS String
+    FOR k = 0 TO s.Length - 1
+        h = h * 31 + Asc(s.CharAt(k))
+        h = h - MATH.Floor(h / 4294967296) * 4294967296
+    NEXT
+    FOR k = 1 TO 8
+        out = "0123456789abcdef".CharAt(Int(h - MATH.Floor(h / 16) * 16)) + out
+        h = MATH.Floor(h / 16)
+    NEXT
+    RETURN out
 END FUNCTION
 
 SUB MakeDirs (p AS String)

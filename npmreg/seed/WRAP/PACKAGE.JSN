@@ -1,0 +1,9 @@
+{
+  "name": "wrap",
+  "version": "1.0.0",
+  "description": "Word-wrap text to a width, at the spaces.",
+  "main": "INDEX.JS",
+  "keywords": ["wrap", "text", "word", "lines"],
+  "author": "sim95",
+  "license": "MIT"
+}

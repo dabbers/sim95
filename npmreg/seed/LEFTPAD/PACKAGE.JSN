@@ -1,0 +1,9 @@
+{
+  "name": "leftpad",
+  "version": "1.0.0",
+  "description": "Pad a string on the left. The one everybody needs.",
+  "main": "INDEX.JS",
+  "keywords": ["pad", "string", "left"],
+  "author": "sim95",
+  "license": "MIT"
+}

@@ -14,8 +14,11 @@
 '     na/nb/nc/nd = child nodes, ns = a name or literal, nl = a list of nodes).
 '   * A value is a tagged string: "u" undefined, "l" null, "t" / "f" booleans,
 '     "n" + number, "s" + text, "o" + object number.
-'   * Objects (and scopes, which are objects too) live in one property table:
-'     jpKey holds "object:name", jpVal the value. joClass, joProto, joA, joB and
+'   * Objects (and scopes, which are objects too) keep their properties in
+'     jpVal, a slot each; joIdx is each object's index of its own, a string of
+'     Chr(1) name Chr(2) slot (9 wide), searched with IndexOf. Freed slots
+'     (a deleted property, a finished call's scope) go in jpFree and are used
+'     again. joClass, joProto, joA, joB and
 '     joS describe each object: an Array, a Function (joA = its node, joB = the
 '     scope it closes over), a Native function (joS = which one), a Host
 '     element (joS = its id on the page)...
@@ -54,8 +57,9 @@ VAR ns AS Array OF String
 VAR nl AS Array OF String
 VAR nline AS Array OF Integer
 
-VAR jpKey AS Array OF String
 VAR jpVal AS Array OF String
+VAR jpFree AS Array OF Integer
+VAR joIdx AS Array OF String
 VAR joClass AS Array OF String
 VAR joProto AS Array OF Integer
 VAR joA AS Array OF Integer
@@ -1630,12 +1634,27 @@ FUNCTION JsNewObject (class AS String, proto AS Integer) AS Integer
     joB.Add(0)
     joS.Add("")
     joKeys.Add("|")
+    joIdx.Add("")
     RETURN joClass.Count - 1
 END FUNCTION
 
+' The slot of the object's own property, or -1.
 FUNCTION JsOwn (id AS Integer, name AS String) AS Integer
-    RETURN jpKey.IndexOf(Str(id) + ":" + name)
+    VAR p AS Integer
+    p = joIdx[id].IndexOf(Chr(1) + name + Chr(2))
+    IF p < 0 THEN RETURN -1
+    RETURN Int(Val(joIdx[id].Substring(p + name.Length + 2, 9).Trim()))
 END FUNCTION
+
+' Takes the object's own property away, and frees its slot.
+SUB JsDropOwn (id AS Integer, name AS String)
+    VAR k AS Integer
+    k = JsOwn(id, name)
+    IF k < 0 THEN RETURN
+    joIdx[id] = joIdx[id].Replace(Chr(1) + name + Chr(2) + Str(k).PadLeft(9), "")
+    jpVal[k] = "u"
+    jpFree.Add(k)
+END SUB
 
 ' Sets a property on the object itself (no host magic).
 SUB JsPutOwn (id AS Integer, name AS String, v AS String)
@@ -1645,8 +1664,15 @@ SUB JsPutOwn (id AS Integer, name AS String, v AS String)
         jpVal[k] = v
         RETURN
     END IF
-    jpKey.Add(Str(id) + ":" + name)
-    jpVal.Add(v)
+    IF jpFree.Count > 0 THEN
+        k = jpFree[jpFree.Count - 1]
+        jpFree.RemoveAt(jpFree.Count - 1)
+        jpVal[k] = v
+    ELSE
+        k = jpVal.Count
+        jpVal.Add(v)
+    END IF
+    joIdx[id] = joIdx[id] + Chr(1) + name + Chr(2) + Str(k).PadLeft(9)
     IF NOT name.StartsWith("@") THEN joKeys[id] = joKeys[id] + name + "|"
 END SUB
 
@@ -1783,8 +1809,10 @@ SUB JsSetLength (id AS Integer, n AS Integer)
     VAR k AS Integer
     old = JsInt(JsGetProp(id, "length"))
     FOR i = n TO old - 1
-        k = JsOwn(id, Str(i))
-        IF k >= 0 THEN jpVal[k] = "u"
+        IF JsOwn(id, Str(i)) >= 0 THEN
+            JsDropOwn(id, Str(i))
+            joKeys[id] = joKeys[id].Replace("|" + Str(i) + "|", "|")
+        END IF
     NEXT
     JsPutOwn(id, "length", JsN(n))
 END SUB
@@ -2142,14 +2170,13 @@ SUB JsFreeScope (scope AS Integer)
     VAR name AS String
     VAR k AS Integer
     IF joB[scope] = 1 THEN RETURN
-    FOR EACH name IN (joKeys[scope] + "@this|").Split("|")
+    FOR EACH name IN joIdx[scope].Split(Chr(1))
         IF name = "" THEN CONTINUE
-        k = JsOwn(scope, name)
-        IF k >= 0 THEN
-            jpKey.RemoveAt(k)
-            jpVal.RemoveAt(k)
-        END IF
+        k = Int(Val(name.Substring(name.IndexOf(Chr(2)) + 1, 9).Trim()))
+        jpVal[k] = "u"
+        jpFree.Add(k)
     NEXT
+    joIdx[scope] = ""
     joKeys[scope] = "|"
 END SUB
 
@@ -2558,10 +2585,8 @@ END FUNCTION
 SUB JsDeleteProp (id AS Integer, name AS String)
     VAR k AS Integer
     IF id = 0 THEN RETURN
-    k = JsOwn(id, name)
-    IF k < 0 THEN RETURN
-    jpKey.RemoveAt(k)
-    jpVal.RemoveAt(k)
+    IF JsOwn(id, name) < 0 THEN RETURN
+    JsDropOwn(id, name)
     joKeys[id] = joKeys[id].Replace("|" + name + "|", "|")
 END SUB
 
@@ -2950,7 +2975,7 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
     IF name.StartsWith("Math.") THEN RETURN JsMath(name.Substring(5, name.Length - 5), args)
     IF name.StartsWith("Date.") THEN RETURN JsDateMethod(name.Substring(5, name.Length - 5), thisVal, args)
     IF name.StartsWith("XHR.") THEN RETURN JsXhrMethod(name.Substring(4, name.Length - 4), thisVal, args)
-    IF name.StartsWith("Promise.part:") OR name.StartsWith("Bound:") OR name.StartsWith("ObjectS.") OR name.StartsWith("ArrayS.") OR name.StartsWith("NumberS.") OR name.StartsWith("JSON.") OR name.StartsWith("PromiseS.") OR name = "Function.bind" THEN RETURN JsLib(name, thisVal, args)
+    IF name.StartsWith("Promise.part:") OR name.StartsWith("Bound:") OR name.StartsWith("ObjectS.") OR name.StartsWith("ArrayS.") OR name.StartsWith("NumberS.") OR name = "DateS.now" OR name.StartsWith("JSON.") OR name.StartsWith("PromiseS.") OR name = "Function.bind" THEN RETURN JsLib(name, thisVal, args)
     IF name.StartsWith("Promise.") OR name.StartsWith("Response.") THEN RETURN JsPromiseMethod(name, thisVal, args)
     SELECT CASE name
         CASE "alert"
@@ -2976,6 +3001,14 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
             RETURN JsS(JsEscape(JsStr(a)))
         CASE "unescape"
             RETURN JsS(JsUnescape(JsStr(a)))
+        CASE "encodeURIComponent"
+            RETURN JsS(JsEncodeUri(JsStr(a), "-_.!~*'()"))
+        CASE "encodeURI"
+            RETURN JsS(JsEncodeUri(JsStr(a), "-_.!~*'();/?:@&=+$,#"))
+        CASE "decodeURIComponent", "decodeURI"
+            text = JsDecodeUri(JsStr(a), name = "decodeURI")
+            IF text = Chr(0) THEN THROW Str(jsLine) + "|URIError: URI malformed"
+            RETURN JsS(text)
         CASE "String"
             IF args.Count = 0 THEN RETURN "s"
             RETURN JsS(JsStr(a))
@@ -3166,6 +3199,84 @@ FUNCTION JsEscape (s AS String) AS String
             out = out + "%" + Hex(Asc(c)).PadLeft(2).Replace(" ", "0")
         END IF
     NEXT
+    RETURN out
+END FUNCTION
+
+'' encodeURIComponent and encodeURI: letters, digits and keep stay; the rest
+' as %XX, in UTF-8
+FUNCTION JsEncodeUri (s AS String, keep AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR c AS String
+    VAR n AS Integer
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i)
+        n = Asc(c)
+        IF "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".Contains(c) OR keep.Contains(c) THEN
+            out = out + c
+        ELSEIF n < 128 THEN
+            out = out + "%" + JsHex2(n)
+        ELSEIF n < 2048 THEN
+            out = out + "%" + JsHex2(192 + Int(n / 64)) + "%" + JsHex2(128 + n MOD 64)
+        ELSE
+            out = out + "%" + JsHex2(224 + Int(n / 4096)) + "%" + JsHex2(128 + Int(n / 64) MOD 64) + "%" + JsHex2(128 + n MOD 64)
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION JsHex2 (n AS Integer) AS String
+    RETURN "0123456789ABCDEF".CharAt(Int(n / 16)) + "0123456789ABCDEF".CharAt(n MOD 16)
+END FUNCTION
+
+' decodeURIComponent (and decodeURI, which leaves the reserved characters
+' encoded): %XX as UTF-8. Chr(0) when it is malformed.
+FUNCTION JsDecodeUri (s AS String, reserved AS Bool) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR h AS String
+    VAR b AS Integer
+    VAR more AS Integer
+    VAR code AS Integer
+    VAR k AS Integer
+    WHILE i < s.Length
+        IF s.CharAt(i) <> "%" THEN
+            out = out + s.CharAt(i)
+            i = i + 1
+            CONTINUE
+        END IF
+        h = JsPeek(s, i + 1, 2).Lower()
+        IF h.Length < 2 OR NOT OnlyChars(h, "0123456789abcdef") THEN RETURN Chr(0)
+        b = "0123456789abcdef".IndexOf(h.CharAt(0)) * 16 + "0123456789abcdef".IndexOf(h.CharAt(1))
+        IF b < 128 THEN
+            IF reserved AND ";/?:@&=+$,#".Contains(Chr(b)) THEN
+                out = out + s.Substring(i, 3)
+            ELSE
+                out = out + Chr(b)
+            END IF
+            i = i + 3
+            CONTINUE
+        END IF
+        IF b >= 224 THEN
+            more = 2
+            code = b - 224
+        ELSEIF b >= 192 THEN
+            more = 1
+            code = b - 192
+        ELSE
+            RETURN Chr(0)
+        END IF
+        i = i + 3
+        FOR k = 1 TO more
+            h = JsPeek(s, i + 1, 2).Lower()
+            IF s.CharAt(i) <> "%" OR h.Length < 2 OR NOT OnlyChars(h, "0123456789abcdef") THEN RETURN Chr(0)
+            b = "0123456789abcdef".IndexOf(h.CharAt(0)) * 16 + "0123456789abcdef".IndexOf(h.CharAt(1))
+            IF b < 128 OR b >= 192 THEN RETURN Chr(0)
+            code = code * 64 + b - 128
+            i = i + 3
+        NEXT
+        out = out + Chr(code)
+    END WHILE
     RETURN out
 END FUNCTION
 
@@ -3463,6 +3574,22 @@ FUNCTION JsArrayMethod (name AS String, id AS Integer, args AS Array OF String) 
     VAR tmp AS String
     VAR pair AS Array OF String
     IF id = 0 OR joClass[id] <> "Array" THEN THROW Str(jsLine) + "|Array object expected"
+    ' (these two need only the end of the array, not a copy of it all)
+    IF name = "push" THEN
+        n = JsInt(JsGetProp(id, "length"))
+        FOR i = 0 TO args.Count - 1
+            JsPutOwn(id, Str(n + i), args[i])
+        NEXT
+        JsPutOwn(id, "length", JsN(n + args.Count))
+        RETURN JsN(n + args.Count)
+    END IF
+    IF name = "pop" THEN
+        n = JsInt(JsGetProp(id, "length"))
+        IF n = 0 THEN RETURN "u"
+        v = JsGetProp(id, Str(n - 1))
+        JsSetLength(id, n - 1)
+        RETURN v
+    END IF
     items = JsItems(id)
     n = items.Count
     IF "|forEach|map|filter|some|every|find|findIndex|".Contains("|" + name + "|") THEN
@@ -4631,6 +4758,8 @@ FUNCTION JsLib (name AS String, thisVal AS String, args AS Array OF String) AS S
                 NEXT
             END IF
             RETURN JsO(JsNewArray(out))
+        CASE "DateS.now"
+            RETURN JsN(JsNow())
         CASE "NumberS.isInteger"
             RETURN JsB(a.StartsWith("n") AND JsFinite(JsNum(a)) AND JsReal(a) = Int(JsReal(a)))
         CASE "NumberS.isFinite"
@@ -5008,8 +5137,9 @@ SUB JsReset ()
     ns.Clear()
     nl.Clear()
     nline.Clear()
-    jpKey.Clear()
     jpVal.Clear()
+    jpFree.Clear()
+    joIdx.Clear()
     joClass.Clear()
     joProto.Clear()
     joA.Clear()
@@ -5049,7 +5179,7 @@ SUB JsReset ()
     JsPutOwn(jsGlobal, "parent", JsO(jsGlobal))
     JsPutOwn(jsGlobal, "NaN", "nNaN")
     JsPutOwn(jsGlobal, "Infinity", "nInfinity")
-    JsMethods(jsGlobal, "", "alert,confirm,prompt,parseInt,parseFloat,isNaN,isFinite,escape,unescape,setTimeout,setInterval,clearTimeout,clearInterval,open,String,Number,Boolean,Array,Object,Date,Error,TypeError,RangeError,SyntaxError,ReferenceError,Promise")
+    JsMethods(jsGlobal, "", "alert,confirm,prompt,parseInt,parseFloat,isNaN,isFinite,escape,unescape,encodeURIComponent,decodeURIComponent,encodeURI,decodeURI,setTimeout,setInterval,clearTimeout,clearInterval,open,String,Number,Boolean,Array,Object,Date,Error,TypeError,RangeError,SyntaxError,ReferenceError,Promise")
     JsPutOwn(jsGlobal, "eval", JsNative("eval"))
     JsPutOwn(jsGlobal, "close", JsNative("noop"))
     JsPutOwn(jsGlobal, "focus", JsNative("noop"))
@@ -5064,6 +5194,7 @@ SUB JsReset ()
     JsMethods(JsId(JsGetProp(jsGlobal, "Object")), "ObjectS.", "keys,values,entries,assign,create,getPrototypeOf,setPrototypeOf,freeze,seal,preventExtensions,defineProperty,getOwnPropertyNames,is")
     JsMethods(JsId(JsGetProp(jsGlobal, "Array")), "ArrayS.", "isArray,from,of")
     JsMethods(JsId(JsGetProp(jsGlobal, "Number")), "NumberS.", "isInteger,isFinite,isNaN")
+    JsMethods(JsId(JsGetProp(jsGlobal, "Date")), "DateS.", "now")
     JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "parseInt", JsNative("parseInt"))
     JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "parseFloat", JsNative("parseFloat"))
     JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "MAX_SAFE_INTEGER", JsN(9007199254740991))

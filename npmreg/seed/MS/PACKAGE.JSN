@@ -1,0 +1,9 @@
+{
+  "name": "ms",
+  "version": "2.1.3",
+  "description": "Times as text and back: ms('2 days') is 172800000, ms(60000) is '1m'.",
+  "main": "INDEX.JS",
+  "keywords": ["ms", "time", "milliseconds", "duration", "parse", "format"],
+  "author": "sim95",
+  "license": "MIT"
+}

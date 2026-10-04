@@ -63,7 +63,11 @@ A series of programs for the sim95 playground
   prompt. Servers and clients on SIM95's network (`http`, `net`), `fs`,
   `events`, `readline` and the rest, on Simxplorer's JavaScript engine (now
   with classes, `let`/`const`, template strings, destructuring, spread and
-  Promises).
+  Promises). With npm: `npm install express`, `npm publish`.
+* [`npmreg/`](npmreg/) – the npm registry, on STARTHERE: JavaScript packages
+  for Node, to search in a browser and install with npm. Publishing sends a
+  package in parts, as Vapor sends installers. Starts with express, lodash,
+  cowsay and a few more.
 * [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
   scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
@@ -107,5 +111,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix, node). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix, node, npm). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

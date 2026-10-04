@@ -1,0 +1,18 @@
+' NPM.SPK - npm, the package manager for Node on SIM95. It starts Node
+' (C:\PROGRAMS\NODE.SPK) running npm (C:\NODE\LIB\NPM.JS) with what you
+' typed, in the folder Sim Shell is in:
+'   npm install leftpad      npm init -y      npm publish      npm help
+SUB Main ()
+    VAR rest AS Array OF String
+    VAR a AS String
+    VAR cwd AS String
+    cwd = "--cwd=C:\MYFILES"
+    FOR EACH a IN SYS.Args
+        IF a.StartsWith("--cwd=") THEN
+            cwd = a
+        ELSE
+            rest.Add(a)
+        END IF
+    NEXT
+    SYS.Start("C:\PROGRAMS\NODE.SPK", cwd + " C:\NODE\LIB\NPM.JS " + rest.Join(" "))
+END SUB

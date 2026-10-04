@@ -27,6 +27,45 @@ http.createServer((req, res) => {
 }).listen(8080, () => console.log('Open http://' + require('os').hostname() + ':8080/ in Voyager'));
 ```
 
+## npm
+
+npm comes with Node. It gets packages from the network's registry,
+`http://starthere/npm/` (see [`npmreg/`](../npmreg/)), and puts them in
+`NODE_MOD`:
+
+```
+C:\MYFILES\APP> npm init -y
+C:\MYFILES\APP> npm install express        (and what it needs)
+C:\MYFILES\APP> npm install                (everything PACKAGE.JSN lists)
+C:\MYFILES\APP> npm install -g cowsay      (for the whole machine, with its command)
+C:\MYFILES\APP> cowsay hello
+```
+
+| Command | What it does |
+|---|---|
+| `npm install [pkg[@range]]` (`i`) | Packages into `NODE_MOD`, saved in `PACKAGE.JSN` (`-D` as dev, `--no-save`, `-g` for `C:\NODE\MODULES`) |
+| `npm uninstall pkg`, `npm update`, `npm outdated`, `npm ls` | Take away, bring up to date, see what's old, see the tree |
+| `npm search words`, `npm view pkg [field]` | Find packages, and read about one |
+| `npm init [-y]`, `npm version patch` | Make a `PACKAGE.JSN`; move its version on |
+| `npm adduser` (`login`), `whoami`, `logout` | An account on the registry |
+| `npm publish`, `npm unpublish pkg@version` | Share the package in this folder |
+| `npm run script`, `npm start`, `npm test` | The scripts in `PACKAGE.JSN` (a `node ...` one opens its own Node window) |
+| `npm config set registry http://host/npm/` | Another registry (kept in `C:\NODE\NPMRC.TXT`) |
+
+* **Ranges** are the usual ones: `^1.2.0`, `~1.2.0`, `1.x`, `>=1.0.0 <2.0.0`,
+  `1.0.0 - 1.5.0`, `||`, `*` and `latest`.
+* **Two versions of one package:** one goes at the top of `NODE_MOD`, and
+  the other in the `NODE_MOD` of the package that needs it, as npm does.
+* **Commands:** a global package's `bin` becomes a Sim Shell script in
+  `C:\PROGRAMS` (`COWSAY.SH` runs `node C:\NODE\MODULES\COWSAY\CLI.JS`),
+  so it works like any program.
+* **How packages travel:** `npm publish` puts every file into one text
+  bundle (`NPMPACK`). It cuts the bundle into parts of whole lines, 30K at
+  most, so each fits in a network message, as Vapor does with its
+  installers. It sends them one at a time, with a sum the installing machine
+  checks. `NODE_MOD` and dot files are left out.
+* `npm ... --verbose` shows where an error came from.
+
 ## What's there
 
 * **The language:** the engine is Simxplorer's, improved for Node:
@@ -63,7 +102,8 @@ http.createServer((req, res) => {
 ## SIM95's ways
 
 * **File names are 8.3:** `node_modules` is `NODE_MOD`, and `package.json` is
-  `PACKAGE.JSN`. Package names are 8 characters at most. Paths are
+  `PACKAGE.JSN`. Package names are 1 to 8 of a-z, 0-9, `-` and `_`, since
+  each is a folder. Paths are
   `C:\DIR\FILE.JS`, and `/` works too.
 * **Files are text:** there's no `Buffer`. `fs` reads and writes strings.
 * **The network carries whole messages:** each `socket.write()` is one
@@ -83,8 +123,9 @@ http.createServer((req, res) => {
   The engine runs JavaScript by walking it, inside SPARK, which has a small
   call stack of its own. Events, timers and callbacks start fresh, so
   ordinary programs fit, but deep recursion doesn't.
-* **It's slow:** an interpreter in an interpreter. Fine for servers, tools
-  and games that wait for people; not for number crunching.
+* **It's slow:** an interpreter in an interpreter, roughly a millisecond a
+  statement. Fine for servers, tools and games that wait for people; not for
+  number crunching.
 * **Not yet:** `async`/`await`, generators, regular expressions, getters and
   setters, `Buffer`, labelled `break`. These need the engine rewritten as a
   bytecode machine, which is the next big step, and which would lift the
@@ -94,6 +135,8 @@ http.createServer((req, res) => {
 
 * `C:\PROGRAMS\NODE.SPK` is `src/NODEHOST.SPK` (the window, the event loop
   and the natives) joined to `simxplorer/src/JSCRIPT.SPK` (the engine).
+* `C:\PROGRAMS\NPM.SPK` (`src/NPM.SPK`) starts Node with `lib/NPM.JS`, npm
+  itself, which uses `lib/SEMVER.JS` for versions.
 * `lib/BOOT.JS` runs first: it takes the browser's globals away, and makes
   `console`, `process` and `require`. The modules are the other `.JS` files
   in `lib/`.
@@ -114,3 +157,7 @@ covers:
 * an HTTP server used the way Voyager does, and `http.get`;
 * a `net` echo server and client;
 * errors, the prompt, and `readline`.
+
+`node tools/aspsim/npm.test.mjs` sets up the registry and covers npm: search,
+install with dependencies, `-g` commands, accounts, publishing in parts,
+conflicting versions, updates, and an Express server.

@@ -1,0 +1,9 @@
+{
+  "name": "lodash",
+  "version": "4.17.21",
+  "description": "The utility belt: chunk, uniq, groupBy, sortBy, debounce, pick, camelCase and friends.",
+  "main": "INDEX.JS",
+  "keywords": ["util", "functional", "array", "object", "string", "utilities"],
+  "author": "sim95",
+  "license": "MIT"
+}

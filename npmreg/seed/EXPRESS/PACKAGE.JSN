@@ -1,0 +1,9 @@
+{
+  "name": "express",
+  "version": "4.18.2",
+  "description": "Web servers the easy way: routes with :params, middleware, static files, JSON.",
+  "main": "INDEX.JS",
+  "keywords": ["express", "web", "http", "server", "framework", "router", "app"],
+  "author": "sim95",
+  "license": "MIT"
+}
