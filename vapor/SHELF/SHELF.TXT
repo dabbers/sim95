@@ -1,5 +1,5 @@
 # What a Vapor store built from this repository stocks. Made by tools/build-installer.mjs;
-# tools/vapor-bridge.js reads it. (item <path> <version> | soon <catalog line> | site <path> <SIM95 path>)
+# tools/vapor-bridge.js reads it. (item <path> <version> | soon <catalog line> | site <path> <SIM95 path> | central <path> <hash> <marker>)
 item vapor/SHELF/VAPOR.SPK d0000c03
 item vapor/SHELF/SIMDOOM.SPK c0f9cfa6
 item vapor/SHELF/SNAKE.SPK aa5d9aeb
@@ -16,7 +16,7 @@ item geosimies/INSTALL.SPK 381f5bf0
 item simpal/INSTALL.SPK 6e12c626
 item simtube/INSTALL.SPK d8d3ebf2
 item simstats/INSTALL.SPK b9240bbb
-item simsh/INSTALL.SPK 9b64061c
+item simsh/INSTALL.SPK be171f8b
 item wikisim/INSTALL.SPK 4998e899
 item vspark/INSTALL.SPK 680a32c3
 item node/INSTALL.SPK d1d2f68d
@@ -30,3 +30,7 @@ site vapor/WEB/GETVAPOR.TXT C:\WEB\VAPOR\GETVAPOR.TXT
 site vapor/WEB/GO.ASP C:\WEB\VAPOR\GO.ASP
 site vapor/WEB/GO.TXT C:\WEB\VAPOR\GO.TXT
 site vapor/WEB/INDEX.ASP C:\WEB\VAPOR\INDEX.ASP
+central simnic/INSTALL.SPK 6c6e5420 C:\PROGRAMS\NAMED.SPK
+central welcome/INSTALL.SPK 25dfdeb8 C:\PROGRAMS\WELCOME.SPK
+central pixelwall/INSTALL.SPK 8c118b08 C:\WEB\WALL\WALL.SPK
+central npmreg/INSTALL.SPK 4e31596d C:\WEB\NPM\REG.SPK

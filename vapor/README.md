@@ -65,6 +65,58 @@ Every Vapor that shops at your machine sees the new builds within five
 minutes, or at once with **Vapor > Check for Updates**. Each then offers
 **Update** for each changed item, and **Update All**.
 
+### Keeping a store up to date by itself: the resident bridge
+
+For a store that's always on, like STARTHERE, the bridge can stay in its
+browser tab and do this by itself:
+[`tools/bridge-resident.js`](../tools/bridge-resident.js), loaded by a
+userscript, [`tools/sim95-bridge.user.js`](../tools/sim95-bridge.user.js).
+
+* **Every 15 minutes** it asks GitHub for the newest commit on `main`. When
+  there's a new one, it:
+  1. stocks the store from it (it runs that commit's `vapor-bridge.js`);
+  2. runs the newer installer of each central-host app the machine has: the
+     Pixel Wall, the npm registry, SimNIC and the Welcome Wagon, which aren't
+     in the stores;
+  3. upgrades what's installed on the machine itself, with Sim Shell's
+     `sim-get upgrade -y`, in a Sim Shell window that closes when it's done.
+* **From anywhere on the network**, in Sim Shell over ssh:
+
+  ```
+  ssh starthere
+  bridge                  is it there, what it follows, what it did last
+  bridge update           do it now (bridge update force: even if nothing changed)
+  bridge log 30           the last 30 lines of what it did
+  bridge follow BRANCH    follow another branch; bridge follow main to go back
+  bridge every 60         check every 60 minutes (0: only when asked)
+  ```
+
+  Over ssh, Sim Shell can't wait on the network, so `bridge update` only
+  asks. The bridge picks the request up within a few seconds, and
+  `bridge log` follows what it does.
+
+**Setting it up**, once, on the computer whose browser runs STARTHERE:
+1. Install Tampermonkey (or Violentmonkey) in that browser.
+2. Make a new script, paste in all of `tools/sim95-bridge.user.js`, and save.
+3. Reload the SIM95 tab and leave it open.
+
+The script runs the bridge only on the machine named in its `MACHINE` line
+(`STARTHERE`). It loads the bridge itself from GitHub each time the tab
+loads, so later versions of it arrive by themselves. The console (F12) shows
+what it does.
+
+**How they talk:** through files in `C:\SYSTEM\BRIDGE`:
+* `ALIVE.TXT`: when the bridge last said it's there;
+* `BRIDGE.INI`: what to follow, and how often;
+* `REQUEST.TXT`: left by `bridge update`;
+* `STATUS.TXT`, `LOG.TXT`: what it's doing, and what it did;
+* `DONE.TXT`: the commit and the central apps' builds last brought here.
+
+**Who can use it:** anyone with STARTHERE's user name and password, since
+`ssh` here is rsh with a plain password. The most they can do is make the
+browser install this repository's own branches: the bridge fetches nothing
+but `github.com/dabbers/sim95`.
+
 ### Stocking the shelves by hand: Publish Apps
 
 Every `INSTALL.SPK` that `tools/build-installer.mjs` makes starts with a header

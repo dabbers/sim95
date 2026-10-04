@@ -732,7 +732,7 @@ FUNCTION RunStage (raw AS String, input AS String, last AS Bool) AS String
 END FUNCTION
 
 FUNCTION Builtins () AS Array OF String
-    RETURN ["alias", "basename", "cat", "cd", "clear", "cp", "date", "echo", "env", "exit", "export", "false", "grep", "head", "help", "history", "host", "hostname", "kill", "ls", "mkdir", "mv", "nslookup", "ps", "pwd", "rm", "rmdir", "run", "scp", "seq", "set", "sh", "sim-get", "sleep", "sort", "source", "ssh", "tail", "tee", "touch", "true", "unalias", "uname", "uniq", "unset", "wc", "which", "whoami"]
+    RETURN ["alias", "basename", "bridge", "cat", "cd", "clear", "cp", "date", "echo", "env", "exit", "export", "false", "grep", "head", "help", "history", "host", "hostname", "kill", "ls", "mkdir", "mv", "nslookup", "ps", "pwd", "rm", "rmdir", "run", "scp", "seq", "set", "sh", "sim-get", "sleep", "sort", "source", "ssh", "tail", "tee", "touch", "true", "unalias", "uname", "uniq", "unset", "wc", "which", "whoami"]
 END FUNCTION
 
 ' One command, with its arguments and its input. Returns what it printed.
@@ -861,6 +861,8 @@ FUNCTION Command (argv AS Array OF String, input AS String) AS String
             RETURN ""
         CASE "sim-get", "simget"
             RETURN CmdSimGet(args)
+        CASE "bridge"
+            RETURN CmdBridge(args)
         CASE "host", "nslookup"
             IF args.Count = 0 THEN RETURN Usage(cmd + " name [A|CNAME|MX|TXT|NS|SOA|ANY] [@server]")
             Defer("host", args)
@@ -1929,6 +1931,128 @@ FUNCTION KindWord (kind AS String) AS String
 END FUNCTION
 
 ' sim-get: the local parts run here; update, install and upgrade are jobs.
+'' ---------------------------------------------------------------- bridge
+'
+' The resident bridge (tools/bridge-resident.js) runs in the browser tab of a
+' machine kept up to date from GitHub, and listens through C:\SYSTEM\BRIDGE.
+' This only reads and writes those files, so it works over ssh too.
+'   bridge [status]       is it there, what it follows, what it did last
+'   bridge update [force] bring the newest commit here now
+'   bridge log [n]        the last n lines of what it did (20)
+'   bridge follow BRANCH  follow another branch (main is the usual)
+'   bridge every N        check every N minutes (0: only when asked)
+FUNCTION CmdBridge (args AS Array OF String) AS String
+    VAR d AS String
+    VAR out AS String
+    VAR sub1 AS String
+    VAR alive AS String
+    VAR ago AS Integer
+    VAR lines AS Array OF String
+    VAR n AS Integer
+    VAR k AS Integer
+    d = "C:\SYSTEM\BRIDGE"
+    sub1 = "status"
+    IF args.Count > 0 THEN sub1 = args[0].Lower()
+    alive = ""
+    IF FS.Exists(d + "\ALIVE.TXT") THEN alive = FS.Read(d + "\ALIVE.TXT").Trim()
+    ago = -1
+    IF alive <> "" THEN ago = TIME.Now - Int(Val(alive.Split("|")[0]))
+    SELECT CASE sub1
+        CASE "status"
+            IF ago < 0 THEN RETURN "There's no bridge on " + NET.HostName.Lower() + ": it runs in the browser tab of a machine kept up to date from GitHub (tools/sim95-bridge.user.js)." + EOL
+            IF ago > 30 THEN
+                out = "The bridge was last heard from " + BridgeAgo(ago) + " ago: is the browser tab still open?" + EOL
+            ELSE
+                out = "The bridge is running in this machine's browser tab." + EOL
+            END IF
+            out = out + "  follows:  " + BridgeSetting("ref", "main") + ", checking every " + BridgeSetting("every", "15") + " minutes" + EOL
+            IF FS.Exists(d + "\STATUS.TXT") THEN out = out + "  now:      " + FS.Read(d + "\STATUS.TXT").Trim() + EOL
+            IF FS.Exists(d + "\REQUEST.TXT") THEN out = out + "  asked:    " + FS.Read(d + "\REQUEST.TXT").Trim() + " (not picked up yet)" + EOL
+            RETURN out
+        CASE "update"
+            IF NOT FS.Exists(d) THEN FS.MakeDir(d)
+            IF args.Count > 1 AND args[1].Lower() = "force" THEN
+                FS.Write(d + "\REQUEST.TXT", "update force" + EOL)
+            ELSE
+                FS.Write(d + "\REQUEST.TXT", "update" + EOL)
+            END IF
+            out = "Asked the bridge to bring " + BridgeSetting("ref", "main") + " here."
+            IF ago < 0 OR ago > 30 THEN
+                out = out + " But it isn't running (no word from it " + BridgeAgo(MATH.Max(ago, 0)) + "): it will see this when its browser tab is open again." + EOL
+            ELSE
+                out = out + " Follow it with: bridge log" + EOL
+            END IF
+            RETURN out
+        CASE "log"
+            n = 20
+            IF args.Count > 1 THEN n = MATH.Max(1, Int(Val(args[1])))
+            IF NOT FS.Exists(d + "\LOG.TXT") THEN RETURN "The bridge hasn't written anything yet." + EOL
+            lines = FS.Read(d + "\LOG.TXT").Lines()
+            WHILE lines.Count > 0
+                IF lines[lines.Count - 1].Trim() <> "" THEN BREAK
+                lines.RemoveAt(lines.Count - 1)
+            END WHILE
+            FOR k = MATH.Max(0, lines.Count - n) TO lines.Count - 1
+                IF lines[k] <> "" THEN out = out + lines[k] + EOL
+            NEXT
+            RETURN out
+        CASE "follow", "every"
+            IF args.Count < 2 THEN
+                shStatus = 2
+                RETURN "usage: bridge " + sub1 + " " + IIf(sub1 = "follow", "BRANCH", "MINUTES") + EOL
+            END IF
+            IF sub1 = "follow" THEN
+                BridgeSet("ref", args[1])
+                RETURN "The bridge follows " + args[1] + " from its next check (bridge update to go now)." + EOL
+            END IF
+            BridgeSet("every", Str(MATH.Max(0, Int(Val(args[1])))))
+            IF Int(Val(args[1])) <= 0 THEN RETURN "The bridge checks only when asked (bridge update)." + EOL
+            RETURN "The bridge checks every " + Str(Int(Val(args[1]))) + " minutes." + EOL
+    END SELECT
+    shStatus = 2
+    RETURN "usage: bridge [status] | update [force] | log [n] | follow BRANCH | every MINUTES" + EOL
+END FUNCTION
+
+FUNCTION IIf (c AS Bool, a AS String, b AS String) AS String
+    IF c THEN RETURN a
+    RETURN b
+END FUNCTION
+
+FUNCTION BridgeAgo (s AS Integer) AS String
+    IF s < 120 THEN RETURN Str(s) + " seconds"
+    IF s < 7200 THEN RETURN Str(Int(s / 60)) + " minutes"
+    IF s < 172800 THEN RETURN Str(Int(s / 3600)) + " hours"
+    RETURN Str(Int(s / 86400)) + " days"
+END FUNCTION
+
+FUNCTION BridgeSetting (k AS String, dflt AS String) AS String
+    VAR ln AS String
+    IF NOT FS.Exists("C:\SYSTEM\BRIDGE\BRIDGE.INI") THEN RETURN dflt
+    FOR EACH ln IN FS.Read("C:\SYSTEM\BRIDGE\BRIDGE.INI").Lines()
+        IF ln.Trim().Lower().StartsWith(k + "=") THEN RETURN ln.Trim().Substring(k.Length + 1, ln.Trim().Length - k.Length - 1)
+    NEXT
+    RETURN dflt
+END FUNCTION
+
+SUB BridgeSet (k AS String, v AS String)
+    VAR ln AS String
+    VAR out AS Array OF String
+    VAR found AS Bool
+    IF NOT FS.Exists("C:\SYSTEM\BRIDGE") THEN FS.MakeDir("C:\SYSTEM\BRIDGE")
+    IF FS.Exists("C:\SYSTEM\BRIDGE\BRIDGE.INI") THEN
+        FOR EACH ln IN FS.Read("C:\SYSTEM\BRIDGE\BRIDGE.INI").Lines()
+            IF ln.Trim().Lower().StartsWith(k + "=") THEN
+                out.Add(k + "=" + v)
+                found = TRUE
+            ELSEIF ln.Trim() <> "" THEN
+                out.Add(ln)
+            END IF
+        NEXT
+    END IF
+    IF NOT found THEN out.Add(k + "=" + v)
+    FS.Write("C:\SYSTEM\BRIDGE\BRIDGE.INI", out.Join(EOL) + EOL)
+END SUB
+
 FUNCTION CmdSimGet (args AS Array OF String) AS String
     VAR sub1 AS String
     VAR out AS String

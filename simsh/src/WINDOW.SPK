@@ -21,6 +21,13 @@ VAR remoteLine AS String       ' a line to run on the remote machine
 VAR haveRemoteLine AS Bool
 VAR histPos AS Integer
 VAR curLine AS String
+' SIMSH.SPK -c command... [--log=FILE] [--exit]: runs the command line as if
+' typed, then saves what the window showed to FILE and closes (the resident
+' bridge runs "sim-get upgrade -y" this way)
+VAR autoLine AS String
+VAR autoLog AS String
+VAR autoExit AS Bool
+VAR autoRan AS Bool
 
 SUB Main ()
     VAR me AS String
@@ -57,6 +64,51 @@ SUB Main ()
     win.Show()
     inbox.Focus()
     Ready()
+    TakeArgs()
+    IF autoLine <> "" THEN
+        inbox.Text = autoLine
+        autoRan = TRUE
+        In_Enter()
+    END IF
+END SUB
+
+SUB TakeArgs ()
+    VAR k AS Integer
+    VAR a AS String
+    VAR words AS Array OF String
+    VAR taking AS Bool
+    FOR k = 0 TO SYS.Args.Count - 1
+        a = SYS.Args[k]
+        IF a = "-c" THEN
+            taking = TRUE
+        ELSEIF a.StartsWith("--log=") THEN
+            autoLog = a.Substring(6, a.Length - 6)
+            taking = FALSE
+        ELSEIF a = "--exit" THEN
+            autoExit = TRUE
+            taking = FALSE
+        ELSEIF taking THEN
+            words.Add(a)
+        END IF
+    NEXT
+    autoLine = words.Join(" ")
+END SUB
+
+' The -c line is done: its log, and perhaps goodbye.
+SUB AutoDone ()
+    VAR k AS Integer
+    VAR out AS Array OF String
+    autoRan = FALSE
+    IF autoLog <> "" THEN
+        TRY
+            FOR k = 0 TO screen.Count - 1
+                out.Add(screen.Get(k))
+            NEXT
+            FS.Write(autoLog, out.Join(EOL) + EOL)
+        CATCH err
+        END TRY
+    END IF
+    IF autoExit THEN win.Close()
 END SUB
 
 SUB Win_OnClose ()
@@ -118,6 +170,10 @@ END SUB
 ' Put the prompt up and let the user type.
 SUB Ready ()
     IF passMode THEN RETURN
+    IF autoRan AND NOT ShBusy() AND NOT jobWant AND NOT jobRunning THEN
+        AutoDone()
+        IF autoExit THEN RETURN
+    END IF
     IF remoteOn THEN
         promptLbl.Text = remotePrompt
     ELSE

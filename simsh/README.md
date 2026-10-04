@@ -57,7 +57,12 @@ Unix-style paths are mapped onto the C: drive, and DOS paths work too:
   (by pid or name), `run prog.spk` (or just type a program's name or a `.SPK`
   path), `date`, `whoami`, `hostname`, `uname`, `which`, `sleep`, `true`,
   `false`, `help`.
-* **Network:** `ssh`, `scp`, `sim-get` (below).
+* **Network:** `ssh`, `scp`, `sim-get` (below), and `bridge`, which talks to
+  a resident bridge keeping the machine up to date from GitHub (see
+  [Vapor's README](../vapor/README.md)).
+* **Running a line from elsewhere:** `SIMSH.SPK -c command line
+  [--log=FILE] [--exit]` runs the line as if typed. It then saves what the
+  window showed to FILE, and closes the window.
 
 ## Shell syntax
 

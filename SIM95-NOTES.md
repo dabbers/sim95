@@ -305,3 +305,20 @@ Found while building Explorer:
   waits. Nothing else of the program runs in those pauses, but a test (or the
   page) can look in between: a window's title can change before its status
   bar does.
+
+Found while building the resident bridge:
+* **A program that prints keeps running.** Started with `kernel.spawn(path,
+  args)` from the page, a program that uses `Print` stays in `kernel.ps()`
+  after its Main ends, since its output window stays open. Spawned with
+  `kernel.spawn(path, args, { stdout: { text: "", destroyed: false,
+  call(m, t) { if (m === "Write") this.text += t; } } })`, its output is
+  collected there instead, and it ends when it's done. The resident bridge
+  and the test network (`m.run`) both start programs this way.
+* **Sim Shell over ssh runs no network jobs.** `sim-get`, `ssh` and `scp`
+  over ssh say "needs the network; run it in the Sim Shell window". That's
+  why `bridge update` only leaves a request, and the bridge runs
+  `sim-get upgrade` in a window of its own (`SIMSH.SPK -c ... --exit`).
+* **The page's machine object** (found by the bridges through React) has
+  `fs`, `kernel`, `net`, `ui`, `hostname()`, and `reboot`, `shutdown`,
+  `reinstall` and `recover`. `hostname()` is the full name, such as
+  `STARTHERE.56K.NET`.

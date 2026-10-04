@@ -1166,12 +1166,22 @@ END SUB
   return { text: out, files: files.length };
 }
 
+// The central host's apps: not in the stores (there's one of each, on
+// STARTHERE), and how to tell one is installed.
+const centralApps = {
+  simnic: "C:\\PROGRAMS\\NAMED.SPK",
+  welcome: "C:\\PROGRAMS\\WELCOME.SPK",
+  pixelwall: "C:\\WEB\\WALL\\WALL.SPK",
+  npmreg: "C:\\WEB\\NPM\\REG.SPK",
+};
+
 // vapor/SHELF: everything a store built from this repository stocks, for
 // tools/vapor-bridge.js to copy from GitHub into a store machine. SHELF.TXT
 // lists it, one thing a line:
 //   item <repo path> <version>       a file with a Vapor header, to publish
 //   soon <catalog line>               on the shelf, not out yet (Half-Life 3)
 //   site <repo path> <SIM95 path>     the store's own web pages
+//   central <repo path> <hash> <SIM95 path>   a central host's app, when that file is there
 // The Vapor program and the games have no INSTALL.SPK of their own, so they
 // are written here with their headers on, as a store gets them.
 function shelf() {
@@ -1191,7 +1201,14 @@ function shelf() {
     if (fs.existsSync(file)) item(key + "/INSTALL.SPK", fs.readFileSync(file, "utf8"));
   }
   for (const f of fs.readdirSync(path.join(root, "vapor/WEB")).sort()) lines.push(`site vapor/WEB/${f} C:\\WEB\\VAPOR\\${f.toUpperCase()}`);
-  fs.writeFileSync(path.join(dir, "SHELF.TXT"), "# What a Vapor store built from this repository stocks. Made by tools/build-installer.mjs;\n# tools/vapor-bridge.js reads it. (item <path> <version> | soon <catalog line> | site <path> <SIM95 path>)\n" + lines.join("\n") + "\n");
+  // the central host's own apps, which aren't in the stores: the resident
+  // bridge (tools/bridge-resident.js) runs a newer installer on a machine
+  // that has the app (the file named last is there)
+  for (const [key, marker] of Object.entries(centralApps)) {
+    const file = path.join(root, key, "INSTALL.SPK");
+    if (fs.existsSync(file)) lines.push(`central ${key}/INSTALL.SPK ${crypto.createHash("sha1").update(fs.readFileSync(file)).digest("hex").slice(0, 8)} ${marker}`);
+  }
+  fs.writeFileSync(path.join(dir, "SHELF.TXT"), "# What a Vapor store built from this repository stocks. Made by tools/build-installer.mjs;\n# tools/vapor-bridge.js reads it. (item <path> <version> | soon <catalog line> | site <path> <SIM95 path> | central <path> <hash> <marker>)\n" + lines.join("\n") + "\n");
   console.log(`vapor/SHELF/SHELF.TXT: ${lines.filter((l) => l.startsWith("item")).length} items`);
 }
 
