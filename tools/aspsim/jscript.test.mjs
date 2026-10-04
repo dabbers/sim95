@@ -353,5 +353,62 @@ Promise.race([Promise.resolve('fast'), new Promise(function () {})]).then(functi
 document.write(log.join(' '));`), "a1 b2 c:boom d:thrown e5 fno g1+2+3 hx ifast");
 });
 
+await test("modern syntax: let and const, templates, destructuring, spread, defaults, ?. and ??", async () => {
+  const cases = [
+    ["(function () { let a = 1; { let a = 2; } return a; })()", "1"],
+    ["(function () { const fs = []; for (let i = 0; i < 3; i++) fs.push(() => i); return fs.map(f => f()).join(); })()", "0,1,2"],
+    ["(function () { var fs = []; for (var i = 0; i < 3; i++) fs.push(() => i); return fs.map(f => f()).join(); })()", "3,3,3"],
+    ["(function () { const out = []; for (const x of [1, 2]) out.push(() => x); return out.map(f => f()).join(); })()", "1,2"],
+    ["`a ${1 + 1} b ${'c'}`", "a 2 b c"], ["`${[1, 2]}|${{}.x}`", "1,2|undefined"],
+    ["(function () { const n = 3; return `${n} ${`in ${n > 2 ? 'big' : 'small'}`}`; })()", "3 in big"],
+    ["`one\ntwo`.split('\\n').length", "2"],
+    ["(function () { const {a, b: {c}, d = 4, ...rest} = {a: 1, b: {c: 2}, e: 5, f: 6}; return [a, c, d, JSON.stringify(rest)].join(); })()", '1,2,4,{"e":5,"f":6}'],
+    ["(function () { const [x, , y = 9, ...z] = [1, 2, undefined, 4, 5]; return [x, y, z.join('+')].join(); })()", "1,9,4+5"],
+    ["(function () { let s = ''; for (const [k, v] of Object.entries({a: 1, b: 2})) s += k + v; return s; })()", "a1b2"],
+    ["(function () { let s = ''; for (const ch of 'hey') s += ch.toUpperCase(); return s; })()", "HEY"],
+    ["(function (a, b = a * 2, ...more) { return [a, b, more.length].join(); })(5)", "5,10,0"],
+    ["(({name, age = 30}) => name + age)({name: 'Ann'})", "Ann30"],
+    ["Math.max(...[3, 9, 1])", "9"], ["[0, ...[1, 2], 3].join()", "0,1,2,3"], ["[...'ab'].length", "2"],
+    ["JSON.stringify({...{a: 1, b: 2}, b: 3})", '{"a":1,"b":3}'],
+    ["(function () { const k = 'dyn', x = 1; const o = {x, [k]: 2, hi() { return 'hi ' + this.x; }}; return o.dyn + o.hi(); })()", "2hi 1"],
+    ["(function () { const o = null; return [o?.a, o?.a.b, o?.[0], o?.f()].join('|'); })()", "|||"],
+    ["(function () { const o = {a: {b: 7}}; return o?.a?.b; })()", "7"],
+    ["[null ?? 'x', 0 ?? 'x', undefined ?? 'y', '' ?? 'z'].join()", "x,0,y,"],
+  ];
+  const res = await js(...cases.map(([e]) => W(e)));
+  const bad = cases.map(([e, want], i) => (res[i].out === want && !res[i].err ? null : `${e}: wanted ${want}, got ${res[i].out} ${res[i].err}`)).filter(Boolean);
+  assert.deepEqual(bad, []);
+});
+
+await test("classes: constructors, methods, static, fields, extends and super", async () => {
+  assert.equal(await out(`
+class Animal {
+  legs = 4;
+  static count = 0;
+  constructor(name) { this.name = name; Animal.count++; }
+  speak() { return this.name + ' makes a sound'; }
+  static kind() { return 'animal'; }
+}
+class Dog extends Animal {
+  tricks = [];
+  constructor(name) { super(name); this.tricks.push('sit'); }
+  speak() { return super.speak() + ' (woof)'; }
+}
+class Puppy extends Dog {}
+const d = new Dog('Rex'), p = new Puppy('Bit');
+const keys = []; for (const k in d) keys.push(k);
+document.write([d.speak(), p.speak(), d.legs, d.tricks.join(), Animal.count, Dog.kind(), p instanceof Animal, p instanceof Dog, p.constructor === Puppy, keys.join('+'), typeof Dog].join(' | '));`),
+    "Rex makes a sound (woof) | Bit makes a sound (woof) | 4 | sit | 2 | animal | true | true | true | legs+name+tricks | function");
+  assert.equal(await out(`
+class AppError extends Error {
+  constructor(message, code) { super(message); this.name = 'AppError'; this.code = code; }
+}
+const e = new AppError('nope', 42);
+let caught = '';
+try { throw e; } catch (x) { caught = x.name + ':' + x.message + ':' + x.code + ':' + (x instanceof Error) + (x instanceof AppError); }
+const Point = class { constructor(x) { this.x = x; } twice() { return this.x * 2; } };
+document.write(caught + ' ' + new Point(21).twice());`), "AppError:nope:42:truetrue 42");
+});
+
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

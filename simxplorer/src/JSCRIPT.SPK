@@ -42,6 +42,7 @@ VAR jtLine AS Array OF Integer
 VAR jtNl AS Array OF Bool
 VAR jp AS Integer
 VAR jsLineBase AS Integer
+VAR jsLexLine AS Integer
 
 VAR nk AS Array OF String
 VAR na AS Array OF Integer
@@ -104,6 +105,22 @@ SUB JsAddToken (kind AS String, text AS String, line AS Integer, newline AS Bool
 END SUB
 
 SUB JsLex (src AS String)
+    jtType.Clear()
+    jtText.Clear()
+    jtLine.Clear()
+    jtNl.Clear()
+    jsLexLine = jsLineBase
+    JsLexInto(src)
+    JsAddToken("eof", "", jsLexLine, TRUE)
+END SUB
+
+' The tokens of src, added to the ones so far (a template's ${...} is lexed
+' this way, in the middle of the rest). jsLexLine is the line it starts on,
+' and ends on.
+SUB JsLexInto (src AS String)
+    VAR depth AS Integer
+    VAR j AS Integer
+    VAR ch AS String
     VAR hexLen AS Integer
     VAR i AS Integer
     VAR n AS Integer
@@ -118,13 +135,9 @@ SUB JsLex (src AS String)
     VAR op AS String
     VAR ops AS Array OF String
     VAR found AS Bool
-    jtType.Clear()
-    jtText.Clear()
-    jtLine.Clear()
-    jtNl.Clear()
-    ops = ["===", "!==", "==", "=>", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%=", "+", "-", "*", "/", "%", "<", ">", "=", "!", "?", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]"]
+    ops = ["...", "===", "!==", "==", "=>", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=", "%=", "+", "-", "*", "/", "%", "<", ">", "=", "!", "?", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]"]
     n = src.Length
-    line = jsLineBase
+    line = jsLexLine
     fresh = TRUE
     WHILE i < n
         c = src.CharAt(i)
@@ -185,7 +198,7 @@ SUB JsLex (src AS String)
                 i = i + 1
             END WHILE
             word = src.Substring(start, i - start)
-            IF "|var|function|return|if|else|while|for|in|do|break|continue|new|this|true|false|null|typeof|void|delete|switch|case|default|try|catch|finally|throw|instanceof|".Contains("|" + word + "|") THEN
+            IF "|var|let|const|class|extends|super|function|return|if|else|while|for|in|do|break|continue|new|this|true|false|null|typeof|void|delete|switch|case|default|try|catch|finally|throw|instanceof|".Contains("|" + word + "|") THEN
                 JsAddToken("kw", word, line, fresh)
             ELSE
                 JsAddToken("id", word, line, fresh)
@@ -238,9 +251,81 @@ SUB JsLex (src AS String)
             fresh = FALSE
             CONTINUE
         END IF
-        ' Operators, longest first
+        ' Template literals: `a ${b} c` is lexed as ("a" + (b) + " c")
+        IF c = "`" THEN
+            JsAddToken("op", "(", line, fresh)
+            fresh = FALSE
+            text = ""
+            i = i + 1
+            WHILE TRUE
+                IF i >= n THEN THROW Str(line) + "|Unterminated template literal"
+                c = src.CharAt(i)
+                IF c = "`" THEN
+                    i = i + 1
+                    BREAK
+                END IF
+                IF c = "\" AND i + 1 < n THEN
+                    i = i + 1
+                    e = src.CharAt(i)
+                    IF e = "n" THEN
+                        text = text + Chr(10)
+                    ELSEIF e = "t" THEN
+                        text = text + Chr(9)
+                    ELSEIF e = "r" THEN
+                        text = text + Chr(13)
+                    ELSEIF e = Chr(10) THEN
+                        line = line + 1
+                    ELSE
+                        text = text + e
+                    END IF
+                    i = i + 1
+                    CONTINUE
+                END IF
+                IF c = "$" AND JsPeek(src, i + 1, 1) = "{" THEN
+                    JsAddToken("str", text, line, FALSE)
+                    JsAddToken("op", "+", line, FALSE)
+                    JsAddToken("op", "(", line, FALSE)
+                    ' the expression runs to the matching }, past any strings in it
+                    depth = 1
+                    j = i + 2
+                    WHILE j < n
+                        ch = src.CharAt(j)
+                        IF ch = "{" THEN
+                            depth = depth + 1
+                        ELSEIF ch = "}" THEN
+                            depth = depth - 1
+                            IF depth = 0 THEN BREAK
+                        ELSEIF ch = """" OR ch = "'" OR ch = "`" THEN
+                            j = j + 1
+                            WHILE j < n AND src.CharAt(j) <> ch
+                                IF src.CharAt(j) = "\" THEN j = j + 1
+                                j = j + 1
+                            END WHILE
+                        END IF
+                        j = j + 1
+                    END WHILE
+                    IF j >= n THEN THROW Str(line) + "|Unterminated template literal"
+                    jsLexLine = line
+                    JsLexInto(src.Substring(i + 2, j - i - 2))
+                    line = jsLexLine
+                    JsAddToken("op", ")", line, FALSE)
+                    JsAddToken("op", "+", line, FALSE)
+                    text = ""
+                    i = j + 1
+                    CONTINUE
+                END IF
+                IF c = Chr(10) THEN line = line + 1
+                text = text + c
+                i = i + 1
+            END WHILE
+            JsAddToken("str", text, line, FALSE)
+            JsAddToken("op", ")", line, FALSE)
+            CONTINUE
+        END IF
+        ' Operators, longest first (but "a ? .5 : 1" is a ? and a number)
         found = FALSE
         FOR EACH op IN ops
+            IF op = "?." AND "0123456789".Contains(JsPeek(src, i + 2, 1)) AND JsPeek(src, i + 2, 1) <> "" THEN CONTINUE
             IF JsPeek(src, i, op.Length) = op THEN
                 JsAddToken("op", op, line, fresh)
                 i = i + op.Length
@@ -251,7 +336,7 @@ SUB JsLex (src AS String)
         IF NOT found THEN THROW Str(line) + "|Invalid character"
         fresh = FALSE
     END WHILE
-    JsAddToken("eof", "", line, TRUE)
+    jsLexLine = line
 END SUB
 
 ' ---------------------------------------------------------------- the parser
@@ -311,7 +396,19 @@ FUNCTION JsParse (src AS String) AS Integer
     WHILE jtType[jp] <> "eof"
         list.Add(Str(JsStatement()))
     END WHILE
-    RETURN JsNode("block", 0, 0, 0, 0, "", list.Join(","), line)
+    ' (the program's own lets and consts are kept like its vars: nd = 2)
+    RETURN JsNode("block", 0, 0, 0, 2, "", list.Join(","), line)
+END FUNCTION
+
+' A block with let, const or class of its own gets a scope of its own: nd = 1.
+FUNCTION JsBlockNode (list AS Array OF String, line AS Integer) AS Integer
+    VAR item AS String
+    VAR own AS Integer
+    FOR EACH item IN list
+        IF item = "" THEN CONTINUE
+        IF nk[Int(Val(item))] = "let" OR nk[Int(Val(item))] = "classdecl" THEN own = 1
+    NEXT
+    RETURN JsNode("block", 0, 0, 0, own, "", list.Join(","), line)
 END FUNCTION
 
 FUNCTION JsBlock () AS Integer
@@ -324,28 +421,140 @@ FUNCTION JsBlock () AS Integer
         list.Add(Str(JsStatement()))
     END WHILE
     jp = jp + 1
-    RETURN JsNode("block", 0, 0, 0, 0, "", list.Join(","), line)
+    RETURN JsBlockNode(list, line)
 END FUNCTION
 
+' var, let or const: each a name or a pattern ({a, b} = o, [x, y] = list),
+' with or without a value. let and const make a "let" node.
 FUNCTION JsVarList () AS Integer
     VAR list AS Array OF String
     VAR name AS String
     VAR init AS Integer
     VAR line AS Integer
+    VAR kind AS String
+    VAR pat AS Integer
     line = JsAt()
+    kind = jtText[jp]
     jp = jp + 1
     WHILE TRUE
-        name = JsName()
+        name = ""
+        pat = 0
+        IF JsIsOp("{") OR JsIsOp("[") THEN
+            pat = JsTarget(FALSE)
+        ELSE
+            name = JsName()
+        END IF
         init = 0
         IF JsIsOp("=") THEN
             jp = jp + 1
             init = JsAssign()
         END IF
-        list.Add(Str(JsNode("decl", init, 0, 0, 0, name, "", line)))
+        list.Add(Str(JsNode("decl", init, pat, 0, 0, name, "", line)))
         IF NOT JsIsOp(",") THEN BREAK
         jp = jp + 1
     END WHILE
-    RETURN JsNode("var", 0, 0, 0, 0, "", list.Join(","), line)
+    IF kind = "var" THEN RETURN JsNode("var", 0, 0, 0, 0, "", list.Join(","), line)
+    RETURN JsNode("let", 0, 0, 0, 0, kind, list.Join(","), line)
+END FUNCTION
+
+' A place a value is put: a name, or a pattern of them.
+'   pname: ns = the name
+'   pobj:  nl = its pprop nodes (ns = key, nb = target), nc = a ...rest target
+'   parr:  nl = its targets (0 for a gap), nc = a ...rest target
+' na is the default, when withDefault allows one (x = 1).
+FUNCTION JsTarget (withDefault AS Bool) AS Integer
+    VAR t AS Integer
+    VAR line AS Integer
+    VAR list AS Array OF String
+    VAR key AS String
+    VAR inner AS Integer
+    VAR rest AS Integer
+    line = JsAt()
+    IF JsIsOp("{") THEN
+        jp = jp + 1
+        WHILE NOT JsIsOp("}")
+            IF JsIsOp("...") THEN
+                jp = jp + 1
+                rest = JsTarget(FALSE)
+            ELSE
+                IF jtType[jp] = "id" OR jtType[jp] = "str" OR jtType[jp] = "kw" THEN
+                    key = jtText[jp]
+                ELSEIF jtType[jp] = "num" THEN
+                    key = JsNumberText(jtText[jp])
+                ELSE
+                    THROW Str(JsAt()) + "|Expected identifier"
+                END IF
+                IF jtType[jp + 1] = "op" AND jtText[jp + 1] = ":" THEN
+                    jp = jp + 2
+                    inner = JsTarget(TRUE)
+                ELSE
+                    inner = JsNode("pname", 0, 0, 0, 0, JsName(), "", line)
+                    IF JsIsOp("=") THEN
+                        jp = jp + 1
+                        na[inner] = JsAssign()
+                    END IF
+                END IF
+                list.Add(Str(JsNode("pprop", 0, inner, 0, 0, key, "", line)))
+            END IF
+            IF NOT JsIsOp("}") THEN JsExpect(",")
+        END WHILE
+        jp = jp + 1
+        t = JsNode("pobj", 0, 0, rest, 0, "", list.Join(","), line)
+    ELSEIF JsIsOp("[") THEN
+        jp = jp + 1
+        WHILE NOT JsIsOp("]")
+            IF JsIsOp(",") THEN
+                list.Add("0")
+                jp = jp + 1
+                CONTINUE
+            END IF
+            IF JsIsOp("...") THEN
+                jp = jp + 1
+                rest = JsTarget(FALSE)
+            ELSE
+                list.Add(Str(JsTarget(TRUE)))
+            END IF
+            IF NOT JsIsOp("]") THEN JsExpect(",")
+        END WHILE
+        jp = jp + 1
+        t = JsNode("parr", 0, 0, rest, 0, "", list.Join(","), line)
+    ELSE
+        t = JsNode("pname", 0, 0, 0, 0, JsName(), "", line)
+    END IF
+    IF withDefault AND JsIsOp("=") THEN
+        jp = jp + 1
+        na[t] = JsAssign()
+    END IF
+    RETURN t
+END FUNCTION
+
+' A function's parameters, after its "(": plain names (a, b) go in names;
+' anything more (defaults, patterns, ...rest) makes a "params" node, whose nl
+' is its targets and nc its rest target. Returns that node, or 0.
+FUNCTION JsParams (names AS Array OF String) AS Integer
+    VAR list AS Array OF String
+    VAR rest AS Integer
+    VAR fancy AS Bool
+    VAR t AS Integer
+    VAR line AS Integer
+    line = JsAt()
+    WHILE NOT JsIsOp(")")
+        IF JsIsOp("...") THEN
+            jp = jp + 1
+            rest = JsTarget(FALSE)
+            fancy = TRUE
+        ELSE
+            t = JsTarget(TRUE)
+            IF nk[t] <> "pname" OR na[t] <> 0 THEN fancy = TRUE
+            list.Add(Str(t))
+            names.Add(ns[t])
+        END IF
+        IF NOT JsIsOp(")") THEN JsExpect(",")
+    END WHILE
+    jp = jp + 1
+    IF NOT fancy THEN RETURN 0
+    names.Clear()
+    RETURN JsNode("params", 0, 0, rest, 0, "", list.Join(","), line)
 END FUNCTION
 
 ' function name(a, b) { ... } - as a statement or an expression
@@ -358,14 +567,18 @@ FUNCTION JsFunction (kind AS String) AS Integer
     jp = jp + 1
     IF jtType[jp] = "id" THEN name = JsName()
     IF kind = "func" AND name = "" THEN THROW Str(JsAt()) + "|Expected identifier"
+    RETURN JsFunctionRest(kind, name, line)
+END FUNCTION
+
+' A function from its "(": the parameters and the body.
+FUNCTION JsFunctionRest (kind AS String, name AS String, line AS Integer) AS Integer
+    VAR params AS Array OF String
+    VAR fancy AS Integer
+    VAR body AS Integer
     JsExpect("(")
-    WHILE NOT JsIsOp(")")
-        params.Add(JsName())
-        IF NOT JsIsOp(")") THEN JsExpect(",")
-    END WHILE
-    jp = jp + 1
+    fancy = JsParams(params)
     body = JsBlock()
-    RETURN JsNode(kind, body, 0, 0, 0, name, params.Join(","), line)
+    RETURN JsNode(kind, body, fancy, 0, 0, name, params.Join(","), line)
 END FUNCTION
 
 FUNCTION JsStatement () AS Integer
@@ -385,10 +598,12 @@ FUNCTION JsStatement () AS Integer
     END IF
     IF jtType[jp] = "kw" THEN
         SELECT CASE jtText[jp]
-            CASE "var"
+            CASE "var", "let", "const"
                 a = JsVarList()
                 JsSemi()
                 RETURN a
+            CASE "class"
+                RETURN JsClass("classdecl")
             CASE "function"
                 RETURN JsFunction("func")
             CASE "if"
@@ -424,22 +639,32 @@ FUNCTION JsStatement () AS Integer
                 JsExpect("(")
                 a = 0
                 isVar = FALSE
-                IF JsIsKw("var") THEN
-                    IF jtType[jp + 1] = "id" AND jtType[jp + 2] = "kw" AND jtText[jp + 2] = "in" THEN
-                        jp = jp + 1
-                        isVar = TRUE
-                    ELSE
-                        a = JsVarList()
-                    END IF
+                ' for (x in o), for (var x of list), for (const [k, v] of pairs)...
+                d = jp
+                c = 0
+                IF JsIsKw("var") OR JsIsKw("let") OR JsIsKw("const") THEN
+                    IF NOT JsIsKw("var") THEN c = 1
+                    jp = jp + 1
                 END IF
-                IF a = 0 AND NOT JsIsOp(";") THEN
-                    IF jtType[jp] = "id" AND jtType[jp + 1] = "kw" AND jtText[jp + 1] = "in" THEN
-                        name = JsName()
+                IF jtType[jp] = "id" OR JsIsOp("{") OR JsIsOp("[") THEN
+                    a = JsTarget(FALSE)
+                    IF JsIsKw("in") OR (jtType[jp] = "id" AND jtText[jp] = "of") THEN
+                        name = jtText[jp]
                         jp = jp + 1
                         b = JsExpr()
                         JsExpect(")")
-                        RETURN JsNode("forin", b, 0, 0, JsStatement(), name, "", line)
+                        IF nk[a] = "pname" THEN
+                            IF name = "in" THEN RETURN JsNode("forin", b, 0, c, JsStatement(), ns[a], "", line)
+                            RETURN JsNode("forof", b, 0, c, JsStatement(), ns[a], "", line)
+                        END IF
+                        IF name = "in" THEN RETURN JsNode("forin", b, a, c, JsStatement(), "", "", line)
+                        RETURN JsNode("forof", b, a, c, JsStatement(), "", "", line)
                     END IF
+                END IF
+                jp = d
+                a = 0
+                IF JsIsKw("var") OR JsIsKw("let") OR JsIsKw("const") THEN a = JsVarList()
+                IF a = 0 AND NOT JsIsOp(";") THEN
                     a = JsNode("exprst", JsExpr(), 0, 0, 0, "", "", line)
                 END IF
                 JsExpect(";")
@@ -552,14 +777,22 @@ END FUNCTION
 ' Is an arrow function next: x => ..., () => ..., (a, b) => ...?
 FUNCTION JsArrowAhead () AS Bool
     VAR k AS Integer
+    VAR depth AS Integer
     IF jtType[jp] = "id" THEN RETURN jtType[jp + 1] = "op" AND jtText[jp + 1] = "=>"
     IF NOT JsIsOp("(") THEN RETURN FALSE
-    k = jp + 1
-    WHILE jtType[k] = "id" OR (jtType[k] = "op" AND jtText[k] = ",")
+    ' the ) that matches, then =>
+    k = jp
+    WHILE jtType[k] <> "eof"
+        IF jtType[k] = "op" THEN
+            IF jtText[k] = "(" OR jtText[k] = "[" OR jtText[k] = "{" THEN depth = depth + 1
+            IF jtText[k] = ")" OR jtText[k] = "]" OR jtText[k] = "}" THEN
+                depth = depth - 1
+                IF depth = 0 THEN RETURN jtType[k + 1] = "op" AND jtText[k + 1] = "=>"
+            END IF
+        END IF
         k = k + 1
     END WHILE
-    IF jtType[k] <> "op" OR jtText[k] <> ")" THEN RETURN FALSE
-    RETURN jtType[k + 1] = "op" AND jtText[k + 1] = "=>"
+    RETURN FALSE
 END FUNCTION
 
 ' An arrow function, a later convenience: a function expression marked
@@ -569,16 +802,13 @@ FUNCTION JsArrow () AS Integer
     VAR params AS Array OF String
     VAR line AS Integer
     VAR body AS Integer
+    VAR fancy AS Integer
     line = JsAt()
     IF jtType[jp] = "id" THEN
         params.Add(JsName())
     ELSE
         jp = jp + 1
-        WHILE NOT JsIsOp(")")
-            params.Add(JsName())
-            IF NOT JsIsOp(")") THEN JsExpect(",")
-        END WHILE
-        jp = jp + 1
+        fancy = JsParams(params)
     END IF
     JsExpect("=>")
     IF JsIsOp("{") THEN
@@ -587,7 +817,7 @@ FUNCTION JsArrow () AS Integer
         body = JsNode("return", JsAssign(), 0, 0, 0, "", "", line)
         body = JsNode("block", 0, 0, 0, 0, "", Str(body), line)
     END IF
-    RETURN JsNode("funcexpr", body, 0, 0, 1, "", params.Join(","), line)
+    RETURN JsNode("funcexpr", body, fancy, 0, 1, "", params.Join(","), line)
 END FUNCTION
 
 FUNCTION JsConditional () AS Integer
@@ -605,7 +835,7 @@ END FUNCTION
 
 FUNCTION JsPrec (op AS String) AS Integer
     SELECT CASE op
-        CASE "||"
+        CASE "||", "??"
             RETURN 1
         CASE "&&"
             RETURN 2
@@ -675,15 +905,27 @@ FUNCTION JsArgs () AS String
     VAR list AS Array OF String
     JsExpect("(")
     WHILE NOT JsIsOp(")")
-        list.Add(Str(JsAssign()))
+        list.Add(Str(JsSpreadOr()))
         IF NOT JsIsOp(")") THEN JsExpect(",")
     END WHILE
     jp = jp + 1
     RETURN list.Join(",")
 END FUNCTION
 
+' ...list (a "spread" node), or an ordinary value.
+FUNCTION JsSpreadOr () AS Integer
+    VAR line AS Integer
+    line = JsAt()
+    IF JsIsOp("...") THEN
+        jp = jp + 1
+        RETURN JsNode("spread", JsAssign(), 0, 0, 0, "", "", line)
+    END IF
+    RETURN JsAssign()
+END FUNCTION
+
 ' Members, calls and new: a.b, a[b], a(b), new A(b)
 FUNCTION JsPostfix () AS Integer
+    VAR chained AS Bool
     VAR e AS Integer
     VAR line AS Integer
     VAR callee AS Integer
@@ -701,13 +943,31 @@ FUNCTION JsPostfix () AS Integer
     ELSE
         e = JsPrimary()
     END IF
-    WHILE JsIsOp(".") OR JsIsOp("[") OR JsIsOp("(")
-        IF JsIsOp("(") THEN
+    WHILE JsIsOp(".") OR JsIsOp("[") OR JsIsOp("(") OR JsIsOp("?.")
+        IF JsIsOp("?.") THEN
+            ' a?.b, a?.[k], a?.(x): undefined when a is null or undefined (nd = 1)
+            line = JsAt()
+            jp = jp + 1
+            IF JsIsOp("(") THEN
+                e = JsNode("call", e, 0, 0, 1, "", JsArgs(), line)
+            ELSEIF JsIsOp("[") THEN
+                e = JsMemberStep(e)
+                nd[e] = 1
+            ELSE
+                IF jtType[jp] <> "id" AND jtType[jp] <> "kw" THEN THROW Str(JsAt()) + "|Expected identifier"
+                e = JsNode("member", e, 0, 0, 1, jtText[jp], "", line)
+                jp = jp + 1
+            END IF
+        ELSEIF JsIsOp("(") THEN
             line = JsAt()
             e = JsNode("call", e, 0, 0, 0, "", JsArgs(), line)
+            IF chained THEN nd[e] = 1
         ELSE
             e = JsMemberStep(e)
+            IF chained THEN nd[e] = 1
         END IF
+        ' (after a ?., the rest of the chain is skipped too: a?.b.c)
+        IF nd[e] = 1 THEN chained = TRUE
     END WHILE
     RETURN e
 END FUNCTION
@@ -756,6 +1016,15 @@ FUNCTION JsPrimary () AS Integer
                 RETURN JsNode(text, 0, 0, 0, 0, "", "", line)
             CASE "function"
                 RETURN JsFunction("funcexpr")
+            CASE "class"
+                RETURN JsClass("classexpr")
+            CASE "super"
+                jp = jp + 1
+                IF JsIsOp("(") THEN RETURN JsNode("supercall", 0, 0, 0, 0, "", JsArgs(), line)
+                JsExpect(".")
+                text = jtText[jp]
+                jp = jp + 1
+                RETURN JsNode("supermember", 0, 0, 0, 0, text, "", line)
         END SELECT
     ELSEIF JsIsOp("(") THEN
         jp = jp + 1
@@ -765,7 +1034,7 @@ FUNCTION JsPrimary () AS Integer
     ELSEIF JsIsOp("[") THEN
         jp = jp + 1
         WHILE NOT JsIsOp("]")
-            list.Add(Str(JsAssign()))
+            list.Add(Str(JsSpreadOr()))
             IF NOT JsIsOp("]") THEN JsExpect(",")
         END WHILE
         jp = jp + 1
@@ -773,16 +1042,36 @@ FUNCTION JsPrimary () AS Integer
     ELSEIF JsIsOp("{") THEN
         jp = jp + 1
         WHILE NOT JsIsOp("}")
-            IF jtType[jp] = "id" OR jtType[jp] = "str" OR jtType[jp] = "kw" THEN
+            ' ...other (nb = 2), [computed]: v (nb = the key's node), a(), a
+            IF JsIsOp("...") THEN
+                jp = jp + 1
+                list.Add(Str(JsNode("prop", JsAssign(), 2, 0, 0, "", "", line)))
+                IF NOT JsIsOp("}") THEN JsExpect(",")
+                CONTINUE
+            END IF
+            a = 0
+            IF JsIsOp("[") THEN
+                jp = jp + 1
+                a = JsAssign()
+                JsExpect("]")
+                key = ""
+            ELSEIF jtType[jp] = "id" OR jtType[jp] = "str" OR jtType[jp] = "kw" THEN
                 key = jtText[jp]
+                jp = jp + 1
             ELSEIF jtType[jp] = "num" THEN
                 key = JsNumberText(jtText[jp])
+                jp = jp + 1
             ELSE
                 THROW Str(JsAt()) + "|Expected identifier"
             END IF
-            jp = jp + 1
-            JsExpect(":")
-            list.Add(Str(JsNode("prop", JsAssign(), 0, 0, 0, key, "", line)))
+            IF JsIsOp("(") THEN
+                list.Add(Str(JsNode("prop", JsFunctionRest("funcexpr", "", line), a, 0, 0, key, "", line)))
+            ELSEIF a = 0 AND jtType[jp - 1] = "id" AND (JsIsOp(",") OR JsIsOp("}")) THEN
+                list.Add(Str(JsNode("prop", JsNode("id", 0, 0, 0, 0, key, "", line), 0, 0, 0, key, "", line)))
+            ELSE
+                JsExpect(":")
+                list.Add(Str(JsNode("prop", JsAssign(), a, 0, 0, key, "", line)))
+            END IF
             IF NOT JsIsOp("}") THEN JsExpect(",")
         END WHILE
         jp = jp + 1
@@ -790,6 +1079,77 @@ FUNCTION JsPrimary () AS Integer
     END IF
     IF t = "eof" THEN THROW Str(line) + "|Syntax error"
     THROW Str(line) + "|Syntax error"
+END FUNCTION
+
+'class A extends B { constructor() {} m() {} static s() {} x = 1 }
+' na = what it extends (0: nothing), nb = the constructor (a made-up one
+' when it has none), nl = its methods and fields: "method" or "field"
+' nodes, ns = the name, nb = 1 when static.
+FUNCTION JsClass (kind AS String) AS Integer
+    VAR line AS Integer
+    VAR name AS String
+    VAR sup AS Integer
+    VAR ctor AS Integer
+    VAR list AS Array OF String
+    VAR key AS String
+    VAR isStatic AS Integer
+    VAR body AS Integer
+    line = JsAt()
+    jp = jp + 1
+    IF jtType[jp] = "id" THEN name = JsName()
+    IF kind = "classdecl" AND name = "" THEN THROW Str(JsAt()) + "|Expected identifier"
+    IF JsIsKw("extends") THEN
+        jp = jp + 1
+        sup = JsPostfix()
+    END IF
+    JsExpect("{")
+    WHILE NOT JsIsOp("}")
+        IF jtType[jp] = "eof" THEN THROW Str(JsAt()) + "|Expected '}'"
+        IF JsIsOp(";") THEN
+            jp = jp + 1
+            CONTINUE
+        END IF
+        isStatic = 0
+        IF jtType[jp] = "id" AND jtText[jp] = "static" AND NOT (jtType[jp + 1] = "op" AND (jtText[jp + 1] = "(" OR jtText[jp + 1] = "=")) THEN
+            isStatic = 1
+            jp = jp + 1
+        END IF
+        IF jtType[jp] = "id" AND (jtText[jp] = "get" OR jtText[jp] = "set" OR jtText[jp] = "async") AND jtType[jp + 1] <> "op" THEN THROW Str(JsAt()) + "|'" + jtText[jp] + "' methods are not supported yet"
+        IF jtType[jp] = "id" OR jtType[jp] = "kw" OR jtType[jp] = "str" THEN
+            key = jtText[jp]
+        ELSE
+            THROW Str(JsAt()) + "|Expected identifier"
+        END IF
+        jp = jp + 1
+        IF JsIsOp("(") THEN
+            body = JsFunctionRest("funcexpr", "", JsAt())
+            IF key = "constructor" AND isStatic = 0 THEN
+                ctor = body
+            ELSE
+                list.Add(Str(JsNode("method", body, isStatic, 0, 0, key, "", line)))
+            END IF
+        ELSE
+            body = 0
+            IF JsIsOp("=") THEN
+                jp = jp + 1
+                body = JsAssign()
+            END IF
+            JsSemi()
+            list.Add(Str(JsNode("field", body, isStatic, 0, 0, key, "", line)))
+        END IF
+    END WHILE
+    jp = jp + 1
+    IF ctor = 0 THEN
+        ' class A {} gets constructor() {}; class B extends A {} gets
+        ' constructor(...args) { super(...args) }
+        IF sup <> 0 THEN
+            body = JsNode("exprst", JsNode("supercall", 0, 0, 0, 0, "", "@all", line), 0, 0, 0, "", "", line)
+            ctor = JsNode("funcexpr", JsNode("block", 0, 0, 0, 0, "", Str(body), line), 0, 0, 0, "", "", line)
+        ELSE
+            ctor = JsNode("funcexpr", JsNode("block", 0, 0, 0, 0, "", "", line), 0, 0, 0, "", "", line)
+        END IF
+    END IF
+    RETURN JsNode(kind, sup, ctor, 0, 0, name, list.Join(","), line)
 END FUNCTION
 
 FUNCTION JsDescribe (n AS Integer) AS String
@@ -1700,13 +2060,20 @@ SUB JsHoist (n AS Integer, scope AS Integer)
     SELECT CASE nk[n]
         CASE "block"
             FOR EACH item IN nl[n].Split(",")
-                IF item <> "" THEN JsHoist(Int(Val(item)), scope)
+                IF item = "" THEN CONTINUE
+                ' the program's own lets, consts and classes are kept like vars
+                IF nd[n] = 2 AND (nk[Int(Val(item))] = "let" OR nk[Int(Val(item))] = "classdecl") THEN
+                    FOR EACH d IN JsDeclNames(Int(Val(item)))
+                        IF JsOwn(scope, d) < 0 THEN JsPutOwn(scope, d, "u")
+                    NEXT
+                END IF
+                JsHoist(Int(Val(item)), scope)
             NEXT
         CASE "func"
             JsPutOwn(scope, ns[n], JsMakeFunction(n, scope))
         CASE "var"
-            FOR EACH d IN nl[n].Split(",")
-                IF JsOwn(scope, ns[Int(Val(d))]) < 0 THEN JsPutOwn(scope, ns[Int(Val(d))], "u")
+            FOR EACH d IN JsDeclNames(n)
+                IF JsOwn(scope, d) < 0 THEN JsPutOwn(scope, d, "u")
             NEXT
         CASE "if"
             JsHoist(nb[n], scope)
@@ -1716,8 +2083,16 @@ SUB JsHoist (n AS Integer, scope AS Integer)
         CASE "for"
             JsHoist(na[n], scope)
             JsHoist(nd[n], scope)
-        CASE "forin"
-            IF JsOwn(scope, ns[n]) < 0 AND scope <> jsGlobal THEN JsPutOwn(scope, ns[n], "u")
+        CASE "forin", "forof"
+            IF nc[n] = 0 THEN
+                IF nb[n] <> 0 THEN
+                    FOR EACH d IN JsPatternNames(nb[n])
+                        IF JsOwn(scope, d) < 0 AND scope <> jsGlobal THEN JsPutOwn(scope, d, "u")
+                    NEXT
+                ELSEIF JsOwn(scope, ns[n]) < 0 AND scope <> jsGlobal THEN
+                    JsPutOwn(scope, ns[n], "u")
+                END IF
+            END IF
             JsHoist(nd[n], scope)
         CASE "try"
             JsHoist(na[n], scope)
@@ -1777,6 +2152,7 @@ SUB JsTick ()
 END SUB
 
 SUB JsExec (n AS Integer, scope AS Integer)
+    VAR bs AS Integer
     VAR item AS String
     VAR d AS Integer
     VAR v AS String
@@ -1796,16 +2172,36 @@ SUB JsExec (n AS Integer, scope AS Integer)
     JsTick()
     SELECT CASE nk[n]
         CASE "block"
+            IF nd[n] = 1 THEN
+                bs = JsBlockScope(n, scope)
+                FOR EACH item IN nl[n].Split(",")
+                    IF item = "" THEN CONTINUE
+                    JsExec(Int(Val(item)), bs)
+                    IF jsSig <> "" THEN BREAK
+                NEXT
+                JsFreeScope(bs)
+                RETURN
+            END IF
             FOR EACH item IN nl[n].Split(",")
                 IF item = "" THEN CONTINUE
                 JsExec(Int(Val(item)), scope)
                 IF jsSig <> "" THEN RETURN
             NEXT
-        CASE "var"
+        CASE "var", "let"
             FOR EACH item IN nl[n].Split(",")
                 d = Int(Val(item))
-                IF na[d] <> 0 THEN JsSetVar(ns[d], JsEval(na[d], scope), scope)
+                IF nb[d] <> 0 THEN
+                    v = "u"
+                    IF na[d] <> 0 THEN v = JsEval(na[d], scope)
+                    JsBind(nb[d], v, scope)
+                ELSEIF na[d] <> 0 THEN
+                    JsSetVar(ns[d], JsEval(na[d], scope), scope)
+                ELSEIF nk[n] = "let" THEN
+                    JsSetVar(ns[d], "u", scope)
+                END IF
             NEXT
+        CASE "classdecl"
+            JsSetVar(ns[n], JsMakeClass(n, scope), scope)
         CASE "exprst"
             jsRet = JsEval(na[n], scope)
         CASE "if"
@@ -1838,37 +2234,57 @@ SUB JsExec (n AS Integer, scope AS Integer)
                 JsTick()
             END WHILE
         CASE "for"
-            JsExec(na[n], scope)
+            ' for (let i...): each time round has an i of its own, for closures
+            bs = scope
+            IF na[n] <> 0 THEN
+                IF nk[na[n]] = "let" THEN bs = JsBlockScope(n, scope)
+            END IF
+            JsExec(na[n], bs)
             WHILE TRUE
                 IF nb[n] <> 0 THEN
-                    IF NOT JsBool(JsEval(nb[n], scope)) THEN BREAK
+                    IF NOT JsBool(JsEval(nb[n], bs)) THEN BREAK
                 END IF
-                JsExec(nd[n], scope)
+                JsExec(nd[n], bs)
                 IF jsSig = "b" THEN
                     jsSig = ""
                     BREAK
                 END IF
                 IF jsSig = "c" THEN jsSig = ""
                 IF jsSig = "r" THEN RETURN
-                IF nc[n] <> 0 THEN v = JsEval(nc[n], scope)
+                IF bs <> scope THEN bs = JsCopyScope(bs)
+                IF nc[n] <> 0 THEN v = JsEval(nc[n], bs)
                 JsTick()
             END WHILE
-        CASE "forin"
+        CASE "forin", "forof"
             v = JsEval(na[n], scope)
-            IF v.StartsWith("o") THEN
-                keys = joKeys[JsId(v)].Split("|")
-                FOR EACH key IN keys
-                    IF key = "" OR (joClass[JsId(v)] = "Array" AND key = "length") THEN CONTINUE
-                    JsSetVar(ns[n], JsS(key), scope)
-                    JsExec(nd[n], scope)
-                    IF jsSig = "b" THEN
-                        jsSig = ""
-                        BREAK
-                    END IF
-                    IF jsSig = "c" THEN jsSig = ""
-                    IF jsSig = "r" THEN RETURN
-                NEXT
+            keys.Clear()
+            IF nk[n] = "forin" THEN
+                IF v.StartsWith("o") THEN
+                    FOR EACH key IN joKeys[JsId(v)].Split("|")
+                        IF key = "" OR (joClass[JsId(v)] = "Array" AND key = "length") THEN CONTINUE
+                        keys.Add(JsS(key))
+                    NEXT
+                END IF
+            ELSE
+                keys = JsIterate(v)
             END IF
+            FOR EACH key IN keys
+                bs = scope
+                IF nc[n] = 1 THEN bs = JsBlockScope(n, scope)
+                IF nb[n] <> 0 THEN
+                    JsBind(nb[n], key, bs)
+                ELSE
+                    JsSetVar(ns[n], key, bs)
+                END IF
+                JsExec(nd[n], bs)
+                IF bs <> scope THEN JsFreeScope(bs)
+                IF jsSig = "b" THEN
+                    jsSig = ""
+                    BREAK
+                END IF
+                IF jsSig = "c" THEN jsSig = ""
+                IF jsSig = "r" THEN RETURN
+            NEXT
         CASE "return"
             IF na[n] = 0 THEN
                 jsRet = "u"
@@ -1977,6 +2393,7 @@ END FUNCTION
 ' ---------------------------------------------------------------- evaluating expressions
 
 FUNCTION JsEval (n AS Integer, scope AS Integer) AS String
+    VAR k AS Integer
     VAR item AS String
     VAR items AS Array OF String
     VAR id AS Integer
@@ -1999,23 +2416,46 @@ FUNCTION JsEval (n AS Integer, scope AS Integer) AS String
         CASE "id"
             RETURN JsLookup(ns[n], scope)
         CASE "array"
-            FOR EACH item IN nl[n].Split(",")
-                IF item <> "" THEN items.Add(JsEval(Int(Val(item)), scope))
-            NEXT
+            items = JsArgList(n, scope)
             RETURN JsO(JsNewArray(items))
         CASE "object"
             id = JsNewObject("Object", jsObjectProto)
             FOR EACH item IN nl[n].Split(",")
-                IF item <> "" THEN JsPutOwn(id, ns[Int(Val(item))], JsEval(na[Int(Val(item))], scope))
+                IF item = "" THEN CONTINUE
+                k = Int(Val(item))
+                IF nb[k] = 2 THEN
+                    ' ...other: its own properties
+                    v = JsEval(na[k], scope)
+                    IF v.StartsWith("o") THEN
+                        FOR EACH a IN JsOwnKeys(JsId(v))
+                            JsPutOwn(id, a, JsGet(v, a))
+                        NEXT
+                    END IF
+                ELSEIF nb[k] <> 0 THEN
+                    a = JsKey(JsEval(nb[k], scope))
+                    JsPut(JsO(id), a, JsEval(na[k], scope))
+                ELSE
+                    JsPut(JsO(id), ns[k], JsEval(na[k], scope))
+                END IF
             NEXT
             RETURN JsO(id)
+        CASE "classexpr"
+            RETURN JsMakeClass(n, scope)
+        CASE "supercall"
+            RETURN JsSuperCall(n, scope)
+        CASE "supermember"
+            RETURN JsGet(JsLookup("@superproto", scope), ns[n])
         CASE "funcexpr"
             RETURN JsMakeFunction(n, scope)
         CASE "member"
             jsLine = nline[n]
-            RETURN JsGet(JsNeed(JsEval(na[n], scope), na[n]), ns[n])
+            a = JsEval(na[n], scope)
+            IF nd[n] = 1 AND (a = "u" OR a = "l") THEN RETURN "u"
+            RETURN JsGet(JsNeed(a, na[n]), ns[n])
         CASE "index"
-            a = JsNeed(JsEval(na[n], scope), na[n])
+            a = JsEval(na[n], scope)
+            IF nd[n] = 1 AND (a = "u" OR a = "l") THEN RETURN "u"
+            a = JsNeed(a, na[n])
             jsLine = nline[n]
             RETURN JsGet(a, JsKey(JsEval(nb[n], scope)))
         CASE "assign"
@@ -2035,6 +2475,11 @@ FUNCTION JsEval (n AS Integer, scope AS Integer) AS String
             IF op = "||" THEN
                 a = JsEval(na[n], scope)
                 IF JsBool(a) THEN RETURN a
+                RETURN JsEval(nb[n], scope)
+            END IF
+            IF op = "??" THEN
+                a = JsEval(na[n], scope)
+                IF a <> "u" AND a <> "l" THEN RETURN a
                 RETURN JsEval(nb[n], scope)
             END IF
             a = JsEval(na[n], scope)
@@ -2168,8 +2613,18 @@ END FUNCTION
 FUNCTION JsArgList (n AS Integer, scope AS Integer) AS Array OF String
     VAR out AS Array OF String
     VAR item AS String
+    VAR v AS String
+    VAR k AS Integer
     FOR EACH item IN nl[n].Split(",")
-        IF item <> "" THEN out.Add(JsEval(Int(Val(item)), scope))
+        IF item = "" THEN CONTINUE
+        k = Int(Val(item))
+        IF nk[k] = "spread" THEN
+            FOR EACH v IN JsIterate(JsEval(na[k], scope))
+                out.Add(v)
+            NEXT
+        ELSE
+            out.Add(JsEval(k, scope))
+        END IF
     NEXT
     RETURN out
 END FUNCTION
@@ -2182,8 +2637,14 @@ FUNCTION JsCallNode (n AS Integer, scope AS Integer) AS String
     VAR prog AS Integer
     VAR name AS String
     c = na[n]
-    IF nk[c] = "member" THEN
-        thisVal = JsNeed(JsEval(na[c], scope), na[c])
+    IF nk[c] = "supermember" THEN
+        thisVal = JsThisOf(scope)
+        fn = JsGet(JsLookup("@superproto", scope), ns[c])
+        name = "super." + ns[c]
+    ELSEIF nk[c] = "member" THEN
+        thisVal = JsEval(na[c], scope)
+        IF nd[c] = 1 AND (thisVal = "u" OR thisVal = "l") THEN RETURN "u"
+        thisVal = JsNeed(thisVal, na[c])
         jsLine = nline[n]
         fn = JsGet(thisVal, ns[c])
         name = ns[c]
@@ -2200,8 +2661,9 @@ FUNCTION JsCallNode (n AS Integer, scope AS Integer) AS String
     END IF
     args = JsArgList(n, scope)
     jsLine = nline[n]
+    IF nd[n] = 1 AND (fn = "u" OR fn = "l") THEN RETURN "u"
     IF NOT JsCallable(fn) THEN
-        IF nk[c] = "member" OR nk[c] = "index" THEN THROW Str(jsLine) + "|Object doesn't support this property or method"
+        IF nk[c] = "member" OR nk[c] = "index" OR nk[c] = "supermember" THEN THROW Str(jsLine) + "|Object doesn't support this property or method"
         THROW Str(jsLine) + "|Function expected"
     END IF
     RETURN JsCall(fn, thisVal, args)
@@ -2240,15 +2702,19 @@ FUNCTION JsCall (fn AS String, thisVal AS String, args AS Array OF String) AS St
     scope = JsNewScope(joB[id], thisVal)
     ' an arrow function's this is the one where it was made
     IF nd[node] = 1 THEN JsDeleteProp(scope, "@this")
-    IF nl[node] <> "" THEN params = nl[node].Split(",")
-    FOR i = 0 TO params.Count - 1
-        IF i < args.Count THEN
-            JsPutOwn(scope, params[i], args[i])
-        ELSE
-            JsPutOwn(scope, params[i], "u")
-        END IF
-    NEXT
     JsPutOwn(scope, "arguments", JsO(JsNewArray(args)))
+    IF nb[node] <> 0 THEN
+        JsBindParams(nb[node], args, scope)
+    ELSE
+        IF nl[node] <> "" THEN params = nl[node].Split(",")
+        FOR i = 0 TO params.Count - 1
+            IF i < args.Count THEN
+                JsPutOwn(scope, params[i], args[i])
+            ELSE
+                JsPutOwn(scope, params[i], "u")
+            END IF
+        NEXT
+    END IF
     IF nk[node] = "funcexpr" AND ns[node] <> "" AND JsOwn(scope, ns[node]) < 0 THEN JsPutOwn(scope, ns[node], fn)
     JsHoist(na[node], scope)
     JsExec(na[node], scope)
@@ -2273,6 +2739,10 @@ FUNCTION JsNewNode (n AS Integer, scope AS Integer) AS String
     IF NOT JsCallable(fn) THEN THROW Str(jsLine) + "|Object doesn't support this action"
     IF joClass[JsId(fn)] = "Native" THEN RETURN JsConstruct(joS[JsId(fn)], args)
     id = JsNewObject("Object", JsId(JsGet(fn, "prototype")))
+    ' a class with nothing to extend sets its fields before its constructor runs
+    IF JsOwn(JsId(fn), "@cscope") >= 0 THEN
+        IF JsGetProp(JsInt(JsGetProp(JsId(fn), "@cscope")), "@super") = "u" THEN JsInitFields(fn, JsO(id))
+    END IF
     result = JsCall(fn, JsO(id), args)
     IF result.StartsWith("o") THEN RETURN result
     RETURN JsO(id)
@@ -3612,6 +4082,343 @@ FUNCTION JsPromiseMethod (name AS String, thisVal AS String, args AS Array OF St
             RETURN "l"
     END SELECT
     THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+' ---------------------------------------------------------------- patterns, block scopes and classes
+
+' The names a var/let declaration (or a class) makes.
+FUNCTION JsDeclNames (n AS Integer) AS Array OF String
+    VAR out AS Array OF String
+    VAR item AS String
+    VAR d AS Integer
+    VAR name AS String
+    IF nk[n] = "classdecl" THEN
+        out.Add(ns[n])
+        RETURN out
+    END IF
+    FOR EACH item IN nl[n].Split(",")
+        IF item = "" THEN CONTINUE
+        d = Int(Val(item))
+        IF nb[d] <> 0 THEN
+            FOR EACH name IN JsPatternNames(nb[d])
+                out.Add(name)
+            NEXT
+        ELSE
+            out.Add(ns[d])
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION JsPatternNames (t AS Integer) AS Array OF String
+    VAR out AS Array OF String
+    VAR item AS String
+    VAR name AS String
+    VAR k AS Integer
+    IF t = 0 THEN RETURN out
+    SELECT CASE nk[t]
+        CASE "pname"
+            out.Add(ns[t])
+        CASE "pobj", "parr", "params"
+            FOR EACH item IN nl[t].Split(",")
+                IF item = "" OR item = "0" THEN CONTINUE
+                k = Int(Val(item))
+                IF nk[k] = "pprop" THEN k = nb[k]
+                FOR EACH name IN JsPatternNames(k)
+                    out.Add(name)
+                NEXT
+            NEXT
+            FOR EACH name IN JsPatternNames(nc[t])
+                out.Add(name)
+            NEXT
+    END SELECT
+    RETURN out
+END FUNCTION
+
+' The values for ... and for-of: an array's items, a string's characters,
+' or anything with a length.
+FUNCTION JsIterate (v AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR text AS String
+    IF v.StartsWith("s") THEN
+        text = v.Substring(1, v.Length - 1)
+        FOR i = 0 TO text.Length - 1
+            out.Add(JsS(text.CharAt(i)))
+        NEXT
+        RETURN out
+    END IF
+    IF v.StartsWith("o") THEN
+        IF joClass[JsId(v)] = "Array" THEN RETURN JsItems(JsId(v))
+        IF JsGet(v, "length").StartsWith("n") THEN
+            FOR i = 0 TO JsInt(JsGet(v, "length")) - 1
+                out.Add(JsGet(v, Str(i)))
+            NEXT
+            RETURN out
+        END IF
+    END IF
+    jsThrown = JsMakeTypedError("TypeError", JsStr(JsS(JsTypeOf(v))) + " is not iterable")
+    THROW Str(jsLine) + "|@thrown"
+    RETURN out
+END FUNCTION
+
+' v put into target t: a name, or a pattern taking v apart.
+SUB JsBind (t AS Integer, v AS String, scope AS Integer)
+    VAR item AS String
+    VAR k AS Integer
+    VAR used AS String
+    VAR items AS Array OF String
+    VAR rest AS Array OF String
+    VAR i AS Integer
+    VAR key AS String
+    VAR id AS Integer
+    IF v = "u" AND na[t] <> 0 THEN v = JsEval(na[t], scope)
+    SELECT CASE nk[t]
+        CASE "pname"
+            JsSetVar(ns[t], v, scope)
+        CASE "pobj"
+            IF v = "u" OR v = "l" THEN
+                jsThrown = JsMakeTypedError("TypeError", "Cannot destructure '" + JsStr(v) + "' as it is " + JsStr(v) + ".")
+                THROW Str(jsLine) + "|@thrown"
+            END IF
+            used = "|"
+            FOR EACH item IN nl[t].Split(",")
+                IF item = "" THEN CONTINUE
+                k = Int(Val(item))
+                JsBind(nb[k], JsGet(v, ns[k]), scope)
+                used = used + ns[k] + "|"
+            NEXT
+            IF nc[t] <> 0 THEN
+                id = JsNewObject("Object", jsObjectProto)
+                IF v.StartsWith("o") THEN
+                    FOR EACH key IN JsOwnKeys(JsId(v))
+                        IF NOT used.Contains("|" + key + "|") THEN JsPutOwn(id, key, JsGet(v, key))
+                    NEXT
+                END IF
+                JsBind(nc[t], JsO(id), scope)
+            END IF
+        CASE "parr"
+            items = JsIterate(v)
+            i = 0
+            FOR EACH item IN nl[t].Split(",")
+                IF item = "" THEN CONTINUE
+                IF item <> "0" THEN
+                    IF i < items.Count THEN
+                        JsBind(Int(Val(item)), items[i], scope)
+                    ELSE
+                        JsBind(Int(Val(item)), "u", scope)
+                    END IF
+                END IF
+                i = i + 1
+            NEXT
+            IF nc[t] <> 0 THEN
+                FOR k = i TO items.Count - 1
+                    rest.Add(items[k])
+                NEXT
+                JsBind(nc[t], JsO(JsNewArray(rest)), scope)
+            END IF
+    END SELECT
+END SUB
+
+' A call's arguments into its parameters, when they're more than names.
+SUB JsBindParams (p AS Integer, args AS Array OF String, scope AS Integer)
+    VAR name AS String
+    VAR item AS String
+    VAR i AS Integer
+    VAR rest AS Array OF String
+    FOR EACH name IN JsPatternNames(p)
+        JsPutOwn(scope, name, "u")
+    NEXT
+    FOR EACH item IN nl[p].Split(",")
+        IF item = "" THEN CONTINUE
+        IF i < args.Count THEN
+            JsBind(Int(Val(item)), args[i], scope)
+        ELSE
+            JsBind(Int(Val(item)), "u", scope)
+        END IF
+        i = i + 1
+    NEXT
+    IF nc[p] <> 0 THEN
+        FOR i = i TO args.Count - 1
+            rest.Add(args[i])
+        NEXT
+        JsBind(nc[p], JsO(JsNewArray(rest)), scope)
+    END IF
+END SUB
+
+' A scope for a block's (or a loop's) let, const and class names.
+FUNCTION JsBlockScope (n AS Integer, scope AS Integer) AS Integer
+    VAR s AS Integer
+    VAR item AS String
+    VAR name AS String
+    VAR k AS Integer
+    s = JsNewObject("Scope", 0)
+    joA[s] = scope
+    SELECT CASE nk[n]
+        CASE "block"
+            FOR EACH item IN nl[n].Split(",")
+                IF item = "" THEN CONTINUE
+                k = Int(Val(item))
+                IF nk[k] = "let" OR nk[k] = "classdecl" THEN
+                    FOR EACH name IN JsDeclNames(k)
+                        JsPutOwn(s, name, "u")
+                    NEXT
+                END IF
+            NEXT
+        CASE "for"
+            FOR EACH name IN JsDeclNames(na[n])
+                JsPutOwn(s, name, "u")
+            NEXT
+        CASE "forin", "forof"
+            IF nb[n] <> 0 THEN
+                FOR EACH name IN JsPatternNames(nb[n])
+                    JsPutOwn(s, name, "u")
+                NEXT
+            ELSE
+                JsPutOwn(s, ns[n], "u")
+            END IF
+    END SELECT
+    RETURN s
+END FUNCTION
+
+' The next time round a for (let ...) loop: the same names, in a new scope,
+' so a closure made last time keeps last time's values.
+FUNCTION JsCopyScope (s AS Integer) AS Integer
+    VAR t AS Integer
+    VAR name AS String
+    t = JsNewObject("Scope", 0)
+    joA[t] = joA[s]
+    FOR EACH name IN joKeys[s].Split("|")
+        IF name <> "" THEN JsPutOwn(t, name, jpVal[JsOwn(s, name)])
+    NEXT
+    JsFreeScope(s)
+    RETURN t
+END FUNCTION
+
+' A class: its constructor function, with the methods on its prototype and
+' the static ones on itself. Its methods close over a scope that knows what
+' super is (@super, @superproto) and which class this is (@class).
+FUNCTION JsMakeClass (n AS Integer, scope AS Integer) AS String
+    VAR sup AS String
+    VAR superProto AS Integer
+    VAR cs AS Integer
+    VAR proto AS Integer
+    VAR fn AS String
+    VAR fid AS Integer
+    VAR item AS String
+    VAR m AS Integer
+    VAR fields AS Array OF String
+    VAR st AS Integer
+    sup = "u"
+    superProto = jsObjectProto
+    IF na[n] <> 0 THEN
+        sup = JsEval(na[n], scope)
+        IF sup = "l" THEN
+            superProto = 0
+        ELSE
+            IF NOT JsCallable(sup) THEN
+                jsThrown = JsMakeTypedError("TypeError", "Class extends value " + JsStr(sup) + " is not a constructor or null")
+                THROW Str(nline[n]) + "|@thrown"
+            END IF
+            superProto = JsId(JsGet(sup, "prototype"))
+        END IF
+    END IF
+    cs = JsNewObject("Scope", 0)
+    joA[cs] = scope
+    proto = JsNewObject("Object", superProto)
+    fn = JsMakeFunction(nb[n], cs)
+    fid = JsId(fn)
+    JsPutOwn(fid, "prototype", JsO(proto))
+    JsPutOwn(proto, "constructor", fn)
+    joKeys[proto] = "|"
+    IF JsCallable(sup) THEN joProto[fid] = JsId(sup)
+    JsPutOwn(cs, "@super", sup)
+    JsPutOwn(cs, "@superproto", JsO(superProto))
+    JsPutOwn(cs, "@class", fn)
+    IF ns[n] <> "" THEN JsPutOwn(cs, ns[n], fn)
+    JsPutOwn(fid, "@cscope", JsN(cs))
+    FOR EACH item IN nl[n].Split(",")
+        IF item = "" THEN CONTINUE
+        m = Int(Val(item))
+        IF nk[m] = "method" THEN
+            IF nb[m] = 1 THEN
+                JsPutOwn(fid, ns[m], JsMakeFunction(na[m], cs))
+            ELSE
+                JsPutOwn(proto, ns[m], JsMakeFunction(na[m], cs))
+            END IF
+        ELSEIF nb[m] = 1 THEN
+            ' static x = ...: worked out now, with this the class
+            st = JsNewScope(cs, fn)
+            IF na[m] = 0 THEN
+                JsPutOwn(fid, ns[m], "u")
+            ELSE
+                JsPutOwn(fid, ns[m], JsEval(na[m], st))
+            END IF
+        ELSE
+            fields.Add(item)
+        END IF
+    NEXT
+    ' (methods aren't counted among the prototype's keys, so for-in skips them)
+    joKeys[proto] = "|"
+    JsPutOwn(fid, "@fields", JsS(fields.Join(",")))
+    joB[cs] = 1
+    RETURN fn
+END FUNCTION
+
+' A new object's fields (x = 1 in its class).
+SUB JsInitFields (cls AS String, thisVal AS String)
+    VAR list AS String
+    VAR item AS String
+    VAR m AS Integer
+    VAR st AS Integer
+    list = JsStr(JsGetProp(JsId(cls), "@fields"))
+    IF list = "" OR list = "undefined" THEN RETURN
+    st = JsNewScope(JsInt(JsGetProp(JsId(cls), "@cscope")), thisVal)
+    FOR EACH item IN list.Split(",")
+        IF item = "" THEN CONTINUE
+        m = Int(Val(item))
+        IF na[m] = 0 THEN
+            JsPut(thisVal, ns[m], "u")
+        ELSE
+            JsPut(thisVal, ns[m], JsEval(na[m], st))
+        END IF
+    NEXT
+END SUB
+
+' super(...): the class this extends, run on this; then this class's fields.
+FUNCTION JsSuperCall (n AS Integer, scope AS Integer) AS String
+    VAR thisVal AS String
+    VAR sup AS String
+    VAR cls AS String
+    VAR args AS Array OF String
+    VAR r AS String
+    VAR key AS String
+    thisVal = JsThisOf(scope)
+    sup = JsLookup("@super", scope)
+    cls = JsLookup("@class", scope)
+    IF nl[n] = "@all" THEN
+        args = JsItems(JsId(JsLookup("arguments", scope)))
+    ELSE
+        args = JsArgList(n, scope)
+    END IF
+    jsLine = nline[n]
+    IF NOT JsCallable(sup) THEN THROW Str(jsLine) + "|'super' keyword unexpected here"
+    IF joClass[JsId(sup)] = "Native" THEN
+        ' Error and the like make an object: what they put on it comes over
+        r = JsConstruct(joS[JsId(sup)], args)
+        IF r.StartsWith("o") THEN
+            FOR EACH key IN JsOwnKeys(JsId(r))
+                IF key <> "name" THEN JsPut(thisVal, key, JsGet(r, key))
+            NEXT
+        END IF
+    ELSE
+        IF JsOwn(JsId(sup), "@cscope") >= 0 THEN
+            IF JsGetProp(JsInt(JsGetProp(JsId(sup), "@cscope")), "@super") = "u" THEN JsInitFields(sup, thisVal)
+        END IF
+        r = JsCall(sup, thisVal, args)
+    END IF
+    JsInitFields(cls, thisVal)
+    RETURN "u"
 END FUNCTION
 
 ' ---------------------------------------------------------------- the later library
