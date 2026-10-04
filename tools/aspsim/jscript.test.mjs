@@ -299,5 +299,59 @@ await test("a runaway script asks whether to stop", async () => {
   assert.ok(r.log.includes("slow"));
 });
 
+await test("the later library: JSON, Object, Array and String methods, bind, errors", async () => {
+  const cases = [
+    ["JSON.stringify({a: 1, b: [true, null, 'x\"y'], c: undefined, d: function () {}})", '{"a":1,"b":[true,null,"x\\"y"]}'],
+    ["JSON.stringify([1, {x: 2}], null, 2)", '[\n  1,\n  {\n    "x": 2\n  }\n]'],
+    ["JSON.stringify('a\\nb')", '"a\\nb"'],
+    ["JSON.parse('{\"n\": -1.5e2, \"s\": \"a\\\\u0041\", \"l\": [1, [2]], \"o\": {}}').n", "-150"],
+    ["JSON.parse('{\"n\": -1.5e2, \"s\": \"a\\\\u0041\"}').s", "aA"],
+    ["JSON.stringify(JSON.parse(' [1, {\"a\": [null, false]}] '))", '[1,{"a":[null,false]}]'],
+    ["(function () { try { JSON.parse('{bad'); } catch (e) { return e.name + ': ' + e.message; } })()", "SyntaxError: Unexpected token b in JSON at position 1"],
+    ["Object.keys({a: 1, b: 2}).join()", "a,b"], ["Object.values({a: 1, b: 2}).join()", "1,2"],
+    ["Object.entries({a: 1}).join()", "a,1"], ["Object.keys([5, 6]).join()", "0,1"],
+    ["JSON.stringify(Object.assign({a: 1}, {b: 2}, {a: 3}))", '{"a":3,"b":2}'],
+    ["Object.create({hi: 'there'}).hi", "there"], ["Object.getPrototypeOf([]) === Array.prototype", "true"],
+    ["Array.isArray([]) + ',' + Array.isArray({})", "true,false"], ["Array.from('abc').join('-')", "a-b-c"],
+    ["Array.from([1, 2], function (x) { return x * 10; }).join()", "10,20"], ["Array.of(7, 8).length", "2"],
+    ["[1, 2, 3].map(function (x) { return x * 2; }).join()", "2,4,6"],
+    ["[1, 2, 3, 4].filter(function (x) { return x % 2; }).join()", "1,3"],
+    ["[1, 2, 3].reduce(function (a, b) { return a + b; }, 10)", "16"], ["['a', 'b'].reduceRight(function (a, b) { return a + b; })", "ba"],
+    ["[1, 2].some(function (x) { return x > 1; }) + ',' + [1, 2].every(function (x) { return x > 1; })", "true,false"],
+    ["[5, 6, 7].find(function (x) { return x > 5; }) + ',' + [5, 6].findIndex(function (x) { return x > 9; })", "6,-1"],
+    ["(function () { var t = 0; [1, 2, 3].forEach(function (x, i) { t += x * i; }); return t; })()", "8"],
+    ["[1, NaN].includes(NaN) + ',' + [1, 2, 1].lastIndexOf(1) + ',' + [0, 0, 0].fill(7, 1).join()", "true,2,0,7,7"],
+    ["'a-b-c'.replace('-', '+')", "a+b-c"], ["'a-b-c'.replaceAll('-', '+')", "a+b+c"],
+    ["'hello'.replace('l', function (m, i) { return '[' + m + i + ']'; })", "he[l2]lo"],
+    ["'abc'.startsWith('ab') + ',' + 'abc'.endsWith('bc') + ',' + 'abc'.includes('d')", "true,true,false"],
+    ["'ab'.repeat(3) + '|' + '5'.padStart(3, '0') + '|' + 'x'.padEnd(3) + '|'", "ababab|005|x  |"],
+    ["'[' + '  hi  '.trimStart() + '][' + '  hi  '.trimEnd() + ']'", "[hi  ][  hi]"],
+    ["(function () { return this.n; }).bind({n: 42})()", "42"],
+    ["(function (a, b) { return a + b; }).bind(null, 'x')('y')", "xy"],
+    ["Number.isInteger(5) + ',' + Number.isInteger(5.5) + ',' + Number.parseInt('12a')", "true,false,12"],
+    ["(function () { try { null.x; } catch (e) { return e instanceof Error; } })()", "true"],
+    ["(function () { var e = new TypeError('bad'); return e.name + ':' + e.message + ':' + (e instanceof TypeError) + (e instanceof Error); })()", "TypeError:bad:truetrue"],
+    ["(function () { try { [].reduce(function () {}); } catch (e) { return e.name; } })()", "TypeError"],
+    ["String(new Error('x').stack)", "Error: x"],
+  ];
+  const res = await js(...cases.map(([e]) => W(e)));
+  const bad = cases.map(([e, want], i) => (res[i].out === want && !res[i].err ? null : `${e}: wanted ${want}, got ${res[i].out} ${res[i].err}`)).filter(Boolean);
+  assert.deepEqual(bad, []);
+});
+
+await test("Promise: new Promise, resolve, reject, all and race", async () => {
+  assert.equal(await out(`
+var log = [];
+new Promise(function (ok) { ok(1); }).then(function (v) { log.push('a' + v); return v + 1; }).then(function (v) { log.push('b' + v); });
+new Promise(function (ok, no) { no(new Error('boom')); }).catch(function (e) { log.push('c:' + e.message); });
+new Promise(function () { throw new Error('thrown'); }).then(null, function (e) { log.push('d:' + e.message); });
+Promise.resolve(5).then(function (v) { log.push('e' + v); });
+Promise.reject('no').catch(function (v) { log.push('f' + v); });
+Promise.all([1, Promise.resolve(2), new Promise(function (ok) { ok(3); })]).then(function (vs) { log.push('g' + vs.join('+')); });
+Promise.all([Promise.resolve(1), Promise.reject('x')]).catch(function (v) { log.push('h' + v); });
+Promise.race([Promise.resolve('fast'), new Promise(function () {})]).then(function (v) { log.push('i' + v); });
+document.write(log.join(' '));`), "a1 b2 c:boom d:thrown e5 fno g1+2+3 hx ifast");
+});
+
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

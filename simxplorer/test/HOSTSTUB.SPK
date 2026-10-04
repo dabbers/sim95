@@ -6,6 +6,12 @@ VAR hostTitle AS String
 VAR hostCookie AS String
 VAR hostConfirmAnswer AS Bool = TRUE
 
+' A native the engine doesn't know: none, in a page.
+FUNCTION HostNative (name AS String, thisVal AS String, args AS Array OF String) AS String
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+    RETURN "u"
+END FUNCTION
+
 SUB HostAlert (text AS String)
     hostLog.Add("alert:" + text)
 END SUB

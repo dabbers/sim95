@@ -73,6 +73,7 @@ VAR jsLocation AS Integer
 VAR jsFormsArray AS Integer
 VAR jsXhrProto AS Integer
 VAR jsPromiseProto AS Integer
+VAR jsErrorProto AS Integer
 VAR jsHostCache AS Array OF String   ' "id|object" for page elements already wrapped
 
 VAR jsSig AS String                  ' "" or "b" break, "c" continue, "r" return
@@ -1965,10 +1966,11 @@ FUNCTION JsMakeError (err AS String) AS String
     VAR message AS String
     message = err
     IF message.Contains("|") THEN message = message.Substring(message.IndexOf("|") + 1, message.Length - message.IndexOf("|") - 1)
-    id = JsNewObject("Error", jsObjectProto)
+    id = JsNewObject("Error", jsErrorProto)
+    IF jsErrorProto = 0 THEN joProto[id] = jsObjectProto
     JsPutOwn(id, "message", JsS(message))
     JsPutOwn(id, "description", JsS(message))
-    JsPutOwn(id, "name", JsS("Error"))
+    JsPutOwn(id, "stack", JsS("Error: " + message))
     RETURN JsO(id)
 END FUNCTION
 
@@ -2430,8 +2432,11 @@ FUNCTION JsConstruct (name AS String, args AS Array OF String) AS String
             ms = 1
             IF args.Count >= 3 THEN ms = JsReal(args[2])
             RETURN JsNewDate(JsLocalMs(id, JsReal(args[1]), ms, JsReal(JsArg(args, 3)), JsReal(JsArg(args, 4)), JsReal(JsArg(args, 5)), JsReal(JsArg(args, 6))))
-        CASE "Error"
-            RETURN JsMakeError("0|" + JsStr(JsArg(args, 0)))
+        CASE "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError"
+            IF JsArg(args, 0) = "u" THEN RETURN JsMakeTypedError(name, "")
+            RETURN JsMakeTypedError(name, JsStr(JsArg(args, 0)))
+        CASE "Promise"
+            RETURN JsNewPromiseFrom(JsArg(args, 0))
         CASE "XMLHttpRequest"
             RETURN JsO(JsNewXhr())
         CASE "ActiveXObject"
@@ -2457,6 +2462,7 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
     IF name.StartsWith("Math.") THEN RETURN JsMath(name.Substring(5, name.Length - 5), args)
     IF name.StartsWith("Date.") THEN RETURN JsDateMethod(name.Substring(5, name.Length - 5), thisVal, args)
     IF name.StartsWith("XHR.") THEN RETURN JsXhrMethod(name.Substring(4, name.Length - 4), thisVal, args)
+    IF name.StartsWith("Promise.part:") OR name.StartsWith("Bound:") OR name.StartsWith("ObjectS.") OR name.StartsWith("ArrayS.") OR name.StartsWith("NumberS.") OR name.StartsWith("JSON.") OR name.StartsWith("PromiseS.") OR name = "Function.bind" THEN RETURN JsLib(name, thisVal, args)
     IF name.StartsWith("Promise.") OR name.StartsWith("Response.") THEN RETURN JsPromiseMethod(name, thisVal, args)
     SELECT CASE name
         CASE "alert"
@@ -2490,8 +2496,11 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
             RETURN "n" + JsNum(a)
         CASE "Boolean"
             RETURN JsB(JsBool(a))
-        CASE "Array", "Object", "Error", "XMLHttpRequest", "ActiveXObject"
+        CASE "Array", "Object", "Error", "XMLHttpRequest", "ActiveXObject", "TypeError", "RangeError", "SyntaxError", "ReferenceError"
             RETURN JsConstruct(name, args)
+        CASE "Promise"
+            jsThrown = JsMakeTypedError("TypeError", "Promise constructor cannot be invoked without 'new'")
+            THROW Str(jsLine) + "|@thrown"
         CASE "fetch"
             RETURN JsFetch(args)
         CASE "All.item"
@@ -2566,7 +2575,8 @@ FUNCTION JsCallNative (name AS String, thisVal AS String, args AS Array OF Strin
             IF JsArg(args, 1).StartsWith("o") THEN list = JsItems(JsId(args[1]))
             RETURN JsCall(thisVal, JsThisArg(a), list)
     END SELECT
-    THROW Str(jsLine) + "|Object doesn't support this property or method"
+    ' anything else is the host's own (Node's modules, say)
+    RETURN HostNative(name, thisVal, args)
 END FUNCTION
 
 FUNCTION JsThisArg (v AS String) AS String
@@ -2753,6 +2763,91 @@ FUNCTION JsStringMethod (name AS String, s AS String, args AS Array OF String) A
     a = JsArg(args, 0)
     n = s.Length
     SELECT CASE name
+        CASE "replace", "replaceAll"
+            IF a.StartsWith("o") THEN
+                jsThrown = JsMakeTypedError("TypeError", "Regular expressions are not supported yet: give replace a string")
+                THROW Str(jsLine) + "|@thrown"
+            END IF
+            t = JsStr(a)
+            out.Clear()
+            i = 0
+            WHILE TRUE
+                found = -1
+                IF i <= n THEN found = s.Substring(i, n - i).IndexOf(t)
+                IF found < 0 THEN BREAK
+                found = found + i
+                out.Add(JsS(s.Substring(i, found - i)))
+                IF JsCallable(JsArg(args, 1)) THEN
+                    parts.Clear()
+                    parts.Add(JsS(t))
+                    parts.Add(JsN(found))
+                    parts.Add(JsS(s))
+                    out.Add(JsS(JsStr(JsCall(args[1], JsO(jsGlobal), parts))))
+                ELSE
+                    out.Add(JsS(JsStr(JsArg(args, 1)).Replace("$&", t).Replace("$$", "$")))
+                END IF
+                i = found + MATH.Max(1, t.Length)
+                IF t = "" THEN
+                    IF found < n THEN out.Add(JsS(s.CharAt(found)))
+                END IF
+                IF name = "replace" OR i > n THEN BREAK
+            END WHILE
+            IF i <= n THEN out.Add(JsS(s.Substring(i, n - i)))
+            t = ""
+            FOR EACH a IN out
+                t = t + a.Substring(1, a.Length - 1)
+            NEXT
+            RETURN JsS(t)
+        CASE "startsWith"
+            i = MATH.Max(0, JsInt(JsArg(args, 1)))
+            t = JsStr(a)
+            IF i + t.Length > n THEN RETURN "f"
+            RETURN JsB(s.Substring(i, t.Length) = t)
+        CASE "endsWith"
+            i = n
+            IF args.Count > 1 AND args[1] <> "u" THEN i = MATH.Min(n, JsInt(args[1]))
+            t = JsStr(a)
+            IF t.Length > i THEN RETURN "f"
+            RETURN JsB(s.Substring(i - t.Length, t.Length) = t)
+        CASE "includes"
+            i = MATH.Max(0, JsInt(JsArg(args, 1)))
+            IF i > n THEN RETURN "f"
+            RETURN JsB(s.Substring(i, n - i).Contains(JsStr(a)))
+        CASE "repeat"
+            j = JsInt(a)
+            IF j < 0 THEN
+                jsThrown = JsMakeTypedError("RangeError", "Invalid count value: " + Str(j))
+                THROW Str(jsLine) + "|@thrown"
+            END IF
+            t = ""
+            FOR i = 1 TO j
+                t = t + s
+            NEXT
+            RETURN JsS(t)
+        CASE "padStart", "padEnd"
+            j = JsInt(a)
+            t = " "
+            IF args.Count > 1 AND args[1] <> "u" THEN t = JsStr(args[1])
+            IF j <= n OR t = "" THEN RETURN JsS(s)
+            a = ""
+            WHILE a.Length < j - n
+                a = a + t
+            END WHILE
+            a = a.Substring(0, j - n)
+            IF name = "padStart" THEN RETURN JsS(a + s)
+            RETURN JsS(s + a)
+        CASE "trimStart", "trimLeft"
+            i = 0
+            WHILE i < n AND (" " + Chr(9) + Chr(10) + Chr(13)).Contains(s.CharAt(i))
+                i = i + 1
+            END WHILE
+            RETURN JsS(s.Substring(i, n - i))
+        CASE "trimEnd", "trimRight"
+            i = n
+            WHILE i > 0 AND (" " + Chr(9) + Chr(10) + Chr(13)).Contains(s.CharAt(i - 1))
+                i = i - 1
+            END WHILE
+            RETURN JsS(s.Substring(0, i))
         CASE "charAt"
             i = JsInt(a)
             IF i < 0 OR i >= n THEN RETURN "s"
@@ -2862,6 +2957,11 @@ FUNCTION JsStringMethod (name AS String, s AS String, args AS Array OF String) A
 END FUNCTION
 
 FUNCTION JsArrayMethod (name AS String, id AS Integer, args AS Array OF String) AS String
+    VAR fn AS String
+    VAR self AS String
+    VAR r AS String
+    VAR acc AS String
+    VAR cb AS Array OF String
     VAR items AS Array OF String
     VAR out AS Array OF String
     VAR v AS String
@@ -2875,6 +2975,91 @@ FUNCTION JsArrayMethod (name AS String, id AS Integer, args AS Array OF String) 
     IF id = 0 OR joClass[id] <> "Array" THEN THROW Str(jsLine) + "|Array object expected"
     items = JsItems(id)
     n = items.Count
+    IF "|forEach|map|filter|some|every|find|findIndex|".Contains("|" + name + "|") THEN
+        fn = JsNeedFn(JsArg(args, 0), "callback")
+        self = JsThisArg(JsArg(args, 1))
+        FOR i = 0 TO n - 1
+            r = JsCall(fn, self, JsArgs3(items[i], JsN(i), JsO(id)))
+            SELECT CASE name
+                CASE "map"
+                    out.Add(r)
+                CASE "filter"
+                    IF JsBool(r) THEN out.Add(items[i])
+                CASE "some"
+                    IF JsBool(r) THEN RETURN "t"
+                CASE "every"
+                    IF NOT JsBool(r) THEN RETURN "f"
+                CASE "find"
+                    IF JsBool(r) THEN RETURN items[i]
+                CASE "findIndex"
+                    IF JsBool(r) THEN RETURN JsN(i)
+            END SELECT
+        NEXT
+        SELECT CASE name
+            CASE "map", "filter"
+                RETURN JsO(JsNewArray(out))
+            CASE "some"
+                RETURN "f"
+            CASE "every"
+                RETURN "t"
+            CASE "findIndex"
+                RETURN "n-1"
+        END SELECT
+        RETURN "u"
+    END IF
+    IF name = "reduce" OR name = "reduceRight" THEN
+        fn = JsNeedFn(JsArg(args, 0), "callback")
+        IF name = "reduceRight" THEN items.Reverse()
+        k = 0
+        IF args.Count > 1 THEN
+            acc = args[1]
+        ELSE
+            IF n = 0 THEN
+                jsThrown = JsMakeTypedError("TypeError", "Reduce of empty array with no initial value")
+                THROW Str(jsLine) + "|@thrown"
+            END IF
+            acc = items[0]
+            k = 1
+        END IF
+        FOR i = k TO n - 1
+            cb.Clear()
+            cb.Add(acc)
+            cb.Add(items[i])
+            IF name = "reduceRight" THEN
+                cb.Add(JsN(n - 1 - i))
+            ELSE
+                cb.Add(JsN(i))
+            END IF
+            cb.Add(JsO(id))
+            acc = JsCall(fn, JsO(jsGlobal), cb)
+        NEXT
+        RETURN acc
+    END IF
+    SELECT CASE name
+        CASE "includes"
+            v = JsArg(args, 0)
+            FOR i = 0 TO n - 1
+                IF JsStrictEq(items[i], v) THEN RETURN "t"
+                IF v.StartsWith("n") AND items[i].StartsWith("n") AND JsNum(v) = "NaN" AND JsNum(items[i]) = "NaN" THEN RETURN "t"
+            NEXT
+            RETURN "f"
+        CASE "lastIndexOf"
+            FOR i = n - 1 TO 0 STEP -1
+                IF JsStrictEq(items[i], JsArg(args, 0)) THEN RETURN JsN(i)
+            NEXT
+            RETURN "n-1"
+        CASE "fill"
+            j = 0
+            IF args.Count > 1 THEN j = JsInt(args[1])
+            IF j < 0 THEN j = MATH.Max(0, n + j)
+            k = n
+            IF args.Count > 2 AND args[2] <> "u" THEN k = JsInt(args[2])
+            IF k < 0 THEN k = MATH.Max(0, n + k)
+            FOR i = j TO MATH.Min(k, n) - 1
+                JsPutOwn(id, Str(i), JsArg(args, 0))
+            NEXT
+            RETURN JsO(id)
+    END SELECT
     SELECT CASE name
         CASE "join"
             IF JsArg(args, 0) = "u" THEN RETURN JsS(JsJoin(id, ","))
@@ -3329,7 +3514,7 @@ SUB JsResolve (p AS Integer, ok AS Bool, v AS String)
     JsPutOwn(p, "@then", JsO(JsNewArray(none)))
     i = 0
     WHILE i + 2 < waiting.Count
-        JsRunThen(p, waiting[i], waiting[i + 1], JsId(waiting[i + 2]))
+        JsQueueThen(p, waiting[i], waiting[i + 1], JsId(waiting[i + 2]))
         i = i + 3
     END WHILE
 END SUB
@@ -3400,7 +3585,7 @@ FUNCTION JsPromiseMethod (name AS String, thisVal AS String, args AS Array OF St
                 JsPutOwn(list, Str(n + 2), JsO(child))
                 JsPutOwn(list, "length", JsN(n + 3))
             ELSE
-                JsRunThen(id, JsArg(args, 0), JsArg(args, 1), child)
+                JsQueueThen(id, JsArg(args, 0), JsArg(args, 1), child)
             END IF
             RETURN JsO(child)
         CASE "Response.text"
@@ -3429,9 +3614,552 @@ FUNCTION JsPromiseMethod (name AS String, thisVal AS String, args AS Array OF St
     THROW Str(jsLine) + "|Object doesn't support this property or method"
 END FUNCTION
 
+' ---------------------------------------------------------------- the later library
+
+' What came after 1996 and every program now expects: JSON, Object.keys,
+' Array.isArray, Number.isInteger, fn.bind, Promise.resolve/reject/all/race.
+' (Array and String methods like map and startsWith are with the others.)
+
+VAR jsonSrc AS String
+VAR jsonAt AS Integer
+
+' Three arguments, as callbacks get them: (item, index, array).
+FUNCTION JsArgs3 (a AS String, b AS String, c AS String) AS Array OF String
+    VAR out AS Array OF String
+    out.Add(a)
+    out.Add(b)
+    out.Add(c)
+    RETURN out
+END FUNCTION
+
+FUNCTION JsNeedFn (v AS String, what AS String) AS String
+    IF NOT JsCallable(v) THEN
+        jsThrown = JsMakeTypedError("TypeError", what + " is not a function")
+        THROW Str(jsLine) + "|@thrown"
+    END IF
+    RETURN v
+END FUNCTION
+
+' An object's own keys, in the order they were made (an array's length left out).
+FUNCTION JsOwnKeys (id AS Integer) AS Array OF String
+    VAR out AS Array OF String
+    VAR key AS String
+    FOR EACH key IN joKeys[id].Split("|")
+        IF key = "" OR (joClass[id] = "Array" AND key = "length") THEN CONTINUE
+        out.Add(key)
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION JsMakeTypedError (kind AS String, message AS String) AS String
+    VAR v AS String
+    v = JsMakeError("0|" + message)
+    JsPutOwn(JsId(v), "name", JsS(kind))
+    JsPutOwn(JsId(v), "stack", JsS(kind + ": " + message))
+    IF JsGetProp(jsGlobal, kind).StartsWith("o") THEN joProto[JsId(v)] = JsId(JsGetProp(JsId(JsGetProp(jsGlobal, kind)), "prototype"))
+    RETURN v
+END FUNCTION
+
+FUNCTION JsLib (name AS String, thisVal AS String, args AS Array OF String) AS String
+    VAR a AS String
+    VAR id AS Integer
+    VAR out AS Array OF String
+    VAR key AS String
+    VAR i AS Integer
+    VAR v AS String
+    VAR p AS Integer
+    VAR holder AS Integer
+    VAR list AS Array OF String
+    VAR pair AS Array OF String
+    VAR parts AS Array OF String
+    VAR text AS String
+    a = JsArg(args, 0)
+    IF name.StartsWith("Bound:") THEN
+        holder = Int(Val(name.Substring(6, name.Length - 6)))
+        list = JsItems(JsId(JsGetProp(holder, "@args")))
+        FOR EACH v IN args
+            list.Add(v)
+        NEXT
+        RETURN JsCall(JsGetProp(holder, "@fn"), JsGetProp(holder, "@this"), list)
+    END IF
+    IF name.StartsWith("Promise.part:") THEN
+        ' one of Promise.all's promises settled: its value in its place, and
+        ' the whole thing settled when the last is in
+        parts = name.Split(":")
+        holder = Int(Val(parts[1]))
+        p = Int(Val(parts[2]))
+        IF JsGetProp(p, "@state") <> "spending" THEN RETURN "u"
+        IF parts[4] = "err" THEN
+            JsResolve(p, FALSE, a)
+            RETURN "u"
+        END IF
+        IF parts[4] = "race" THEN
+            JsResolve(p, TRUE, a)
+            RETURN "u"
+        END IF
+        JsPut(JsO(holder), parts[3], a)
+        i = JsInt(JsGetProp(holder, "@left")) - 1
+        JsPutOwn(holder, "@left", JsN(i))
+        IF i = 0 THEN JsResolve(p, TRUE, JsO(holder))
+        RETURN "u"
+    END IF
+    SELECT CASE name
+        CASE "Function.bind"
+            holder = JsNewObject("Object", 0)
+            JsPutOwn(holder, "@fn", thisVal)
+            JsPutOwn(holder, "@this", JsThisArg(a))
+            FOR i = 1 TO args.Count - 1
+                out.Add(args[i])
+            NEXT
+            JsPutOwn(holder, "@args", JsO(JsNewArray(out)))
+            RETURN JsNative("Bound:" + Str(holder))
+        CASE "ObjectS.keys", "ObjectS.values", "ObjectS.entries", "ObjectS.getOwnPropertyNames"
+            IF NOT a.StartsWith("o") THEN
+                IF a.StartsWith("s") THEN
+                    FOR i = 0 TO a.Length - 2
+                        out.Add(JsS(Str(i)))
+                    NEXT
+                END IF
+                RETURN JsO(JsNewArray(out))
+            END IF
+            id = JsId(a)
+            FOR EACH key IN JsOwnKeys(id)
+                IF name = "ObjectS.values" THEN
+                    out.Add(JsGet(a, key))
+                ELSEIF name = "ObjectS.entries" THEN
+                    pair.Clear()
+                    pair.Add(JsS(key))
+                    pair.Add(JsGet(a, key))
+                    out.Add(JsO(JsNewArray(pair)))
+                ELSE
+                    out.Add(JsS(key))
+                END IF
+            NEXT
+            RETURN JsO(JsNewArray(out))
+        CASE "ObjectS.assign"
+            IF NOT a.StartsWith("o") THEN RETURN a
+            FOR i = 1 TO args.Count - 1
+                IF args[i].StartsWith("o") THEN
+                    FOR EACH key IN JsOwnKeys(JsId(args[i]))
+                        JsPut(a, key, JsGet(args[i], key))
+                    NEXT
+                END IF
+            NEXT
+            RETURN a
+        CASE "ObjectS.create"
+            IF a = "l" THEN RETURN JsO(JsNewObject("Object", 0))
+            IF NOT a.StartsWith("o") THEN RETURN JsO(JsNewObject("Object", jsObjectProto))
+            id = JsNewObject("Object", JsId(a))
+            IF JsArg(args, 1).StartsWith("o") THEN
+                FOR EACH key IN JsOwnKeys(JsId(args[1]))
+                    JsPutOwn(id, key, JsGet(JsGet(args[1], key), "value"))
+                NEXT
+            END IF
+            RETURN JsO(id)
+        CASE "ObjectS.getPrototypeOf"
+            IF NOT a.StartsWith("o") THEN RETURN "l"
+            IF joProto[JsId(a)] = 0 THEN RETURN "l"
+            RETURN JsO(joProto[JsId(a)])
+        CASE "ObjectS.setPrototypeOf"
+            IF a.StartsWith("o") AND JsArg(args, 1).StartsWith("o") THEN joProto[JsId(a)] = JsId(args[1])
+            RETURN a
+        CASE "ObjectS.freeze", "ObjectS.seal", "ObjectS.preventExtensions"
+            RETURN a
+        CASE "ObjectS.defineProperty"
+            IF a.StartsWith("o") AND JsArg(args, 2).StartsWith("o") THEN JsPut(a, JsKey(JsArg(args, 1)), JsGet(args[2], "value"))
+            RETURN a
+        CASE "ObjectS.is"
+            IF JsNum(a) = "NaN" AND JsNum(JsArg(args, 1)) = "NaN" AND a.StartsWith("n") AND JsArg(args, 1).StartsWith("n") THEN RETURN "t"
+            RETURN JsB(JsStrictEq(a, JsArg(args, 1)))
+        CASE "ArrayS.isArray"
+            IF NOT a.StartsWith("o") THEN RETURN "f"
+            RETURN JsB(joClass[JsId(a)] = "Array")
+        CASE "ArrayS.of"
+            RETURN JsO(JsNewArray(args))
+        CASE "ArrayS.from"
+            IF a.StartsWith("s") THEN
+                FOR i = 1 TO a.Length - 1
+                    out.Add(JsS(a.Substring(i, 1)))
+                NEXT
+            ELSEIF a.StartsWith("o") THEN
+                IF joClass[JsId(a)] = "Array" THEN
+                    out = JsItems(JsId(a))
+                ELSE
+                    FOR i = 0 TO JsInt(JsGet(a, "length")) - 1
+                        out.Add(JsGet(a, Str(i)))
+                    NEXT
+                END IF
+            END IF
+            IF JsCallable(JsArg(args, 1)) THEN
+                FOR i = 0 TO out.Count - 1
+                    list.Clear()
+                    list.Add(out[i])
+                    list.Add(JsN(i))
+                    out[i] = JsCall(args[1], JsO(jsGlobal), list)
+                NEXT
+            END IF
+            RETURN JsO(JsNewArray(out))
+        CASE "NumberS.isInteger"
+            RETURN JsB(a.StartsWith("n") AND JsFinite(JsNum(a)) AND JsReal(a) = Int(JsReal(a)))
+        CASE "NumberS.isFinite"
+            RETURN JsB(a.StartsWith("n") AND JsFinite(JsNum(a)))
+        CASE "NumberS.isNaN"
+            RETURN JsB(a.StartsWith("n") AND JsNum(a) = "NaN")
+        CASE "JSON.stringify"
+            text = ""
+            v = JsArg(args, 2)
+            IF v.StartsWith("n") THEN
+                FOR i = 1 TO MATH.Min(10, JsInt(v))
+                    text = text + " "
+                NEXT
+            ELSEIF v.StartsWith("s") THEN
+                text = JsStr(v)
+            END IF
+            v = JsJsonOut(a, text, "")
+            IF v = Chr(0) THEN RETURN "u"
+            RETURN JsS(v)
+        CASE "JSON.parse"
+            jsonSrc = JsStr(a)
+            jsonAt = 0
+            v = JsJsonValue()
+            JsJsonSpace()
+            IF jsonAt < jsonSrc.Length THEN JsJsonFail()
+            RETURN v
+        CASE "PromiseS.resolve", "PromiseS.reject"
+            IF name = "PromiseS.resolve" AND a.StartsWith("o") THEN
+                IF joClass[JsId(a)] = "Promise" THEN RETURN a
+            END IF
+            p = JsNewPromise()
+            JsResolve(p, name = "PromiseS.resolve", a)
+            RETURN JsO(p)
+        CASE "PromiseS.all", "PromiseS.race"
+            p = JsNewPromise()
+            IF a.StartsWith("o") THEN list = JsItems(JsId(a))
+            holder = JsNewArray(out)
+            JsPutOwn(holder, "length", JsN(list.Count))
+            JsPutOwn(holder, "@left", JsN(list.Count))
+            IF list.Count = 0 AND name = "PromiseS.all" THEN JsResolve(p, TRUE, JsO(holder))
+            FOR i = 0 TO list.Count - 1
+                v = list[i]
+                IF NOT v.StartsWith("o") OR joClass[JsId(v)] <> "Promise" THEN
+                    id = JsNewPromise()
+                    JsResolve(id, TRUE, v)
+                    v = JsO(id)
+                END IF
+                pair.Clear()
+                IF name = "PromiseS.race" THEN
+                    pair.Add(JsNative("Promise.part:" + Str(holder) + ":" + Str(p) + ":" + Str(i) + ":race"))
+                ELSE
+                    pair.Add(JsNative("Promise.part:" + Str(holder) + ":" + Str(p) + ":" + Str(i) + ":ok"))
+                END IF
+                pair.Add(JsNative("Promise.part:" + Str(holder) + ":" + Str(p) + ":" + Str(i) + ":err"))
+                v = JsPromiseMethod("Promise.then", v, pair)
+            NEXT
+            RETURN JsO(p)
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+END FUNCTION
+
+' new Promise(function (resolve, reject) { ... })
+FUNCTION JsNewPromiseFrom (executor AS String) AS String
+    VAR p AS Integer
+    VAR list AS Array OF String
+    VAR r AS String
+    VAR depth AS Integer
+    p = JsNewPromise()
+    list.Add(JsSettler(p, "ok"))
+    list.Add(JsSettler(p, "err"))
+    depth = jsDepth
+    TRY
+        r = JsCall(JsNeedFn(executor, "Promise resolver"), JsO(jsGlobal), list)
+    CATCH err
+        jsDepth = depth
+        IF err.Contains("@aborted") THEN THROW err
+        IF jsThrown <> "" THEN
+            r = jsThrown
+        ELSE
+            r = JsMakeError(err)
+        END IF
+        jsThrown = ""
+        jsSig = ""
+        JsResolve(p, FALSE, r)
+    END TRY
+    RETURN JsO(p)
+END FUNCTION
+
+' ---- JSON
+
+FUNCTION JsJsonQuote (s AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR c AS String
+    VAR k AS Integer
+    out = """"
+    FOR i = 0 TO s.Length - 1
+        c = s.CharAt(i)
+        k = Asc(c)
+        IF c = """" THEN
+            out = out + "\"""
+        ELSEIF c = "\" THEN
+            out = out + "\\"
+        ELSEIF k = 10 THEN
+            out = out + "\n"
+        ELSEIF k = 13 THEN
+            out = out + "\r"
+        ELSEIF k = 9 THEN
+            out = out + "\t"
+        ELSEIF k < 32 THEN
+            out = out + "\u00" + "0123456789abcdef".CharAt(Int(k / 16)) + "0123456789abcdef".CharAt(k MOD 16)
+        ELSE
+            out = out + c
+        END IF
+    NEXT
+    RETURN out + """"
+END FUNCTION
+
+' v as JSON; Chr(0) for what JSON leaves out (undefined, functions).
+FUNCTION JsJsonOut (v AS String, indent AS String, cur AS String) AS String
+    VAR id AS Integer
+    VAR parts AS Array OF String
+    VAR key AS String
+    VAR item AS String
+    VAR inner AS String
+    VAR sep AS String
+    VAR fn AS String
+    VAR none AS Array OF String
+    SELECT CASE v.Substring(0, 1)
+        CASE "u"
+            RETURN Chr(0)
+        CASE "l"
+            RETURN "null"
+        CASE "t"
+            RETURN "true"
+        CASE "f"
+            RETURN "false"
+        CASE "n"
+            IF NOT JsFinite(JsNum(v)) THEN RETURN "null"
+            RETURN JsStr(v)
+        CASE "s"
+            RETURN JsJsonQuote(v.Substring(1, v.Length - 1))
+    END SELECT
+    IF JsCallable(v) THEN RETURN Chr(0)
+    id = JsId(v)
+    fn = JsGet(v, "toJSON")
+    IF JsCallable(fn) THEN RETURN JsJsonOut(JsCall(fn, v, none), indent, cur)
+    IF joClass[id] = "Date" THEN RETURN JsJsonQuote(JsStr(v))
+    inner = cur + indent
+    sep = ","
+    IF indent <> "" THEN sep = "," + Chr(10) + inner
+    IF joClass[id] = "Array" THEN
+        FOR EACH item IN JsItems(id)
+            key = JsJsonOut(item, indent, inner)
+            IF key = Chr(0) THEN key = "null"
+            parts.Add(key)
+        NEXT
+        IF parts.Count = 0 THEN RETURN "[]"
+        IF indent = "" THEN RETURN "[" + parts.Join(",") + "]"
+        RETURN "[" + Chr(10) + inner + parts.Join(sep) + Chr(10) + cur + "]"
+    END IF
+    FOR EACH key IN JsOwnKeys(id)
+        item = JsJsonOut(JsGet(v, key), indent, inner)
+        IF item = Chr(0) THEN CONTINUE
+        IF indent = "" THEN
+            parts.Add(JsJsonQuote(key) + ":" + item)
+        ELSE
+            parts.Add(JsJsonQuote(key) + ": " + item)
+        END IF
+    NEXT
+    IF parts.Count = 0 THEN RETURN "{}"
+    IF indent = "" THEN RETURN "{" + parts.Join(",") + "}"
+    RETURN "{" + Chr(10) + inner + parts.Join(sep) + Chr(10) + cur + "}"
+END FUNCTION
+
+SUB JsJsonFail ()
+    VAR what AS String
+    IF jsonAt >= jsonSrc.Length THEN
+        what = "Unexpected end of JSON input"
+    ELSE
+        what = "Unexpected token " + jsonSrc.CharAt(jsonAt) + " in JSON at position " + Str(jsonAt)
+    END IF
+    jsThrown = JsMakeTypedError("SyntaxError", what)
+    THROW Str(jsLine) + "|@thrown"
+END SUB
+
+SUB JsJsonSpace ()
+    WHILE jsonAt < jsonSrc.Length
+        IF NOT (" " + Chr(9) + Chr(10) + Chr(13)).Contains(jsonSrc.CharAt(jsonAt)) THEN RETURN
+        jsonAt = jsonAt + 1
+    END WHILE
+END SUB
+
+FUNCTION JsJsonValue () AS String
+    VAR c AS String
+    VAR id AS Integer
+    VAR items AS Array OF String
+    VAR key AS String
+    VAR start AS Integer
+    JsJsonSpace()
+    IF jsonAt >= jsonSrc.Length THEN JsJsonFail()
+    c = jsonSrc.CharAt(jsonAt)
+    IF c = "{" THEN
+        jsonAt = jsonAt + 1
+        id = JsNewObject("Object", jsObjectProto)
+        JsJsonSpace()
+        IF jsonAt < jsonSrc.Length AND jsonSrc.CharAt(jsonAt) = "}" THEN
+            jsonAt = jsonAt + 1
+            RETURN JsO(id)
+        END IF
+        WHILE TRUE
+            JsJsonSpace()
+            IF jsonAt >= jsonSrc.Length OR jsonSrc.CharAt(jsonAt) <> """" THEN JsJsonFail()
+            key = JsJsonString()
+            JsJsonSpace()
+            IF jsonAt >= jsonSrc.Length OR jsonSrc.CharAt(jsonAt) <> ":" THEN JsJsonFail()
+            jsonAt = jsonAt + 1
+            JsPut(JsO(id), key, JsJsonValue())
+            JsJsonSpace()
+            IF jsonAt < jsonSrc.Length AND jsonSrc.CharAt(jsonAt) = "," THEN
+                jsonAt = jsonAt + 1
+            ELSEIF jsonAt < jsonSrc.Length AND jsonSrc.CharAt(jsonAt) = "}" THEN
+                jsonAt = jsonAt + 1
+                RETURN JsO(id)
+            ELSE
+                JsJsonFail()
+            END IF
+        END WHILE
+    END IF
+    IF c = "[" THEN
+        jsonAt = jsonAt + 1
+        JsJsonSpace()
+        IF jsonAt < jsonSrc.Length AND jsonSrc.CharAt(jsonAt) = "]" THEN
+            jsonAt = jsonAt + 1
+            RETURN JsO(JsNewArray(items))
+        END IF
+        WHILE TRUE
+            items.Add(JsJsonValue())
+            JsJsonSpace()
+            IF jsonAt < jsonSrc.Length AND jsonSrc.CharAt(jsonAt) = "," THEN
+                jsonAt = jsonAt + 1
+            ELSEIF jsonAt < jsonSrc.Length AND jsonSrc.CharAt(jsonAt) = "]" THEN
+                jsonAt = jsonAt + 1
+                RETURN JsO(JsNewArray(items))
+            ELSE
+                JsJsonFail()
+            END IF
+        END WHILE
+    END IF
+    IF c = """" THEN RETURN JsS(JsJsonString())
+    IF jsonSrc.Substring(jsonAt, MATH.Min(4, jsonSrc.Length - jsonAt)) = "true" THEN
+        jsonAt = jsonAt + 4
+        RETURN "t"
+    END IF
+    IF jsonSrc.Substring(jsonAt, MATH.Min(5, jsonSrc.Length - jsonAt)) = "false" THEN
+        jsonAt = jsonAt + 5
+        RETURN "f"
+    END IF
+    IF jsonSrc.Substring(jsonAt, MATH.Min(4, jsonSrc.Length - jsonAt)) = "null" THEN
+        jsonAt = jsonAt + 4
+        RETURN "l"
+    END IF
+    IF "-0123456789".Contains(c) THEN
+        start = jsonAt
+        jsonAt = jsonAt + 1
+        WHILE jsonAt < jsonSrc.Length AND "0123456789.eE+-".Contains(jsonSrc.CharAt(jsonAt))
+            jsonAt = jsonAt + 1
+        END WHILE
+        RETURN "n" + JsNum(JsS(jsonSrc.Substring(start, jsonAt - start)))
+    END IF
+    JsJsonFail()
+    RETURN "u"
+END FUNCTION
+
+' A JSON string at jsonAt (the opening quote), unescaped.
+FUNCTION JsJsonString () AS String
+    VAR out AS String
+    VAR c AS String
+    VAR e AS String
+    jsonAt = jsonAt + 1
+    WHILE jsonAt < jsonSrc.Length
+        c = jsonSrc.CharAt(jsonAt)
+        IF c = """" THEN
+            jsonAt = jsonAt + 1
+            RETURN out
+        END IF
+        IF c = "\" THEN
+            jsonAt = jsonAt + 1
+            IF jsonAt >= jsonSrc.Length THEN JsJsonFail()
+            e = jsonSrc.CharAt(jsonAt)
+            SELECT CASE e
+                CASE "n"
+                    out = out + Chr(10)
+                CASE "t"
+                    out = out + Chr(9)
+                CASE "r"
+                    out = out + Chr(13)
+                CASE "b"
+                    out = out + Chr(8)
+                CASE "f"
+                    out = out + Chr(12)
+                CASE "u"
+                    IF jsonAt + 4 >= jsonSrc.Length THEN JsJsonFail()
+                    out = out + Chr(Int(Val(JsNumberText("0x" + jsonSrc.Substring(jsonAt + 1, 4)))))
+                    jsonAt = jsonAt + 4
+                CASE ELSE
+                    out = out + e
+            END SELECT
+        ELSE
+            out = out + c
+        END IF
+        jsonAt = jsonAt + 1
+    END WHILE
+    JsJsonFail()
+    RETURN out
+END FUNCTION
+
+' ---- promise jobs: with jsDefer on (Node), then-callbacks wait until the
+' running code is done, as JavaScript says; JsDrainJobs runs them.
+
+VAR jsDefer AS Bool
+VAR jqP AS Array OF Integer
+VAR jqOk AS Array OF String
+VAR jqErr AS Array OF String
+VAR jqChild AS Array OF Integer
+
+SUB JsQueueThen (p AS Integer, onOk AS String, onErr AS String, child AS Integer)
+    IF NOT jsDefer THEN
+        JsRunThen(p, onOk, onErr, child)
+        RETURN
+    END IF
+    jqP.Add(p)
+    jqOk.Add(onOk)
+    jqErr.Add(onErr)
+    jqChild.Add(child)
+END SUB
+
+SUB JsDrainJobs ()
+    VAR p AS Integer
+    VAR ok AS String
+    VAR er AS String
+    VAR c AS Integer
+    WHILE jqP.Count > 0
+        p = jqP[0]
+        ok = jqOk[0]
+        er = jqErr[0]
+        c = jqChild[0]
+        jqP.RemoveAt(0)
+        jqOk.RemoveAt(0)
+        jqErr.RemoveAt(0)
+        jqChild.RemoveAt(0)
+        jsSig = ""
+        jsDepth = 0
+        JsRunThen(p, ok, er, c)
+    END WHILE
+END SUB
+
 ' ---------------------------------------------------------------- a fresh page
 
 SUB JsReset ()
+    VAR kind AS String
     VAR mathObj AS Integer
     VAR o AS Integer
     VAR f AS Integer
@@ -3471,11 +4199,11 @@ SUB JsReset ()
     jsObjectProto = JsNewObject("Object", 0)
     JsMethods(jsObjectProto, "Object.", "toString,hasOwnProperty")
     jsFunctionProto = JsNewObject("Object", jsObjectProto)
-    JsMethods(jsFunctionProto, "Function.", "call,apply")
+    JsMethods(jsFunctionProto, "Function.", "call,apply,bind")
     jsArrayProto = JsNewObject("Object", jsObjectProto)
-    JsMethods(jsArrayProto, "Array.", "join,toString,push,pop,shift,unshift,reverse,concat,slice,splice,indexOf,sort")
+    JsMethods(jsArrayProto, "Array.", "join,toString,push,pop,shift,unshift,reverse,concat,slice,splice,indexOf,sort,forEach,map,filter,reduce,reduceRight,some,every,find,findIndex,includes,lastIndexOf,fill")
     jsStringProto = JsNewObject("Object", jsObjectProto)
-    JsMethods(jsStringProto, "String.", "charAt,charCodeAt,indexOf,lastIndexOf,substring,substr,slice,toUpperCase,toLowerCase,toLocaleUpperCase,toLocaleLowerCase,trim,split,concat,toString,valueOf,bold,italics,fixed,big,small,blink,strike,sub,sup,fontcolor,fontsize,anchor,link")
+    JsMethods(jsStringProto, "String.", "charAt,charCodeAt,indexOf,lastIndexOf,substring,substr,slice,toUpperCase,toLowerCase,toLocaleUpperCase,toLocaleLowerCase,trim,split,concat,toString,valueOf,bold,italics,fixed,big,small,blink,strike,sub,sup,fontcolor,fontsize,anchor,link,replace,replaceAll,startsWith,endsWith,includes,repeat,padStart,padEnd,trimStart,trimEnd,trimLeft,trimRight")
     jsNumberProto = JsNewObject("Object", jsObjectProto)
     JsMethods(jsNumberProto, "Number.", "toString,toFixed")
     jsDateProto = JsNewObject("Object", jsObjectProto)
@@ -3489,7 +4217,7 @@ SUB JsReset ()
     JsPutOwn(jsGlobal, "parent", JsO(jsGlobal))
     JsPutOwn(jsGlobal, "NaN", "nNaN")
     JsPutOwn(jsGlobal, "Infinity", "nInfinity")
-    JsMethods(jsGlobal, "", "alert,confirm,prompt,parseInt,parseFloat,isNaN,isFinite,escape,unescape,setTimeout,setInterval,clearTimeout,clearInterval,open,String,Number,Boolean,Array,Object,Date,Error")
+    JsMethods(jsGlobal, "", "alert,confirm,prompt,parseInt,parseFloat,isNaN,isFinite,escape,unescape,setTimeout,setInterval,clearTimeout,clearInterval,open,String,Number,Boolean,Array,Object,Date,Error,TypeError,RangeError,SyntaxError,ReferenceError,Promise")
     JsPutOwn(jsGlobal, "eval", JsNative("eval"))
     JsPutOwn(jsGlobal, "close", JsNative("noop"))
     JsPutOwn(jsGlobal, "focus", JsNative("noop"))
@@ -3501,6 +4229,27 @@ SUB JsReset ()
     JsPutOwn(JsId(JsGetProp(jsGlobal, "Array")), "prototype", JsO(jsArrayProto))
     JsPutOwn(JsId(JsGetProp(jsGlobal, "Object")), "prototype", JsO(jsObjectProto))
     JsPutOwn(JsId(JsGetProp(jsGlobal, "Date")), "prototype", JsO(jsDateProto))
+    JsMethods(JsId(JsGetProp(jsGlobal, "Object")), "ObjectS.", "keys,values,entries,assign,create,getPrototypeOf,setPrototypeOf,freeze,seal,preventExtensions,defineProperty,getOwnPropertyNames,is")
+    JsMethods(JsId(JsGetProp(jsGlobal, "Array")), "ArrayS.", "isArray,from,of")
+    JsMethods(JsId(JsGetProp(jsGlobal, "Number")), "NumberS.", "isInteger,isFinite,isNaN")
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "parseInt", JsNative("parseInt"))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "parseFloat", JsNative("parseFloat"))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Number")), "MAX_SAFE_INTEGER", JsN(9007199254740991))
+    o = JsNewObject("Object", jsObjectProto)
+    JsMethods(o, "JSON.", "parse,stringify")
+    JsPutOwn(jsGlobal, "JSON", JsO(o))
+    ' the errors: Error.prototype, and its kinds made from it
+    o = JsNewObject("Object", jsObjectProto)
+    JsPutOwn(o, "name", JsS("Error"))
+    JsPutOwn(o, "message", JsS(""))
+    JsPutOwn(o, "constructor", JsGetProp(jsGlobal, "Error"))
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Error")), "prototype", JsO(o))
+    jsErrorProto = o
+    FOR EACH kind IN ["TypeError", "RangeError", "SyntaxError", "ReferenceError"]
+        o = JsNewObject("Object", jsErrorProto)
+        JsPutOwn(o, "name", JsS(kind))
+        JsPutOwn(JsId(JsGetProp(jsGlobal, kind)), "prototype", JsO(o))
+    NEXT
 
     mathObj = JsNewObject("Object", jsObjectProto)
     JsMethods(mathObj, "Math.", "abs,floor,ceil,round,random,max,min,sqrt,pow,sin,cos,tan,atan,exp,log")
@@ -3529,6 +4278,12 @@ SUB JsReset ()
     JsMethods(jsXhrProto, "XHR.", "open,setRequestHeader,send,abort,getResponseHeader,getAllResponseHeaders")
     jsPromiseProto = JsNewObject("Object", jsObjectProto)
     JsMethods(jsPromiseProto, "Promise.", "then,catch")
+    JsPutOwn(JsId(JsGetProp(jsGlobal, "Promise")), "prototype", JsO(jsPromiseProto))
+    JsMethods(JsId(JsGetProp(jsGlobal, "Promise")), "PromiseS.", "resolve,reject,all,race")
+    jqP.Clear()
+    jqOk.Clear()
+    jqErr.Clear()
+    jqChild.Clear()
     JsMethods(jsGlobal, "", "XMLHttpRequest,ActiveXObject,fetch")
 
     jsLocation = JsNewObject("Location", jsObjectProto)
