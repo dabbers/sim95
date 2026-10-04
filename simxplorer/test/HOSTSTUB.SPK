@@ -6,6 +6,11 @@ VAR hostTitle AS String
 VAR hostCookie AS String
 VAR hostConfirmAnswer AS Bool = TRUE
 
+' Where the engine is, for an error's stack: a page doesn't say.
+FUNCTION HostWhere () AS String
+    RETURN ""
+END FUNCTION
+
 ' A native the engine doesn't know: none, in a page.
 FUNCTION HostNative (name AS String, thisVal AS String, args AS Array OF String) AS String
     THROW Str(jsLine) + "|Object doesn't support this property or method"

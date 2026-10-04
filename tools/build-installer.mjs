@@ -550,6 +550,27 @@ FUNCTION WelcomeHere () AS Bool
 END FUNCTION
 `,
   },
+  // Node for SIM95: the JavaScript engine Simxplorer runs pages with, as a
+  // program, with Node's modules (C:\\NODE\\LIB) and npm.
+  node: {
+    vapor: { id: "NODE", name: "Node.js for SIM95", kind: "program", category: "Programming", run: "C:\\PROGRAMS\\NODE.SPK", tasks: "NODE", startup: "", about: "JavaScript outside the browser: node app.js in Sim Shell, or Node's own prompt. console, require, fs, path, events, net, http, readline and more; and npm, with the network's package registry on STARTHERE." },
+    title: "Node.js for SIM95",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
+' C:\\PROGRAMS\\NODE.SPK (Node: the JavaScript engine, its window and event
+' loop) and Node's modules in C:\\NODE\\LIB, and makes C:\\NODE\\MODULES for the
+' packages npm installs. In Sim Shell: node app.js, or node alone for the
+' prompt. File names are 8.3, so node_modules is NODE_MOD and package.json is
+' PACKAGE.JSN.`,
+    copy: [["node/lib", "C:\\NODE\\LIB"]],
+    generated: [
+      { dest: "C:\\PROGRAMS\\NODE.SPK", text: () => read("node/src/NODEHOST.SPK") + "\n" + read("simxplorer/src/JSCRIPT.SPK") },
+    ],
+    dirs: ["C:\\NODE", "C:\\NODE\\LIB", "C:\\NODE\\MODULES"],
+    first: [],
+    last: [],
+    done: `Print("Node is installed. In Sim Shell: node -v, node app.js, or node for its prompt.")`,
+    code: () => "",
+  },
   // The Files fix: Copy and Paste in SIM95's own file manager (FILES.SPK)
   // work between its windows, and so between machines. It edits the
   // machine's FILES.SPK in place (two SUBs, only if they're the stock ones),

@@ -43,6 +43,7 @@ VAR jtNl AS Array OF Bool
 VAR jp AS Integer
 VAR jsLineBase AS Integer
 VAR jsLexLine AS Integer
+VAR jsNodeAt AS Integer              ' the statement running (the host can tell which file it's from)
 
 VAR nk AS Array OF String
 VAR na AS Array OF Integer
@@ -578,6 +579,8 @@ FUNCTION JsFunctionRest (kind AS String, name AS String, line AS Integer) AS Int
     JsExpect("(")
     fancy = JsParams(params)
     body = JsBlock()
+    ' (a body's own lets, consts and classes are in the function's scope, beside its functions)
+    nd[body] = 2
     RETURN JsNode(kind, body, fancy, 0, 0, name, params.Join(","), line)
 END FUNCTION
 
@@ -813,6 +816,7 @@ FUNCTION JsArrow () AS Integer
     JsExpect("=>")
     IF JsIsOp("{") THEN
         body = JsBlock()
+        nd[body] = 2
     ELSE
         body = JsNode("return", JsAssign(), 0, 0, 0, "", "", line)
         body = JsNode("block", 0, 0, 0, 0, "", Str(body), line)
@@ -1701,7 +1705,16 @@ FUNCTION JsGet (v AS String, name AS String) AS String
         CASE "Global"
             IF name = "status" OR name = "defaultStatus" THEN RETURN JsS(HostInfo("status"))
             IF name = "location" THEN RETURN JsO(jsLocation)
+        CASE "Native"
+            IF name = "name" AND JsOwn(id, "name") < 0 THEN
+                IF joS[id].Contains(".") THEN RETURN JsS(joS[id].Substring(joS[id].IndexOf(".") + 1, joS[id].Length - joS[id].IndexOf(".") - 1))
+                RETURN JsS(joS[id])
+            END IF
         CASE "Function"
+            IF name = "name" AND JsOwn(id, "name") < 0 THEN
+                IF JsOwn(id, "@name") >= 0 THEN RETURN JsGetProp(id, "@name")
+                RETURN JsS(ns[joA[id]])
+            END IF
             IF name = "prototype" AND JsOwn(id, "prototype") < 0 THEN JsPutOwn(id, "prototype", JsO(JsNewProtoFor(id)))
             IF name = "length" THEN
                 IF nl[joA[id]] = "" THEN RETURN "n0"
@@ -2169,6 +2182,7 @@ SUB JsExec (n AS Integer, scope AS Integer)
     VAR c AS Integer
     IF n = 0 THEN RETURN
     jsLine = nline[n]
+    jsNodeAt = n
     JsTick()
     SELECT CASE nk[n]
         CASE "block"
@@ -2386,7 +2400,11 @@ FUNCTION JsMakeError (err AS String) AS String
     IF jsErrorProto = 0 THEN joProto[id] = jsObjectProto
     JsPutOwn(id, "message", JsS(message))
     JsPutOwn(id, "description", JsS(message))
-    JsPutOwn(id, "stack", JsS("Error: " + message))
+    IF HostWhere() = "" THEN
+        JsPutOwn(id, "stack", JsS("Error: " + message))
+    ELSE
+        JsPutOwn(id, "stack", JsS("Error: " + message + Chr(10) + "    at " + HostWhere()))
+    END IF
     RETURN JsO(id)
 END FUNCTION
 
@@ -3335,7 +3353,9 @@ FUNCTION JsStringMethod (name AS String, s AS String, args AS Array OF String) A
         CASE "lastIndexOf"
             t = JsStr(a)
             found = -1
-            FOR i = n - t.Length TO 0 STEP -1
+            j = n - t.Length
+            IF args.Count > 1 AND JsArg(args, 1) <> "u" THEN j = MATH.Min(j, JsInt(args[1]))
+            FOR i = j TO 0 STEP -1
                 IF s.Substring(i, t.Length) = t THEN
                     found = i
                     BREAK
@@ -4336,6 +4356,7 @@ FUNCTION JsMakeClass (n AS Integer, scope AS Integer) AS String
     JsPutOwn(cs, "@superproto", JsO(superProto))
     JsPutOwn(cs, "@class", fn)
     IF ns[n] <> "" THEN JsPutOwn(cs, ns[n], fn)
+    JsPutOwn(fid, "@name", JsS(ns[n]))
     JsPutOwn(fid, "@cscope", JsN(cs))
     FOR EACH item IN nl[n].Split(",")
         IF item = "" THEN CONTINUE
@@ -4462,7 +4483,11 @@ FUNCTION JsMakeTypedError (kind AS String, message AS String) AS String
     VAR v AS String
     v = JsMakeError("0|" + message)
     JsPutOwn(JsId(v), "name", JsS(kind))
-    JsPutOwn(JsId(v), "stack", JsS(kind + ": " + message))
+    IF HostWhere() = "" THEN
+        JsPutOwn(JsId(v), "stack", JsS(kind + ": " + message))
+    ELSE
+        JsPutOwn(JsId(v), "stack", JsS(kind + ": " + message + Chr(10) + "    at " + HostWhere()))
+    END IF
     IF JsGetProp(jsGlobal, kind).StartsWith("o") THEN joProto[JsId(v)] = JsId(JsGetProp(JsId(JsGetProp(jsGlobal, kind)), "prototype"))
     RETURN v
 END FUNCTION

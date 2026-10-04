@@ -126,6 +126,8 @@ class Widget {
         default: return;
       }
     }
+    // A console's ReadLine waits for a test to type a line: w.typeLine("text")
+    if (this.type === "Console" && (m === "ReadLine" || m === "ReadKey")) return new Promise((r) => (this.reads ||= []).push(r));
     if (this.type === "Menu" && m === "AddItem") { this.items.push(String(a[1]).split("\t")[0].replace("&", "")); return; }
     switch (m) {
       case "Show": this.props.Visible = true; return;
@@ -151,6 +153,8 @@ class Widget {
       default: return; // Focus, ScrollToEnd, Center, SelectAll... nothing to draw
     }
   }
+  typeLine(line) { const r = (this.reads || []).shift(); if (!r) return false; this.text += line + "\n"; r(line); return true; }
+  get reading() { return (this.reads || []).length > 0; }
   on(ev, fn) { this.handlers.set(ev, fn); }
   fire(ev, ...a) { this.handlers.get(ev)?.(...a); }
   destroy() {

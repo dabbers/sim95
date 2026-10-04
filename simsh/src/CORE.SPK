@@ -928,6 +928,8 @@ FUNCTION RunProgram (args AS Array OF String) AS String
         Complain("run: " + path + ": not a SPARK program (.SPK)")
         RETURN ""
     END IF
+    ' node and npm work where the shell is, as they would at a real prompt
+    IF path.EndsWith("\NODE.SPK") OR path.EndsWith("\NPM.SPK") THEN rest.Add("--cwd=" + shCwd)
     FOR i = 1 TO args.Count - 1
         rest.Add(args[i])
     NEXT

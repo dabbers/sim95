@@ -1,0 +1,959 @@
+' NODEHOST.SPK - Node for SIM95: the window, the event loop, and the native
+' half of Node's modules, around the JavaScript engine (JSCRIPT.SPK, the one
+' Simxplorer runs pages with). C:\PROGRAMS\NODE.SPK is the two joined.
+'
+'   node                    the prompt: type JavaScript, see what it gives
+'   node app.js a b         runs C:\...\APP.JS, with process.argv [.., a, b]
+'   node -e "code"          runs the code
+'   node -v                 the version
+' (Sim Shell puts --cwd=<its folder> first, so app.js is found where you are.)
+'
+' The JavaScript half is in C:\NODE\LIB: BOOT.JS starts everything, and the
+' modules (fs, path, events, net, http...) are .JS files there.
+'
+' One rule keeps the engine safe: JavaScript never waits. A SPARK call that
+' waits (Connect, NET.Resolve, a line typed in the window) lets other events
+' in, so those are jobs, done by the clock outside JavaScript; what they find
+' comes back as an event. Events wait in a queue, and Pump runs them one at
+' a time, each to the end, with the promise jobs after it.
+
+CONST NODEDIR = "C:\NODE"
+CONST NODEVERSION = "v0.2.0"
+CONST MAXSERVERS = 8
+
+VAR win AS GUI_Window
+VAR con AS GUI_Console
+VAR clock AS GUI_Timer
+VAR dialer AS GUI_Timer
+VAR reader AS GUI_Timer
+VAR nodeCwd AS String
+VAR nodeArgs AS Array OF String
+VAR nodeScript AS String
+VAR nodeEval AS String
+VAR finished AS Bool
+VAR exitCode AS Integer
+VAR pumping AS Bool
+VAR dispatchFn AS String
+VAR started AS Bool
+VAR ending AS Bool
+
+' timers: setTimeout and setInterval
+VAR tmId AS Array OF Integer
+VAR tmDue AS Array OF Integer
+VAR tmFn AS Array OF String
+VAR tmCode AS Array OF String
+VAR tmEvery AS Array OF Integer
+VAR tmNext AS Integer
+
+' events for the JavaScript side: kind, and two values (engine values)
+VAR evKind AS Array OF String
+VAR evA AS Array OF String
+VAR evB AS Array OF String
+
+' sockets: servers in slots (each slot has its own onConnect), connections by id
+VAR srvSock AS Array OF NET_Socket
+VAR srvOn AS Array OF Bool
+VAR srvPort AS Array OF Integer
+VAR srvClosing AS Array OF Bool
+VAR skSlot AS Array OF Integer    ' the server slot each connection came in on (-1: one we made)
+VAR outSock AS NET_Socket
+VAR outSocks AS Array OF NET_Socket
+VAR skId AS Array OF Integer
+VAR skConn AS Array OF NET_Connection
+VAR skNext AS Integer
+' connects and lookups waiting to be done: "id|host|port" and "id|name"
+VAR dialQ AS Array OF String
+VAR lookQ AS Array OF String
+VAR dialing AS Integer
+VAR dialBusy AS String            ' the connection being made now ("": none)
+VAR dialAt AS Integer
+VAR dialed AS Array OF String     ' "id|" connected, "id|why" failed: the clock passes them on
+VAR reading AS Bool
+VAR readWanted AS Bool
+VAR readPrompt AS String
+
+' which file the code for each node came from (for errors): the first node
+' of each file compiled, and its name
+VAR fileFrom AS Array OF Integer
+VAR fileName AS Array OF String
+
+SUB Main ()
+    VAR a AS String
+    VAR k AS Integer
+    VAR title AS String
+    nodeCwd = "C:\MYFILES"
+    k = 0
+    ' the options, the script, and the script's own arguments
+    WHILE k < SYS.Args.Count
+        a = SYS.Args[k]
+        IF a.StartsWith("--cwd=") THEN
+            nodeCwd = a.Substring(6, a.Length - 6)
+        ELSEIF nodeScript = "" AND nodeEval = "" AND (a = "-v" OR a = "--version") THEN
+            nodeEval = "console.log(process.version)"
+        ELSEIF nodeScript = "" AND nodeEval = "" AND a = "-e" AND k + 1 < SYS.Args.Count THEN
+            k = k + 1
+            nodeEval = SYS.Args[k]
+            ' (the rest of the line is the code)
+            WHILE k + 1 < SYS.Args.Count
+                k = k + 1
+                nodeEval = nodeEval + " " + SYS.Args[k]
+            END WHILE
+        ELSEIF nodeScript = "" AND nodeEval = "" THEN
+            nodeScript = a
+        ELSE
+            nodeArgs.Add(a)
+        END IF
+        k = k + 1
+    END WHILE
+    IF nodeScript <> "" THEN nodeScript = FullPath(nodeScript)
+    title = "Node"
+    IF nodeScript <> "" THEN title = "Node - " + Base(nodeScript)
+    win = GUI_Window.New(title, 600, 360)
+    win.Icon = "terminal"
+    win.onClose = Win_OnClose
+    win.onResize = Win_OnResize
+    con = GUI_Console.New(win)
+    Win_OnResize()
+    clock = GUI_Timer.New(win)
+    clock.Interval = 15
+    clock.onTick = Clock_OnTick
+    dialer = GUI_Timer.New(win)
+    dialer.Interval = 30
+    dialer.onTick = Dialer_OnTick
+    reader = GUI_Timer.New(win)
+    reader.Interval = 50
+    reader.onTick = Reader_OnTick
+    outSock = NET_Socket.New()
+    outSock.onMessage = Conn_OnMessage
+    outSock.onClose = Conn_OnClose
+    FOR k = 0 TO MAXSERVERS - 1
+        srvSock.Add(outSock)
+        srvClosing.Add(FALSE)
+        srvOn.Add(FALSE)
+        srvPort.Add(0)
+    NEXT
+    win.Show()
+    con.Focus()
+    clock.Start()
+    dialer.Start()
+    reader.Start()
+    StartJs()
+END SUB
+
+SUB Win_OnResize ()
+    con.SetBounds(0, 0, win.Width, win.Height)
+END SUB
+
+SUB Win_OnClose ()
+    SYS.Exit(exitCode)
+END SUB
+
+' ---------------------------------------------------------------- paths
+
+FUNCTION FullPath (p AS String) AS String
+    VAR q AS String
+    q = p.Replace("/", "\").Trim()
+    IF q.Length >= 2 AND q.CharAt(1) = ":" THEN RETURN Tidy(q)
+    IF q.StartsWith("\") THEN RETURN Tidy("C:" + q)
+    RETURN Tidy(nodeCwd + "\" + q)
+END FUNCTION
+
+' C:\A\.\B\..\C -> C:\A\C, upper case, no \ at the end
+FUNCTION Tidy (p AS String) AS String
+    VAR out AS Array OF String
+    VAR part AS String
+    FOR EACH part IN p.Upper().Split("\")
+        IF part = "" OR part = "." THEN CONTINUE
+        IF part = ".." THEN
+            IF out.Count > 1 THEN out.RemoveAt(out.Count - 1)
+            CONTINUE
+        END IF
+        out.Add(part)
+    NEXT
+    IF out.Count = 1 THEN RETURN out[0] + "\"
+    RETURN out.Join("\")
+END FUNCTION
+
+FUNCTION Base (p AS String) AS String
+    VAR parts AS Array OF String
+    parts = p.Split("\")
+    RETURN parts[parts.Count - 1]
+END FUNCTION
+
+' ---------------------------------------------------------------- starting
+
+SUB StartJs ()
+    VAR natives AS Integer
+    VAR boot AS String
+    VAR err AS String
+    JsReset()
+    jsDefer = TRUE
+    ' the natives, for BOOT.JS (which takes them and hides them)
+    natives = JsNewObject("Object", jsObjectProto)
+    JsMethods(natives, "node.", "write,args,info,chdir,title,exit,fullpath,fsRead,fsWrite,fsAppend,fsStat,fsList,fsMkdir,fsDelete,fsRename,compile,eval,listen,unlisten,connect,send,end,peer,lookup,readLine,stopReading,spawn,kill,tasks")
+    JsPutOwn(jsGlobal, "__node", JsO(natives))
+    IF NOT FS.Exists(NODEDIR + "\LIB\BOOT.JS") THEN
+        con.WriteLine("Node isn't installed properly: " + NODEDIR + "\LIB\BOOT.JS is missing.")
+        Finish(1)
+        RETURN
+    END IF
+    boot = FS.Read(NODEDIR + "\LIB\BOOT.JS")
+    fileFrom.Add(nk.Count)
+    fileName.Add(NODEDIR + "\LIB\BOOT.JS")
+    err = JsRun(boot, 1)
+    IF err <> "" THEN
+        con.WriteLine("Node couldn't start: " + ErrText(err))
+        Finish(1)
+        RETURN
+    END IF
+    dispatchFn = JsGetProp(jsGlobal, "__dispatch")
+    started = TRUE
+    ' the program itself, or the prompt
+    IF nodeEval <> "" THEN
+        Fire("eval", JsS(nodeEval), "u")
+    ELSEIF nodeScript <> "" THEN
+        Fire("main", JsS(nodeScript), "u")
+    ELSE
+        Fire("repl", "u", "u")
+    END IF
+END SUB
+
+' "line|message" as file:line: message
+FUNCTION ErrText (err AS String) AS String
+    IF NOT err.Contains("|") THEN RETURN err
+    RETURN Where() + ": " + err.Substring(err.IndexOf("|") + 1, err.Length - err.IndexOf("|") - 1)
+END FUNCTION
+
+' The file and line the engine is at, as C:\X\APP.JS:12.
+FUNCTION Where () AS String
+    VAR k AS Integer
+    VAR f AS String
+    f = ""
+    FOR k = fileFrom.Count - 1 TO 0 STEP -1
+        IF jsNodeAt >= fileFrom[k] THEN
+            f = fileName[k]
+            BREAK
+        END IF
+    NEXT
+    IF f = "" THEN RETURN "line " + Str(jsLine)
+    RETURN f + ":" + Str(jsLine)
+END FUNCTION
+
+' ---------------------------------------------------------------- the event loop
+
+' An event for the JavaScript side, run as soon as nothing else is.
+SUB Fire (kind AS String, a AS String, b AS String)
+    IF finished THEN RETURN
+    evKind.Add(kind)
+    evA.Add(a)
+    evB.Add(b)
+    Pump()
+END SUB
+
+SUB Pump ()
+    VAR kind AS String
+    VAR a AS String
+    VAR b AS String
+    VAR args AS Array OF String
+    VAR r AS String
+    IF pumping OR NOT started THEN RETURN
+    pumping = TRUE
+    WHILE evKind.Count > 0 AND NOT finished
+        kind = evKind[0]
+        a = evA[0]
+        b = evB[0]
+        evKind.RemoveAt(0)
+        evA.RemoveAt(0)
+        evB.RemoveAt(0)
+        args.Clear()
+        args.Add(JsS(kind))
+        args.Add(a)
+        args.Add(b)
+        jsSig = ""
+        jsDepth = 0
+        jsSteps = 0
+        jsLimit = JSSTEPLIMIT
+        jsThrown = ""
+        TRY
+            r = JsCall(dispatchFn, JsO(jsGlobal), args)
+            JsDrainJobs()
+        CATCH err
+            ' (__dispatch catches what the program throws; this is the engine's own trouble)
+            jsSig = ""
+            jsDepth = 0
+            con.WriteLine("Node: " + ErrText(JsTidyError(err)))
+            jqP.Clear()
+            jqOk.Clear()
+            jqErr.Clear()
+            jqChild.Clear()
+        END TRY
+    END WHILE
+    pumping = FALSE
+    IF NOT finished THEN IdleCheck()
+END SUB
+
+' Nothing left to wait for: the program is over, as in Node.
+SUB IdleCheck ()
+    VAR k AS Integer
+    IF evKind.Count > 0 OR tmId.Count > 0 OR skId.Count > 0 OR dialQ.Count > 0 OR lookQ.Count > 0 OR dialing > 0 OR dialed.Count > 0 OR readWanted OR reading THEN RETURN
+    FOR k = 0 TO MAXSERVERS - 1
+        IF srvOn[k] THEN RETURN
+    NEXT
+    ' the program's own goodbye (process.on('exit')), with its process.exitCode
+    IF ending THEN
+        Finish(exitCode)
+        RETURN
+    END IF
+    ending = TRUE
+    Fire("exit", "u", "u")
+END SUB
+
+SUB Finish (code AS Integer)
+    VAR k AS Integer
+    IF finished THEN RETURN
+    finished = TRUE
+    exitCode = code
+    tmId.Clear()
+    tmDue.Clear()
+    tmFn.Clear()
+    tmCode.Clear()
+    tmEvery.Clear()
+    FOR k = 0 TO MAXSERVERS - 1
+        IF srvOn[k] THEN
+            TRY
+                srvSock[k].Close()
+            CATCH err
+            END TRY
+            srvOn[k] = FALSE
+        END IF
+    NEXT
+    FOR k = 0 TO skConn.Count - 1
+        TRY
+            skConn[k].Close()
+        CATCH err
+        END TRY
+    NEXT
+    skId.Clear()
+    skConn.Clear()
+    skSlot.Clear()
+    win.Status = "Finished (exit code " + Str(code) + "). Close this window when you're done with it."
+    win.Title = win.Title + " (finished)"
+END SUB
+
+FUNCTION NowMs () AS Integer
+    RETURN SYS.Ticks
+END FUNCTION
+
+SUB Clock_OnTick ()
+    VAR j AS Integer
+    VAR k AS Integer
+    VAR due AS Array OF Integer
+    VAR id AS Integer
+    IF finished OR NOT started THEN RETURN
+    ' connections made, or not, since last time
+    WHILE dialed.Count > 0
+        k = dialed[0].IndexOf("|")
+        IF dialed[0].Length = k + 1 THEN
+            Queue("connect", JsN(Int(Val(dialed[0].Substring(0, k)))), "u")
+        ELSE
+            Queue("connerror", JsN(Int(Val(dialed[0].Substring(0, k)))), JsS(dialed[0].Substring(k + 1, dialed[0].Length - k - 1)))
+        END IF
+        dialed.RemoveAt(0)
+        dialing = dialing - 1
+    END WHILE
+    ' timers that are due, the earliest first
+    FOR k = 0 TO tmId.Count - 1
+        IF tmDue[k] <= NowMs() THEN
+            j = 0
+            WHILE j < due.Count
+                IF tmDue[tmId.IndexOf(due[j])] > tmDue[k] THEN BREAK
+                j = j + 1
+            END WHILE
+            due.Insert(j, tmId[k])
+        END IF
+    NEXT
+    FOR EACH id IN due
+        k = tmId.IndexOf(id)
+        IF k < 0 THEN CONTINUE
+        IF tmFn[k] <> "" THEN
+            Queue("call", tmFn[k], "u")
+        ELSE
+            Queue("code", JsS(tmCode[k]), "u")
+        END IF
+        IF tmEvery[k] > 0 THEN
+            ' (on its own beat, unless it has fallen behind)
+            tmDue[k] = MATH.Max(tmDue[k] + tmEvery[k], NowMs())
+        ELSE
+            DropTimer(k)
+        END IF
+    NEXT
+    Pump()
+END SUB
+
+SUB Queue (kind AS String, a AS String, b AS String)
+    evKind.Add(kind)
+    evA.Add(a)
+    evB.Add(b)
+END SUB
+
+SUB DropTimer (k AS Integer)
+    tmId.RemoveAt(k)
+    tmDue.RemoveAt(k)
+    tmFn.RemoveAt(k)
+    tmCode.RemoveAt(k)
+    tmEvery.RemoveAt(k)
+END SUB
+
+' ---------------------------------------------------------------- jobs that wait
+
+' One connect a time, alone in its handler: a connect that fails spoils the
+' rest of the handler it's in (see SIM95-NOTES.md).
+SUB Dialer_OnTick ()
+    TRY
+        DialOne()
+    CATCH err
+    END TRY
+END SUB
+
+' (Each connection has a socket of its own, and they're made one at a time:
+' a connect that fails can lose another that's waiting. One that never comes
+' back is given up after 15 seconds.)
+SUB DialOne ()
+    VAR req AS String
+    VAR parts AS Array OF String
+    VAR conn AS NET_Connection
+    VAR s AS NET_Socket
+    IF dialBusy <> "" THEN
+        IF NowMs() - dialAt < 15000 THEN RETURN
+        dialed.Add(dialBusy + "|Connection timed out")
+        dialBusy = ""
+    END IF
+    IF dialQ.Count = 0 OR finished THEN RETURN
+    req = dialQ[0]
+    dialQ.RemoveAt(0)
+    parts = req.Split("|")
+    dialing = dialing + 1
+    dialBusy = parts[0]
+    dialAt = NowMs()
+    s = NET_Socket.New()
+    s.onMessage = Conn_OnMessage
+    s.onClose = Conn_OnClose
+    outSocks.Add(s)
+    TRY
+        conn = s.Connect(parts[1], Int(Val(parts[2])))
+        conn.Tag = parts[0]
+        skId.Add(Int(Val(parts[0])))
+        skConn.Add(conn)
+        skSlot.Add(-1)
+        IF dialBusy = parts[0] THEN dialed.Add(parts[0] + "|")
+        dialBusy = ""
+    CATCH err
+        IF dialBusy = parts[0] THEN dialed.Add(parts[0] + "|" + err)
+        dialBusy = ""
+    END TRY
+END SUB
+
+' Lines typed in the window, and name lookups.
+SUB Reader_OnTick ()
+    VAR line AS String
+    VAR req AS String
+    VAR addr AS String
+    IF finished OR NOT started THEN RETURN
+    IF lookQ.Count > 0 THEN
+        req = lookQ[0]
+        lookQ.RemoveAt(0)
+        dialing = dialing + 1
+        TRY
+            addr = NET.Resolve(req.Substring(req.IndexOf("|") + 1, req.Length - req.IndexOf("|") - 1))
+        CATCH err
+            addr = ""
+        END TRY
+        dialing = dialing - 1
+        Fire("resolved", JsN(Int(Val(req.Substring(0, req.IndexOf("|"))))), JsS(addr))
+        RETURN
+    END IF
+    IF readWanted AND NOT reading THEN
+        reading = TRUE
+        readWanted = FALSE
+        IF readPrompt <> "" THEN con.Write(readPrompt)
+        line = con.ReadLine()
+        reading = FALSE
+        Fire("line", JsS(line), "u")
+    END IF
+END SUB
+
+' ---------------------------------------------------------------- sockets
+
+SUB Conn_OnMessage (conn AS NET_Connection, message AS String)
+    IF conn.Tag = "" THEN RETURN
+    Fire("data", JsN(Int(Val(conn.Tag))), JsS(message))
+END SUB
+
+SUB Conn_OnClose (conn AS NET_Connection)
+    VAR k AS Integer
+    IF conn.Tag = "" THEN RETURN
+    k = skId.IndexOf(Int(Val(conn.Tag)))
+    IF k >= 0 THEN DropConn(k)
+    Fire("close", JsN(Int(Val(conn.Tag))), "u")
+END SUB
+
+' A server's connection: given an id, then the program hears of it.
+SUB Accept (slot AS Integer, conn AS NET_Connection)
+    IF finished OR NOT srvOn[slot] THEN
+        conn.Reject()
+        RETURN
+    END IF
+    conn.Accept()
+    skNext = skNext + 1
+    conn.Tag = Str(skNext)
+    skId.Add(skNext)
+    skConn.Add(conn)
+    skSlot.Add(slot)
+    Fire("accept", JsN(slot), JsN(skNext))
+END SUB
+
+SUB ServerError (slot AS Integer, message AS String)
+    IF srvOn[slot] THEN
+        srvOn[slot] = FALSE
+        Fire("listenerror", JsN(slot), JsS(message))
+    END IF
+END SUB
+
+SUB Srv0_OnConnect (conn AS NET_Connection)
+    Accept(0, conn)
+END SUB
+SUB Srv1_OnConnect (conn AS NET_Connection)
+    Accept(1, conn)
+END SUB
+SUB Srv2_OnConnect (conn AS NET_Connection)
+    Accept(2, conn)
+END SUB
+SUB Srv3_OnConnect (conn AS NET_Connection)
+    Accept(3, conn)
+END SUB
+SUB Srv4_OnConnect (conn AS NET_Connection)
+    Accept(4, conn)
+END SUB
+SUB Srv5_OnConnect (conn AS NET_Connection)
+    Accept(5, conn)
+END SUB
+SUB Srv6_OnConnect (conn AS NET_Connection)
+    Accept(6, conn)
+END SUB
+SUB Srv7_OnConnect (conn AS NET_Connection)
+    Accept(7, conn)
+END SUB
+SUB Srv0_OnError (message AS String)
+    ServerError(0, message)
+END SUB
+SUB Srv1_OnError (message AS String)
+    ServerError(1, message)
+END SUB
+SUB Srv2_OnError (message AS String)
+    ServerError(2, message)
+END SUB
+SUB Srv3_OnError (message AS String)
+    ServerError(3, message)
+END SUB
+SUB Srv4_OnError (message AS String)
+    ServerError(4, message)
+END SUB
+SUB Srv5_OnError (message AS String)
+    ServerError(5, message)
+END SUB
+SUB Srv6_OnError (message AS String)
+    ServerError(6, message)
+END SUB
+SUB Srv7_OnError (message AS String)
+    ServerError(7, message)
+END SUB
+
+FUNCTION Listen (port AS Integer) AS Integer
+    VAR slot AS Integer
+    VAR s AS NET_Socket
+    slot = srvOn.IndexOf(FALSE)
+    IF slot < 0 THEN THROW "A program can listen on " + Str(MAXSERVERS) + " ports at most"
+    s = NET_Socket.New()
+    SELECT CASE slot
+        CASE 0
+            s.onConnect = Srv0_OnConnect
+            s.onError = Srv0_OnError
+        CASE 1
+            s.onConnect = Srv1_OnConnect
+            s.onError = Srv1_OnError
+        CASE 2
+            s.onConnect = Srv2_OnConnect
+            s.onError = Srv2_OnError
+        CASE 3
+            s.onConnect = Srv3_OnConnect
+            s.onError = Srv3_OnError
+        CASE 4
+            s.onConnect = Srv4_OnConnect
+            s.onError = Srv4_OnError
+        CASE 5
+            s.onConnect = Srv5_OnConnect
+            s.onError = Srv5_OnError
+        CASE 6
+            s.onConnect = Srv6_OnConnect
+            s.onError = Srv6_OnError
+        CASE 7
+            s.onConnect = Srv7_OnConnect
+            s.onError = Srv7_OnError
+    END SELECT
+    s.onMessage = Conn_OnMessage
+    s.onClose = Conn_OnClose
+    srvSock[slot] = s
+    srvClosing[slot] = FALSE
+    srvOn[slot] = TRUE
+    srvPort[slot] = port
+    s.Listen(port)
+    RETURN slot
+END FUNCTION
+
+SUB DropConn (k AS Integer)
+    VAR slot AS Integer
+    slot = skSlot[k]
+    skId.RemoveAt(k)
+    skConn.RemoveAt(k)
+    skSlot.RemoveAt(k)
+    IF slot >= 0 THEN CloseIfDone(slot)
+END SUB
+
+' A server that's closing, with none of its connections left: its socket goes.
+SUB CloseIfDone (slot AS Integer)
+    IF NOT srvClosing[slot] OR skSlot.IndexOf(slot) >= 0 THEN RETURN
+    srvClosing[slot] = FALSE
+    TRY
+        srvSock[slot].Close()
+    CATCH err
+    END TRY
+END SUB
+
+FUNCTION ConnOf (id AS Integer) AS Integer
+    RETURN skId.IndexOf(id)
+END FUNCTION
+
+' ---------------------------------------------------------------- the engine's host
+
+FUNCTION JsFail (code AS String, message AS String) AS String
+    VAR v AS String
+    v = JsMakeError("0|" + message)
+    JsPutOwn(JsId(v), "code", JsS(code))
+    jsThrown = v
+    THROW Str(jsLine) + "|@thrown"
+    RETURN "u"
+END FUNCTION
+
+FUNCTION StrList (list AS Array OF String) AS String
+    VAR out AS Array OF String
+    VAR v AS String
+    FOR EACH v IN list
+        out.Add(JsS(v))
+    NEXT
+    RETURN JsO(JsNewArray(out))
+END FUNCTION
+
+FUNCTION HostNative (name AS String, thisVal AS String, args AS Array OF String) AS String
+    VAR a AS String
+    VAR b AS String
+    VAR p AS String
+    VAR k AS Integer
+    VAR list AS Array OF String
+    VAR names AS Array OF String
+    VAR n AS String
+    VAR prog AS Integer
+    VAR v AS String
+    VAR text AS String
+    IF NOT name.StartsWith("node.") THEN THROW Str(jsLine) + "|Object doesn't support this property or method"
+    a = JsArg(args, 0)
+    b = JsArg(args, 1)
+    SELECT CASE name
+        CASE "node.write"
+            con.Write(JsStr(a))
+            RETURN "u"
+        CASE "node.args"
+            list.Add(JsS("C:\PROGRAMS\NODE.SPK"))
+            IF nodeScript <> "" THEN list.Add(JsS(nodeScript))
+            FOR EACH n IN nodeArgs
+                list.Add(JsS(n))
+            NEXT
+            RETURN JsO(JsNewArray(list))
+        CASE "node.info"
+            SELECT CASE JsStr(a)
+                CASE "version"
+                    RETURN JsS(NODEVERSION)
+                CASE "cwd"
+                    RETURN JsS(nodeCwd)
+                CASE "hostname"
+                    RETURN JsS(NET.HostName)
+                CASE "address"
+                    RETURN JsS(NET.LocalAddress)
+                CASE "now"
+                    RETURN JsN(NowMs())
+                CASE "pid"
+                    RETURN JsN(SYS.Pid)
+                CASE "where"
+                    RETURN JsS(Where())
+            END SELECT
+            RETURN "u"
+        CASE "node.chdir"
+            p = FullPath(JsStr(a))
+            IF NOT FS.IsDir(p) THEN RETURN JsFail("ENOENT", "ENOENT: no such file or directory, chdir '" + p + "'")
+            nodeCwd = p
+            RETURN "u"
+        CASE "node.title"
+            win.Title = JsStr(a)
+            RETURN "u"
+        CASE "node.exit"
+            Finish(JsInt(a))
+            RETURN "u"
+        CASE "node.fullpath"
+            RETURN JsS(FullPath(JsStr(a)))
+        ' ---- the disk
+        CASE "node.fsRead"
+            p = FullPath(JsStr(a))
+            IF NOT FS.Exists(p) OR FS.IsDir(p) THEN RETURN JsFail("ENOENT", "ENOENT: no such file or directory, open '" + p + "'")
+            RETURN JsS(FS.Read(p))
+        CASE "node.fsWrite", "node.fsAppend"
+            p = FullPath(JsStr(a))
+            TRY
+                IF name = "node.fsWrite" THEN
+                    FS.Write(p, JsStr(b))
+                ELSE
+                    FS.Append(p, JsStr(b))
+                END IF
+            CATCH err
+                RETURN JsFail("EINVAL", err + ", open '" + p + "'")
+            END TRY
+            RETURN "u"
+        CASE "node.fsStat"
+            p = FullPath(JsStr(a))
+            IF NOT FS.Exists(p) THEN RETURN "l"
+            IF FS.IsDir(p) THEN RETURN JsS("d0")
+            RETURN JsS("f" + Str(FS.Size(p)))
+        CASE "node.fsList"
+            p = FullPath(JsStr(a))
+            IF NOT FS.IsDir(p) THEN RETURN JsFail("ENOENT", "ENOENT: no such file or directory, scandir '" + p + "'")
+            FOR EACH n IN FS.List(p)
+                IF n.EndsWith("\") THEN n = n.Substring(0, n.Length - 1)
+                names.Add(n)
+            NEXT
+            RETURN StrList(names)
+        CASE "node.fsMkdir"
+            p = FullPath(JsStr(a))
+            IF FS.Exists(p) THEN
+                IF JsBool(b) THEN RETURN "u"
+                RETURN JsFail("EEXIST", "EEXIST: file already exists, mkdir '" + p + "'")
+            END IF
+            TRY
+                IF JsBool(b) THEN
+                    MakeDirs(p)
+                ELSE
+                    FS.MakeDir(p)
+                END IF
+            CATCH err
+                RETURN JsFail("ENOENT", err + ", mkdir '" + p + "'")
+            END TRY
+            RETURN "u"
+        CASE "node.fsDelete"
+            p = FullPath(JsStr(a))
+            IF NOT FS.Exists(p) THEN RETURN JsFail("ENOENT", "ENOENT: no such file or directory, unlink '" + p + "'")
+            TRY
+                FS.Delete(p)
+            CATCH err
+                RETURN JsFail("ENOTEMPTY", err + ", '" + p + "'")
+            END TRY
+            RETURN "u"
+        CASE "node.fsRename"
+            p = FullPath(JsStr(a))
+            IF NOT FS.Exists(p) THEN RETURN JsFail("ENOENT", "ENOENT: no such file or directory, rename '" + p + "'")
+            TRY
+                FS.Rename(p, FullPath(JsStr(b)))
+            CATCH err
+                RETURN JsFail("EINVAL", err)
+            END TRY
+            RETURN "u"
+        ' ---- code
+        CASE "node.compile"
+            ' a module: its code, as a function of exports, require, module, __filename, __dirname
+            fileFrom.Add(nk.Count)
+            fileName.Add(JsStr(b))
+            jsLineBase = 1
+            TRY
+                prog = JsParse("(function (exports, require, module, __filename, __dirname) {" + JsStr(a) + Chr(10) + "})")
+            CATCH err
+                ' as Node shows one: where, then what
+                v = JsMakeTypedError("SyntaxError", err.Substring(err.IndexOf("|") + 1, err.Length - err.IndexOf("|") - 1))
+                JsPutOwn(JsId(v), "stack", JsS(JsStr(b) + ":" + err.Substring(0, err.IndexOf("|")) + Chr(10) + Chr(10) + "SyntaxError: " + err.Substring(err.IndexOf("|") + 1, err.Length - err.IndexOf("|") - 1)))
+                jsThrown = v
+                THROW Str(jsLine) + "|@thrown"
+            END TRY
+            RETURN JsEval(na[Int(Val(nl[prog].Split(",")[0]))], jsGlobal)
+        CASE "node.eval"
+            ' the prompt's lines: run where the program's globals are
+            fileFrom.Add(nk.Count)
+            fileName.Add("REPL")
+            list.Add(a)
+            RETURN JsEvalCode(list, jsGlobal)
+        ' ---- timers (setTimeout and setInterval come through HostTimeout)
+        CASE "node.ref"
+            RETURN JsN(tmId.Count)
+        ' ---- the network
+        CASE "node.listen"
+            TRY
+                k = Listen(JsInt(a))
+            CATCH err
+                RETURN JsFail("EADDRINUSE", err)
+            END TRY
+            RETURN JsN(k)
+        CASE "node.unlisten"
+            ' no more connections; the socket itself closes when the last one does
+            ' (closing it would cut them off)
+            k = JsInt(a)
+            IF k >= 0 AND k < MAXSERVERS THEN
+                IF srvOn[k] THEN
+                    srvOn[k] = FALSE
+                    srvClosing[k] = TRUE
+                    CloseIfDone(k)
+                END IF
+            END IF
+            RETURN "u"
+        CASE "node.connect"
+            skNext = skNext + 1
+            dialQ.Add(Str(skNext) + "|" + JsStr(a) + "|" + Str(JsInt(b)))
+            RETURN JsN(skNext)
+        CASE "node.send"
+            k = ConnOf(JsInt(a))
+            IF k < 0 THEN RETURN "f"
+            TRY
+                skConn[k].Send(JsStr(b))
+            CATCH err
+                RETURN "f"
+            END TRY
+            RETURN "t"
+        CASE "node.end"
+            k = ConnOf(JsInt(a))
+            IF k < 0 THEN RETURN "u"
+            TRY
+                skConn[k].Close()
+            CATCH err
+            END TRY
+            ' (onClose may not come for our own end)
+            IF ConnOf(JsInt(a)) >= 0 THEN
+                DropConn(ConnOf(JsInt(a)))
+                Queue("close", JsN(JsInt(a)), "u")
+            END IF
+            RETURN "u"
+        CASE "node.peer"
+            k = ConnOf(JsInt(a))
+            IF k < 0 THEN RETURN "u"
+            RETURN JsS(skConn[k].FromAddress + ":" + Str(skConn[k].FromPort))
+        CASE "node.lookup"
+            skNext = skNext + 1
+            lookQ.Add(Str(skNext) + "|" + JsStr(a))
+            RETURN JsN(skNext)
+        ' ---- the window
+        CASE "node.readLine"
+            readPrompt = JsStr(a)
+            IF a = "u" THEN readPrompt = ""
+            readWanted = TRUE
+            RETURN "u"
+        CASE "node.stopReading"
+            readWanted = FALSE
+            RETURN "u"
+        ' ---- other programs
+        CASE "node.spawn"
+            p = FullPath(JsStr(a))
+            IF NOT FS.Exists(p) THEN RETURN JsFail("ENOENT", "spawn " + p + " ENOENT")
+            RETURN JsN(SYS.Start(p, JsStr(b)))
+        CASE "node.kill"
+            SYS.Kill(JsInt(a))
+            RETURN "t"
+        CASE "node.tasks"
+            RETURN StrList(SYS.Tasks())
+    END SELECT
+    THROW Str(jsLine) + "|Object doesn't support this property or method"
+    RETURN "u"
+END FUNCTION
+
+SUB MakeDirs (p AS String)
+    VAR parts AS Array OF String
+    VAR so AS String
+    VAR k AS Integer
+    parts = p.Split("\")
+    so = parts[0]
+    FOR k = 1 TO parts.Count - 1
+        so = so + "\" + parts[k]
+        IF NOT FS.Exists(so) THEN FS.MakeDir(so)
+    NEXT
+END SUB
+
+FUNCTION HostTimeout (code AS String, fn AS String, ms AS Integer, again AS Bool) AS Integer
+    tmNext = tmNext + 1
+    tmId.Add(tmNext)
+    tmDue.Add(NowMs() + MATH.Max(0, ms))
+    tmFn.Add(fn)
+    tmCode.Add(code)
+    IF again THEN
+        tmEvery.Add(MATH.Max(1, ms))
+    ELSE
+        tmEvery.Add(0)
+    END IF
+    RETURN tmNext
+END FUNCTION
+
+SUB HostClearTimeout (id AS Integer)
+    VAR k AS Integer
+    k = tmId.IndexOf(id)
+    IF k >= 0 THEN DropTimer(k)
+END SUB
+
+' (A page's host has these; a program has no page.)
+SUB HostAlert (text AS String)
+    con.WriteLine(text)
+END SUB
+FUNCTION HostConfirm (text AS String) AS Bool
+    RETURN TRUE
+END FUNCTION
+FUNCTION HostPrompt (text AS String, initial AS String) AS String
+    RETURN initial
+END FUNCTION
+SUB HostStatus (text AS String)
+    win.Status = text
+END SUB
+SUB HostNavigate (url AS String)
+END SUB
+FUNCTION HostHas (id AS String) AS Bool
+    RETURN FALSE
+END FUNCTION
+FUNCTION HostGet (id AS String, prop AS String) AS String
+    RETURN ""
+END FUNCTION
+SUB HostSet (id AS String, prop AS String, value AS String)
+END SUB
+FUNCTION HostInfo (key AS String) AS String
+    RETURN ""
+END FUNCTION
+SUB HostSetInfo (key AS String, value AS String)
+END SUB
+FUNCTION HostHistory (n AS Integer) AS Integer
+    RETURN 0
+END FUNCTION
+SUB HostOpen (url AS String)
+END SUB
+SUB HostSubmit (form AS Integer)
+END SUB
+SUB HostYield ()
+END SUB
+' A long loop is the program's business: never asked to stop.
+FUNCTION HostSlow () AS Bool
+    RETURN FALSE
+END FUNCTION
+FUNCTION HostXhrSend (method AS String, url AS String, headers AS String, body AS String, obj AS Integer) AS Integer
+    RETURN 0
+END FUNCTION
+SUB HostXhrAbort (req AS Integer)
+END SUB
+FUNCTION HostWhere () AS String
+    RETURN Where()
+END FUNCTION

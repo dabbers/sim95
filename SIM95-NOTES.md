@@ -240,3 +240,22 @@ opens a second window. Copying a folder also does nothing silently.
 [`filefix/`](filefix/) changes Copy and Paste to keep the copied file in
 `C:\SYSTEM\FILECLIP.TXT`. A fix in SIM95 itself could do the same, or keep a
 clipboard in the system for every program.
+
+## A failed Connect loses other connects that are waiting
+
+When one `Connect` fails (refused, unknown host) while another `Connect` in
+the same program is still waiting, the waiting one never returns: no
+connection, and no error. It happens even when the two use different
+`NET_Socket`s. Node for SIM95 (`node/src/NODEHOST.SPK`) makes its
+connections one at a time, each on a socket of its own, and gives up on one
+that hasn't come back after 15 seconds. (This sits alongside the older note
+that a caught failed Connect spoils the rest of its handler.)
+
+Two more things worth knowing, found while building Node:
+* **Call depth:** a SPARK program can nest about 150 to 200 calls. The
+  JavaScript engine uses about seven per JavaScript call, so it stops at 24
+  (`JSMAXDEPTH`).
+* **Long loops:** while a handler runs without waiting, no other handler of
+  the program runs (timers wait). Handlers only interleave where something
+  waits (`Connect`, `NET.Machines`, `ReadLine`...).
+
