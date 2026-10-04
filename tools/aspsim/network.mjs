@@ -101,8 +101,9 @@ class Widget {
       const text = String(this.props.Text ?? "");
       const lines = text.split("\n");
       switch (m) {
-        case "GotoLine": { const n = Math.max(1, Math.min(lines.length, a[0])); this.props.SelStart = lines.slice(0, n - 1).reduce((t, l) => t + l.length + 1, 0); this.props.SelLength = 0; return; }
-        case "Insert": { const at = Math.min(text.length, this.props.SelStart ?? text.length); this.props.Text = text.slice(0, at) + String(a[0]) + text.slice(at); this.props.SelStart = at + String(a[0]).length; this.fire("onChange"); return; }
+        // as in SIM95: GotoLine selects the line, and Insert replaces the selection
+        case "GotoLine": { const n = Math.max(1, Math.min(lines.length, a[0])); this.props.SelStart = lines.slice(0, n - 1).reduce((t, l) => t + l.length + 1, 0); this.props.SelLength = lines[n - 1].length; return; }
+        case "Insert": { const at = Math.min(text.length, this.props.SelStart ?? text.length), end = Math.min(text.length, at + (this.props.SelLength ?? 0)); this.props.Text = text.slice(0, at) + String(a[0]) + text.slice(end); this.props.SelStart = at + String(a[0]).length; this.props.SelLength = 0; this.fire("onChange"); return; }
         case "GetLine": return lines[a[0] - 1] ?? "";
         case "LineCount": return lines.length;
         default: break;

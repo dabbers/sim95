@@ -30,6 +30,11 @@ as now.
 * **The mouse:** only a Canvas has mouse events (down, move, up). It has no
   wheel, double-click, enter or leave.
 * **Focus:** no event says a control gained or lost the focus.
+  * When a popup menu closes, whether an item was chosen or Escape was
+    pressed, the focus goes nowhere: keys reach no window until the person
+    clicks.
+  * A menu closed with Escape fires no event, so a program can't put the
+    focus back itself.
 * **Scrolling:** text areas, lists, web views and consoles scroll, but a
   program can't read or set where any of them is scrolled.
 * **The caret:** `SelStart` and `SelLength` can be read, but setting them
@@ -88,6 +93,9 @@ onMouseEnter()               onMouseLeave()
   before moving on.
 * **New property:** `Window.ActiveControl` names the control that has the
   focus.
+* **When a popup menu closes,** the focus goes back to where it was before,
+  as it does when a dialog closes. Menus also get an `onClose` event, so a
+  program knows a popup was dismissed without a choice.
 
 ## 4. Scrolling, for everything that scrolls
 

@@ -18,7 +18,7 @@ item simtube/INSTALL.SPK d8d3ebf2
 item simstats/INSTALL.SPK b9240bbb
 item simsh/INSTALL.SPK 9d54fccb
 item wikisim/INSTALL.SPK 4998e899
-item vspark/INSTALL.SPK a9f20249
+item vspark/INSTALL.SPK 680a32c3
 item simweb/INSTALL.SPK b51300fc
 item eliza/INSTALL.SPK c6f091b3
 site vapor/WEB/GETVAPOR.ASP C:\WEB\VAPOR\GETVAPOR.ASP

@@ -31,7 +31,7 @@ CONST GRID = 8
 CONST FX = 10                     ' where the form is drawn on the designer
 CONST FY = 10
 CONST CX = 12                     ' the form's client area, on the designer
-CONST CY = 32
+CONST MENUBAR = 19                ' a window's menu bar
 CONST CHARW = 9                   ' a character, roughly, in a canvas's (fixed-pitch) text
 
 VAR EOL AS String
@@ -87,6 +87,37 @@ VAR tplList AS GUI_ListBox
 VAR tplAbout AS GUI_Label
 VAR tplFiles AS Array OF String
 VAR tplNotes AS Array OF String
+VAR layoutEd AS GUI_TextArea      ' the form's layout, as text
+VAR layoutView AS Bool
+VAR layoutShown AS String         ' the layout as last shown or applied
+VAR layBtn AS GUI_Button
+VAR CY AS Integer                 ' the form's client area, on the designer: under its menu bar, if any
+
+' undo and redo: the form as it was (and the code, which a rename changes)
+VAR undoModel AS Array OF String
+VAR undoCode AS Array OF String
+VAR redoModel AS Array OF String
+VAR redoCode AS Array OF String
+VAR lastCode AS String            ' the code after the last change on the form
+VAR dragSnap AS String            ' the form when a drag began
+VAR dragCode AS String
+VAR clipType AS String            ' the copied control
+VAR clipProps AS String
+VAR ctxForm AS GUI_Menu           ' the form's right-click menu
+VAR menuPop AS GUI_Menu           ' a menu of the form, opened on the designer
+VAR menuPopTop AS Integer
+
+' the Menu Editor
+VAR meWin AS GUI_Window
+VAR meList AS GUI_ListBox
+VAR meCap AS GUI_TextBox
+VAR meName AS GUI_TextBox
+VAR meKey AS GUI_DropDown
+VAR meChk AS GUI_CheckBox
+VAR meEn AS GUI_CheckBox
+VAR meIdx AS Array OF Integer     ' the object behind each line of meList
+VAR meBusy AS Bool                ' (filling in the boxes: not an edit)
+VAR meDone AS Bool
 
 SUB Main ()
     VAR l AS GUI_Label
@@ -94,6 +125,7 @@ SUB Main ()
     VAR k AS Integer
     EOL = Chr(10)
     Q = Chr(34)
+    CY = 32
     IF NOT FS.Exists(HOME) THEN FS.MakeDir(HOME)
     win = GUI_Window.New("Visual SPARK", 780, 510)
     win.Icon = "spark"
@@ -108,10 +140,21 @@ SUB Main ()
     bar.AddSeparator("&File")
     bar.AddItem("&File", "E&xit")
     bar.AddMenu("&Edit")
+    bar.AddItem("&Edit", "&Undo" + Chr(9) + "Ctrl+Z")
+    bar.AddItem("&Edit", "&Redo" + Chr(9) + "Ctrl+Y")
+    bar.AddSeparator("&Edit")
+    bar.AddItem("&Edit", "Cu&t" + Chr(9) + "Ctrl+X")
+    bar.AddItem("&Edit", "&Copy" + Chr(9) + "Ctrl+C")
+    bar.AddItem("&Edit", "&Paste" + Chr(9) + "Ctrl+V")
+    bar.AddItem("&Edit", "D&uplicate" + Chr(9) + "Ctrl+D")
     bar.AddItem("&Edit", "&Delete Control")
+    bar.AddSeparator("&Edit")
+    bar.AddItem("&Edit", "Bring to &Front")
+    bar.AddItem("&Edit", "Send to &Back")
     bar.AddMenu("&View")
     bar.AddItem("&View", "&Code" + Chr(9) + "F7")
     bar.AddItem("&View", "&Form" + Chr(9) + "Shift+F7")
+    bar.AddItem("&View", "&Layout" + Chr(9) + "F8")
     bar.AddMenu("&Insert")
     bar.AddItem("&Insert", "&Message Box")
     bar.AddItem("&Insert", "&Yes or No Question")
@@ -119,6 +162,8 @@ SUB Main ()
     bar.AddItem("&Insert", "&Save a File")
     bar.AddItem("&Insert", "&Random Number")
     bar.AddItem("&Insert", "Run a &Program")
+    bar.AddMenu("&Tools")
+    bar.AddItem("&Tools", "&Menu Editor..." + Chr(9) + "Ctrl+E")
     bar.AddMenu("&Run")
     bar.AddItem("&Run", "&Start" + Chr(9) + "F5")
     bar.AddItem("&Run", "&End")
@@ -152,6 +197,10 @@ SUB Main ()
     codeBtn.Text = "&Code"
     codeBtn.SetBounds(208, 4, 70, 23)
     codeBtn.onClick = CodeBtn_OnClick
+    layBtn = GUI_Button.New(win)
+    layBtn.Text = "&Layout"
+    layBtn.SetBounds(282, 4, 70, 23)
+    layBtn.onClick = LayBtn_OnClick
     runBtn = GUI_Button.New(win)
     runBtn.Text = "Run (F5)"
     runBtn.SetBounds(514, 4, 70, 23)
@@ -165,8 +214,24 @@ SUB Main ()
     ctx = GUI_Menu.New(win)
     ctx.AddMenu("Control")
     ctx.AddItem("Control", "&View Code")
+    ctx.AddSeparator("Control")
+    ctx.AddItem("Control", "Cu&t")
+    ctx.AddItem("Control", "&Copy")
+    ctx.AddItem("Control", "&Paste")
+    ctx.AddItem("Control", "D&uplicate")
     ctx.AddItem("Control", "&Delete")
+    ctx.AddSeparator("Control")
+    ctx.AddItem("Control", "Bring to &Front")
+    ctx.AddItem("Control", "Send to &Back")
     ctx.onSelect = Ctx_OnSelect
+    ctxForm = GUI_Menu.New(win)
+    ctxForm.AddMenu("Form")
+    ctxForm.AddItem("Form", "&View Code")
+    ctxForm.AddItem("Form", "&Paste")
+    ctxForm.AddItem("Form", "&Menu Editor...")
+    ctxForm.onSelect = CtxForm_OnSelect
+    menuPop = GUI_Menu.New(win)
+    menuPop.onSelect = MenuPop_OnSelect
 
     design = GUI_Canvas.New(win)
     design.SetBounds(134, 32, 450, 470)
@@ -186,6 +251,10 @@ SUB Main ()
     editor = GUI_TextArea.New(win)
     editor.SetBounds(134, 58, 450, 444)
     editor.Syntax = "SPARK"
+    layoutEd = GUI_TextArea.New(win)
+    layoutEd.SetBounds(134, 32, 450, 470)
+    layoutEd.Syntax = "SPARK"
+    layoutEd.Visible = FALSE
 
     l = GUI_Label.New(win)
     l.Text = "Properties"
@@ -286,6 +355,10 @@ END SUB
 ' int, bool, items (separated by ;), color (0-15), choice:a,b,c.
 FUNCTION Props (t AS String) AS Array OF String
     VAR out AS Array OF String
+    IF t = "MenuItem" THEN
+        out = ["Name|name|", "Caption|text|", "Level|int|0", "Shortcut|shortcut|", "Checked|bool|FALSE", "Enabled|bool|TRUE"]
+        RETURN out
+    END IF
     IF t = "Form" THEN
         out = ["Name|name|Form1", "Title|text|Form1", "Width|int|320", "Height|int|240", "Status|text|", "Resizable|bool|TRUE", "Icon|choice:app,notes,terminal,spark,voyager,chat,network,settings,sketch,mines,monitor,help,folder,computer,info|app"]
         RETURN out
@@ -298,6 +371,7 @@ FUNCTION Props (t AS String) AS Array OF String
         out.Add("Width|int|64")
         out.Add("Height|int|24")
         out.Add("Visible|bool|TRUE")
+        out.Add("Anchor|anchor|Top,Left")
     END IF
     out.Add("Enabled|bool|TRUE")
     SELECT CASE t
@@ -386,6 +460,7 @@ END FUNCTION
 
 FUNCTION NameTaken (name AS String, but AS Integer) AS Bool
     VAR i AS Integer
+    IF name.Lower() = "menubar" THEN RETURN TRUE
     FOR i = 0 TO kType.Count - 1
         IF i <> but AND GetP(i, "Name").Lower() = name.Lower() THEN RETURN TRUE
     NEXT
@@ -494,6 +569,8 @@ FUNCTION Events (t AS String) AS Array OF String
             out = ["onMouseDown", "onMouseMove", "onMouseUp", "onDraw", "onKey"]
         CASE "Timer"
             out = ["onTick"]
+        CASE "MenuItem"
+            out = ["onClick"]
         CASE ELSE
             out = ["onKey"]
     END SELECT
@@ -532,6 +609,7 @@ FUNCTION Body (i AS Integer, evt AS String) AS String
         CASE "Load"
             RETURN "    InitForm()" + EOL + "    " + form + ".Show()"
         CASE "onClick"
+            IF kType[i] = "MenuItem" THEN RETURN "    ' when " + Plain(GetP(i, "Caption")) + " is chosen from the menu. For example:" + EOL + "    ' " + form + ".Title = " + Q + "Chosen!" + Q
             RETURN "    ' when " + n + " is clicked. For example:" + EOL + "    ' " + form + ".Title = " + Q + "Clicked!" + Q
         CASE "onChange"
             IF kType[i] = "CheckBox" OR kType[i] = "RadioButton" THEN RETURN "    ' when " + n + " is ticked or unticked: " + n + ".Checked says which"
@@ -623,6 +701,9 @@ FUNCTION Block () AS String
     VAR subs AS String
     VAR item AS String
     VAR evt AS String
+    VAR top AS String
+    VAR cap AS String
+    VAR cases AS Array OF String
     subs = SubNames()
     out.Add(MARKSTART + ": the designer writes everything from here to END OF FORM. =====")
     FOR i = 0 TO kType.Count - 1
@@ -638,8 +719,9 @@ FUNCTION Block () AS String
         END IF
     NEXT
     FOR i = 0 TO kType.Count - 1
-        out.Add("VAR " + GetP(i, "Name") + " AS " + ClassOf(kType[i]))
+        IF kType[i] <> "MenuItem" THEN out.Add("VAR " + GetP(i, "Name") + " AS " + ClassOf(kType[i]))
     NEXT
+    IF HasMenu() THEN out.Add("VAR MenuBar AS GUI_Menu")
     out.Add("")
     out.Add("SUB InitForm ()")
     n = GetP(0, "Name")
@@ -648,11 +730,42 @@ FUNCTION Block () AS String
     IF NOT GetB(0, "Resizable") THEN out.Add("    " + n + ".Resizable = FALSE")
     IF GetP(0, "Icon") <> "app" THEN out.Add("    " + n + ".Icon = " + Lit(GetP(0, "Icon")))
     FOR EACH evt IN Events("Form")
+        IF evt = "onResize" AND Anchored() THEN CONTINUE
         IF evt <> "Load" AND subs.Contains("," + HandlerOf(0, evt).Upper() + ",") THEN out.Add("    " + n + "." + evt + " = " + HandlerOf(0, evt))
     NEXT
+    IF Anchored() THEN out.Add("    " + n + ".onResize = " + n + "_Layout")
+    ' the menu bar, and which items have code
+    IF HasMenu() THEN
+        out.Add("    MenuBar = GUI_Menu.New(" + n + ")")
+        top = ""
+        FOR i = 1 TO kType.Count - 1
+            IF kType[i] <> "MenuItem" THEN CONTINUE
+            cap = GetP(i, "Caption")
+            IF GetN(i, "Level") = 0 OR top = "" THEN
+                top = cap
+                out.Add("    MenuBar.AddMenu(" + Lit(cap) + ")")
+            ELSEIF cap = "-" THEN
+                out.Add("    MenuBar.AddSeparator(" + Lit(top) + ")")
+            ELSE
+                IF GetP(i, "Shortcut") <> "" THEN
+                    out.Add("    MenuBar.AddItem(" + Lit(top) + ", " + Lit(cap) + " + Chr(9) + " + Lit(GetP(i, "Shortcut")) + ")")
+                ELSE
+                    out.Add("    MenuBar.AddItem(" + Lit(top) + ", " + Lit(cap) + ")")
+                END IF
+                IF GetB(i, "Checked") THEN out.Add("    MenuBar.SetChecked(" + Lit(Plain(cap)) + ", TRUE)")
+                IF NOT GetB(i, "Enabled") THEN out.Add("    MenuBar.SetEnabled(" + Lit(Plain(cap)) + ", FALSE)")
+                IF subs.Contains("," + HandlerOf(i, "onClick").Upper() + ",") THEN
+                    cases.Add("        CASE " + Lit(Plain(cap)))
+                    cases.Add("            " + HandlerOf(i, "onClick") + "()")
+                END IF
+            END IF
+        NEXT
+        IF cases.Count > 0 THEN out.Add("    MenuBar.onSelect = MenuBar_OnSelect")
+    END IF
     FOR i = 1 TO kType.Count - 1
         n = GetP(i, "Name")
         t = kType[i]
+        IF t = "MenuItem" THEN CONTINUE
         out.Add("    " + n + " = " + ClassOf(t) + ".New(" + GetP(0, "Name") + ")")
         IF t <> "Timer" THEN out.Add("    " + n + ".SetBounds(" + Str(GetN(i, "X")) + ", " + Str(GetN(i, "Y")) + ", " + Str(GetN(i, "Width")) + ", " + Str(GetN(i, "Height")) + ")")
         IF PropEntry(t, "Text") <> "" AND GetP(i, "Text") <> "" THEN out.Add("    " + n + ".Text = " + Lit(GetP(i, "Text")))
@@ -708,6 +821,34 @@ FUNCTION Block () AS String
         IF kType[i] = "Timer" AND GetB(i, "Enabled") THEN out.Add("    " + GetP(i, "Name") + ".Start()")
     NEXT
     out.Add("END SUB")
+    ' anchored controls follow the window's edges
+    IF Anchored() THEN
+        n = GetP(0, "Name")
+        out.Add("")
+        out.Add("SUB " + n + "_Layout ()")
+        out.Add("    VAR dw AS Integer")
+        out.Add("    VAR dh AS Integer")
+        out.Add("    dw = " + n + ".Width - " + Str(GetN(0, "Width")))
+        out.Add("    dh = " + n + ".Height - " + Str(GetN(0, "Height")))
+        FOR i = 1 TO kType.Count - 1
+            IF Movable(i) AND kType[i] <> "Timer" THEN
+                IF GetP(i, "Anchor") <> "Top,Left" THEN out.Add("    " + GetP(i, "Name") + ".SetBounds(" + Span(GetN(i, "X"), GetN(i, "Width"), GetP(i, "Anchor"), "Left", "Right", "dw", TRUE) + ", " + Span(GetN(i, "Y"), GetN(i, "Height"), GetP(i, "Anchor"), "Top", "Bottom", "dh", TRUE) + ", " + Span(GetN(i, "X"), GetN(i, "Width"), GetP(i, "Anchor"), "Left", "Right", "dw", FALSE) + ", " + Span(GetN(i, "Y"), GetN(i, "Height"), GetP(i, "Anchor"), "Top", "Bottom", "dh", FALSE) + ")")
+            END IF
+        NEXT
+        IF subs.Contains("," + HandlerOf(0, "onResize").Upper() + ",") THEN out.Add("    " + HandlerOf(0, "onResize") + "()")
+        out.Add("END SUB")
+    END IF
+    ' a menu has one event for all its items: this hands each to its SUB
+    IF cases.Count > 0 THEN
+        out.Add("")
+        out.Add("SUB MenuBar_OnSelect (item AS String)")
+        out.Add("    SELECT CASE item")
+        FOR EACH line IN cases
+            out.Add(line)
+        NEXT
+        out.Add("    END SELECT")
+        out.Add("END SUB")
+    END IF
     out.Add(MARKEND)
     RETURN out.Join(EOL) + EOL
 END FUNCTION
@@ -774,6 +915,11 @@ SUB LoadText (text AS String, src AS String)
         projName = src.Substring(LastIndex(src, "\") + 1, src.Length - LastIndex(src, "\") - 1)
     END IF
     saved = Assemble()
+    undoModel.Clear()
+    undoCode.Clear()
+    redoModel.Clear()
+    redoCode.Clear()
+    lastCode = editor.Text
     sel = 0
     tool = ""
     toolbox.Selected = 0
@@ -799,6 +945,7 @@ SUB LoadTemplate (file AS String)
     END IF
     editor.Text = editor.Text.Replace("PROJECT1.SPK", projName)
     saved = Assemble()
+    lastCode = editor.Text
 END SUB
 
 SUB UpdateTitle ()
@@ -806,6 +953,8 @@ SUB UpdateTitle ()
 END SUB
 
 FUNCTION Dirty () AS Bool
+    VAR ok AS Bool
+    IF layoutView THEN ok = ApplyLayout()
     RETURN Assemble() <> saved
 END FUNCTION
 
@@ -821,6 +970,9 @@ FUNCTION MayDiscard () AS Bool
 END FUNCTION
 
 FUNCTION SaveTo (target AS String) AS Bool
+    IF layoutView THEN
+        IF NOT ApplyLayout() THEN RETURN FALSE
+    END IF
     TRY
         FS.Write(target, Assemble())
     CATCH err
@@ -979,19 +1131,35 @@ SUB Draw ()
     VAR x AS Integer
     VAR y AS Integer
     VAR i AS Integer
-    IF codeView THEN RETURN
+    VAR mh AS Integer
+    ' (the layout view follows changes made in Properties, unless it's been edited)
+    IF layoutView AND layoutEd.Text = layoutShown THEN
+        layoutShown = LayoutText()
+        layoutEd.Text = layoutShown
+    END IF
+    IF codeView OR layoutView THEN RETURN
     w = GetN(0, "Width")
     h = GetN(0, "Height")
+    mh = MenuH()
+    CY = 32 + mh
     design.Background = 8
     design.Clear()
-    ' the window: frame, title bar, client area with its grid
+    ' the window: frame, title bar, menu bar, client area with its grid
     design.SetColor(7)
-    design.FillRect(FX, FY, w + 4, h + 24)
-    Bevel(FX, FY, w + 4, h + 24, TRUE)
+    design.FillRect(FX, FY, w + 4, h + 24 + mh)
+    Bevel(FX, FY, w + 4, h + 24 + mh, TRUE)
     design.SetColor(4)
     design.FillRect(FX + 2, FY + 2, w, 18)
     design.SetColor(15)
     design.Text(FX + 6, FY + 5, Fit(GetP(0, "Title"), w - 12))
+    IF mh > 0 THEN
+        design.SetColor(0)
+        FOR i = 1 TO kType.Count - 1
+            IF kType[i] = "MenuItem" AND GetN(i, "Level") = 0 AND BarX(i) + 8 < w THEN design.Text(CX + BarX(i), FY + 23, Fit(Plain(GetP(i, "Caption")), w - BarX(i)))
+        NEXT
+        design.SetColor(8)
+        design.Line(FX + 2, CY - 2, FX + w + 1, CY - 2)
+    END IF
     design.SetColor(8)
     FOR y = 0 TO h - 1 STEP 16
         FOR x = 0 TO w - 1 STEP 16
@@ -999,17 +1167,21 @@ SUB Draw ()
         NEXT
     NEXT
     FOR i = 1 TO kType.Count - 1
-        DrawControl(i)
+        IF kType[i] <> "MenuItem" THEN DrawControl(i)
     NEXT
     ' the selection, and its handle
     design.SetColor(0)
     IF sel = 0 THEN
         design.FillRect(CX + w - 3, CY + h - 3, 6, 6)
-    ELSEIF sel > 0 AND sel < kType.Count THEN
+    ELSEIF Movable(sel) THEN
         x = CX + GetN(sel, "X")
         y = CY + GetN(sel, "Y")
         design.SetColor(4)
         design.Rect(x - 2, y - 2, CtlW(sel) + 4, CtlH(sel) + 4)
+        ' its anchors to the right and bottom edges, as lines to them
+        design.SetColor(9)
+        IF kType[sel] <> "Timer" AND GetP(sel, "Anchor").Contains("Right") THEN design.Line(x + CtlW(sel) + 3, y + Int(CtlH(sel) / 2), CX + w - 1, y + Int(CtlH(sel) / 2))
+        IF kType[sel] <> "Timer" AND GetP(sel, "Anchor").Contains("Bottom") THEN design.Line(x + Int(CtlW(sel) / 2), y + CtlH(sel) + 3, x + Int(CtlW(sel) / 2), CY + h - 1)
         IF kType[sel] <> "Timer" THEN
             design.SetColor(0)
             design.FillRect(x + CtlW(sel) - 3, y + CtlH(sel) - 3, 6, 6)
@@ -1181,6 +1353,7 @@ FUNCTION HitAt (x AS Integer, y AS Integer) AS Integer
     px = x - CX
     py = y - CY
     FOR i = kType.Count - 1 TO 1 STEP -1
+        IF kType[i] = "MenuItem" THEN CONTINUE
         IF px >= GetN(i, "X") AND py >= GetN(i, "Y") AND px < GetN(i, "X") + CtlW(i) AND py < GetN(i, "Y") + CtlH(i) THEN RETURN i
     NEXT
     IF x >= FX AND y >= FY AND x < CX + GetN(0, "Width") + 2 AND y < CY + GetN(0, "Height") + 2 THEN RETURN 0
@@ -1198,6 +1371,16 @@ END SUB
 SUB Design_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
     VAR i AS Integer
     keys.Focus()
+    ' the form's menu bar: a menu's items, to write their code
+    IF tool = "" AND MenuH() > 0 AND y >= FY + 20 AND y < CY - 1 AND x >= CX AND x < CX + GetN(0, "Width") THEN
+        i = TopAt(x - CX)
+        IF i < 0 THEN
+            MenuEditor()
+        ELSE
+            ShowMenuPop(i, x, y)
+        END IF
+        RETURN
+    END IF
     ' the right button: select what's there, and offer its menu
     IF button = 2 THEN
         tool = ""
@@ -1205,9 +1388,16 @@ SUB Design_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
         i = HitAt(x, y)
         IF i < 0 THEN RETURN
         SelectObj(i)
-        IF i > 0 THEN ctx.Popup(design.X + x, design.Y + y)
+        IF i > 0 THEN
+            ctx.Popup(design.X + x, design.Y + y)
+        ELSE
+            ctxForm.Popup(design.X + x, design.Y + y)
+        END IF
         RETURN
     END IF
+    ' (what the form was, in case a drag changes it)
+    dragSnap = Snapshot()
+    dragCode = editor.Text
     ' drawing a new control
     IF tool <> "" THEN
         dragMode = "new"
@@ -1282,6 +1472,7 @@ SUB Design_OnMouseMove (x AS Integer, y AS Integer)
             nx = MATH.Max(64, Snap(x - CX))
             ny = MATH.Max(32, Snap(y - CY))
             IF nx <> GetN(0, "Width") OR ny <> GetN(0, "Height") THEN
+                FollowForm(nx - GetN(0, "Width"), ny - GetN(0, "Height"))
                 SetP(0, "Width", Str(nx))
                 SetP(0, "Height", Str(ny))
                 Draw()
@@ -1294,13 +1485,20 @@ SUB Design_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
     VAR mode AS String
     mode = dragMode
     dragMode = ""
+    IF mode <> "" AND dragSnap <> "" AND Snapshot() <> dragSnap THEN
+        PushUndo(dragSnap, dragCode)
+        dragSnap = ""
+    END IF
     IF mode = "new" THEN
         ' a click, not a drag: the control's usual size
         IF rw < GRID OR rh < GRID THEN
             rw = DefaultW(tool)
             rh = DefaultH(tool)
         END IF
+        PushUndo(dragSnap, dragCode)
+        dragSnap = ""
         i = AddControl(tool, rx, ry, rw, rh)
+        Did()
         tool = ""
         toolbox.Selected = 0
         FillObjects()
@@ -1313,21 +1511,44 @@ SUB Design_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
 END SUB
 
 SUB Design_OnKey (key AS String)
-    IF sel <= 0 OR sel >= kType.Count THEN RETURN
+    VAR dx AS Integer
+    VAR dy AS Integer
+    VAR dw AS Integer
+    VAR dh AS Integer
+    IF NOT Movable(sel) THEN RETURN
     SELECT CASE key
         CASE "Delete"
             DeleteSelected()
+            RETURN
         CASE "ArrowLeft"
-            SetP(sel, "X", Str(MATH.Max(0, GetN(sel, "X") - GRID)))
+            dx = -GRID
         CASE "ArrowRight"
-            SetP(sel, "X", Str(GetN(sel, "X") + GRID))
+            dx = GRID
         CASE "ArrowUp"
-            SetP(sel, "Y", Str(MATH.Max(0, GetN(sel, "Y") - GRID)))
+            dy = -GRID
         CASE "ArrowDown"
-            SetP(sel, "Y", Str(GetN(sel, "Y") + GRID))
+            dy = GRID
+        CASE "Shift+ArrowLeft"
+            dw = -GRID
+        CASE "Shift+ArrowRight"
+            dw = GRID
+        CASE "Shift+ArrowUp"
+            dh = -GRID
+        CASE "Shift+ArrowDown"
+            dh = GRID
         CASE ELSE
             RETURN
     END SELECT
+    IF (dw <> 0 OR dh <> 0) AND kType[sel] = "Timer" THEN RETURN
+    Remember()
+    IF dx <> 0 OR dy <> 0 THEN
+        SetP(sel, "X", Str(MATH.Max(0, GetN(sel, "X") + dx)))
+        SetP(sel, "Y", Str(MATH.Max(0, GetN(sel, "Y") + dy)))
+    ELSE
+        SetP(sel, "Width", Str(MATH.Max(GRID, GetN(sel, "Width") + dw)))
+        SetP(sel, "Height", Str(MATH.Max(GRID, GetN(sel, "Height") + dh)))
+    END IF
+    Did()
     FillProps()
     Draw()
 END SUB
@@ -1335,9 +1556,11 @@ END SUB
 SUB DeleteSelected ()
     VAR name AS String
     IF sel <= 0 OR sel >= kType.Count THEN RETURN
+    Remember()
     name = GetP(sel, "Name")
     kType.RemoveAt(sel)
     kProps.RemoveAt(sel)
+    Did()
     FillObjects()
     SelectObj(0)
     win.Status = name + " is gone from the form. (Its code is still there: delete that too, or it won't run.)"
@@ -1357,12 +1580,25 @@ SUB PropDel_OnClick ()
 END SUB
 
 SUB Ctx_OnSelect (item AS String)
+    ' (a popup menu leaves the keyboard nowhere: back to the designer)
+    keys.Focus()
     IF sel <= 0 OR sel >= kType.Count THEN RETURN
+    IF item = "View Code" THEN
+        OpenHandler(sel, Events(kType[sel])[0])
+    ELSE
+        EditCmd(item)
+    END IF
+END SUB
+
+SUB CtxForm_OnSelect (item AS String)
+    keys.Focus()
     SELECT CASE item
         CASE "View Code"
-            OpenHandler(sel, Events(kType[sel])[0])
-        CASE "Delete"
-            DeleteSelected()
+            OpenHandler(0, "Load")
+        CASE "Paste"
+            EditCmd("Paste")
+        CASE "Menu Editor..."
+            MenuEditor()
     END SELECT
 END SUB
 
@@ -1372,7 +1608,7 @@ SUB Toolbox_OnSelect ()
     ELSE
         tool = toolbox.Get(toolbox.Selected)
         win.Status = "Drag on the form where the " + tool + " goes."
-        IF codeView THEN ShowForm()
+        IF codeView OR layoutView THEN ShowForm()
     END IF
 END SUB
 
@@ -1384,17 +1620,20 @@ SUB Toolbox_OnDblClick ()
     IF toolbox.Selected <= 0 THEN RETURN
     t = toolbox.Get(toolbox.Selected)
     at = 8 + ((kType.Count - 1) MOD 8) * 16
+    Remember()
     i = AddControl(t, at, at, DefaultW(t), DefaultH(t))
+    Did()
     tool = ""
     toolbox.Selected = 0
     FillObjects()
-    IF codeView THEN ShowForm()
+    IF codeView OR layoutView THEN ShowForm()
     SelectObj(i)
 END SUB
 
 ' ================================================================ properties
 
 FUNCTION ObjLabel (i AS Integer) AS String
+    IF kType[i] = "MenuItem" THEN RETURN GetP(i, "Name") + "  (Menu: " + Plain(GetP(i, "Caption")) + ")"
     RETURN GetP(i, "Name") + "  (" + kType[i] + ")"
 END FUNCTION
 
@@ -1448,6 +1687,14 @@ SUB PropList_OnSelect ()
         propHelp.Text = key + ": a colour, 0-15: 0 black, 4 navy, 7 silver, 9 red, 10 lime, 11 yellow, 12 blue, 15 white."
     ELSEIF kind = "name" THEN
         propHelp.Text = "Name: what the code calls it. Letters, digits and _, starting with a letter."
+    ELSEIF kind = "anchor" THEN
+        propHelp.Text = "Anchor: the window edges it keeps its distance to when the window is resized: Top, Bottom, Left, Right. Left,Right stretches it across. Double-click for the usual ones."
+    ELSEIF kind = "shortcut" THEN
+        propHelp.Text = "Shortcut: keys that choose this item, like Ctrl+O or F3. Empty for none."
+    ELSEIF key = "Level" THEN
+        propHelp.Text = "Level: 0 for a menu on the bar, 1 for an item in the menu above it."
+    ELSEIF key = "Caption" THEN
+        propHelp.Text = "Caption: what the menu shows. & before a letter underlines it; - alone is a line between items."
     ELSE
         propHelp.Text = key + ": type it and press Enter."
     END IF
@@ -1471,6 +1718,10 @@ SUB PropList_OnDblClick ()
         opts = kind.Substring(7, kind.Length - 7).Split(",")
         k = opts.IndexOf(GetP(sel, key))
         Apply(key, opts[(k + 1) MOD opts.Count])
+    ELSEIF kind = "anchor" THEN
+        opts = ["Top,Left", "Top,Right", "Bottom,Left", "Bottom,Right", "Top,Left,Right", "Bottom,Left,Right", "Top,Bottom,Left", "Top,Bottom,Right", "Top,Bottom,Left,Right"]
+        k = opts.IndexOf(GetP(sel, key))
+        Apply(key, opts[(k + 1) MOD opts.Count])
     ELSE
         propEdit.Focus()
         propEdit.SelectAll()
@@ -1487,6 +1738,7 @@ SUB Apply (key AS String, value AS String)
     VAR kind AS String
     VAR old AS String
     VAR opts AS Array OF String
+    VAR noted AS Bool
     kind = PropKind(kType[sel], key)
     value = value.Replace(Chr(13), "").Replace(Chr(10), " ")
     IF kind = "name" THEN
@@ -1500,9 +1752,20 @@ SUB Apply (key AS String, value AS String)
             RETURN
         END IF
         old = GetP(sel, "Name")
+        Remember()
+        noted = TRUE
         IF old <> value THEN editor.Text = Renamed(editor.Text, old, value)
+    ELSEIF kind = "anchor" THEN
+        value = Anchors(value)
+    ELSEIF kind = "shortcut" THEN
+        value = value.Trim()
+        IF NOT ShortcutOk(value) THEN
+            Say(Q + value + Q + " isn't a shortcut SIM95 knows. Use Ctrl+ a letter or digit (Ctrl+Shift+ too), or F1 to F12.", "warn")
+            RETURN
+        END IF
     ELSEIF kind = "int" THEN
         value = Str(Int(Val(value)))
+        IF key = "Level" THEN value = Str(MATH.Max(0, MATH.Min(1, Val(value))))
         IF (key = "X" OR key = "Y") AND Val(value) < 0 THEN value = "0"
         IF (key = "Width" OR key = "Height") AND Val(value) < GRID THEN value = Str(GRID)
     ELSEIF kind = "bool" THEN
@@ -1521,8 +1784,12 @@ SUB Apply (key AS String, value AS String)
         END IF
         value = value.Trim().Lower()
     END IF
+    IF NOT noted THEN Remember()
+    IF sel = 0 AND key = "Width" THEN FollowForm(Int(Val(value)) - GetN(0, "Width"), 0)
+    IF sel = 0 AND key = "Height" THEN FollowForm(0, Int(Val(value)) - GetN(0, "Height"))
     SetP(sel, key, value)
-    IF kind = "name" THEN FillObjects()
+    Did()
+    IF kind = "name" OR key = "Caption" THEN FillObjects()
     FillProps()
     PropList_OnSelect()
     Draw()
@@ -1581,6 +1848,7 @@ END FUNCTION
 ' ================================================================ the code window
 
 SUB ShowForm ()
+    IF NOT LeaveLayout() THEN RETURN
     codeView = FALSE
     editor.Visible = FALSE
     objList.Visible = FALSE
@@ -1589,10 +1857,12 @@ SUB ShowForm ()
     keys.Visible = TRUE
     formBtn.Enabled = FALSE
     codeBtn.Enabled = TRUE
+    layBtn.Enabled = TRUE
     Draw()
 END SUB
 
 SUB ShowCode ()
+    IF NOT LeaveLayout() THEN RETURN
     codeView = TRUE
     design.Visible = FALSE
     keys.Visible = FALSE
@@ -1601,6 +1871,7 @@ SUB ShowCode ()
     evtList.Visible = TRUE
     formBtn.Enabled = TRUE
     codeBtn.Enabled = FALSE
+    layBtn.Enabled = TRUE
     tool = ""
     toolbox.Selected = 0
     FillObjects()
@@ -1681,10 +1952,1136 @@ SUB Snippet (which AS String)
     END SELECT
     IF s = "" THEN RETURN
     IF NOT codeView THEN ShowCode()
+    IF NOT codeView THEN RETURN
     ' (whole lines, at the start of the cursor's line, inside a SUB)
     editor.Insert("    " + s + EOL)
     editor.Focus()
 END SUB
+
+' ================================================================ undo, the clipboard, order
+
+' A control on the form (not the form itself, nor a menu item).
+FUNCTION Movable (i AS Integer) AS Bool
+    IF i <= 0 OR i >= kType.Count THEN RETURN FALSE
+    RETURN kType[i] <> "MenuItem"
+END FUNCTION
+
+' The whole form, as one string, and back.
+FUNCTION Snapshot () AS String
+    RETURN kType.Join(Chr(1)) + Chr(2) + kProps.Join(Chr(1))
+END FUNCTION
+
+SUB LoadSnap (snap AS String)
+    VAR parts AS Array OF String
+    parts = snap.Split(Chr(2))
+    kType = parts[0].Split(Chr(1))
+    kProps = parts[1].Split(Chr(1))
+END SUB
+
+SUB PushUndo (snap AS String, code AS String)
+    IF snap = "" THEN RETURN
+    undoModel.Add(snap)
+    undoCode.Add(code)
+    IF undoModel.Count > 100 THEN
+        undoModel.RemoveAt(0)
+        undoCode.RemoveAt(0)
+    END IF
+    redoModel.Clear()
+    redoCode.Clear()
+END SUB
+
+' Before a change on the form: how to get back.
+SUB Remember ()
+    PushUndo(Snapshot(), editor.Text)
+END SUB
+
+' After a change on the form: the code as it left it. (Undo puts the code
+' back too, as a rename changed it, but not once it has been edited since:
+' the code has its own undo.)
+SUB Did ()
+    lastCode = editor.Text
+END SUB
+
+SUB Revert (snap AS String, code AS String)
+    IF editor.Text = lastCode THEN editor.Text = code
+    LoadSnap(snap)
+    lastCode = editor.Text
+    IF sel >= kType.Count THEN sel = 0
+    FillObjects()
+    SelectObj(sel)
+END SUB
+
+SUB DoUndo ()
+    VAR k AS Integer
+    k = undoModel.Count - 1
+    IF k < 0 THEN
+        win.Status = "Nothing to undo."
+        RETURN
+    END IF
+    redoModel.Add(Snapshot())
+    redoCode.Add(editor.Text)
+    Revert(undoModel[k], undoCode[k])
+    undoModel.RemoveAt(k)
+    undoCode.RemoveAt(k)
+    win.Status = "Undone. (Ctrl+Y does it again.)"
+END SUB
+
+SUB DoRedo ()
+    VAR k AS Integer
+    k = redoModel.Count - 1
+    IF k < 0 THEN
+        win.Status = "Nothing to redo."
+        RETURN
+    END IF
+    undoModel.Add(Snapshot())
+    undoCode.Add(editor.Text)
+    Revert(redoModel[k], redoCode[k])
+    redoModel.RemoveAt(k)
+    redoCode.RemoveAt(k)
+    win.Status = "Done again."
+END SUB
+
+' The Edit menu, on the form. (In the code, the editor has its own.)
+SUB EditCmd (item AS String)
+    VAR keepType AS String
+    VAR keepProps AS String
+    IF codeView OR layoutView THEN
+        win.Status = "In the code, use Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+C and Ctrl+V. (The Edit menu works on the form.)"
+        RETURN
+    END IF
+    SELECT CASE item
+        CASE "Undo"
+            DoUndo()
+        CASE "Redo"
+            DoRedo()
+        CASE "Paste"
+            PasteCtl()
+        CASE ELSE
+            IF NOT Movable(sel) THEN
+                win.Status = "Select a control on the form first."
+                RETURN
+            END IF
+            SELECT CASE item
+                CASE "Copy"
+                    CopyCtl()
+                CASE "Cut"
+                    CopyCtl()
+                    DeleteSelected()
+                    win.Status = "Cut. Ctrl+V pastes it."
+                CASE "Duplicate"
+                    keepType = clipType
+                    keepProps = clipProps
+                    CopyCtl()
+                    PasteCtl()
+                    clipType = keepType
+                    clipProps = keepProps
+                CASE "Delete"
+                    DeleteSelected()
+                CASE "Bring to Front"
+                    Restack(TRUE)
+                CASE "Send to Back"
+                    Restack(FALSE)
+            END SELECT
+    END SELECT
+END SUB
+
+SUB CopyCtl ()
+    clipType = kType[sel]
+    clipProps = kProps[sel]
+    win.Status = GetP(sel, "Name") + " is copied. Ctrl+V pastes it."
+END SUB
+
+' The copied control, a little down and to the right, with a name of its own.
+SUB PasteCtl ()
+    VAR i AS Integer
+    IF clipType = "" THEN
+        win.Status = "Nothing to paste: copy a control first."
+        RETURN
+    END IF
+    Remember()
+    kType.Add(clipType)
+    kProps.Add(clipProps)
+    i = kType.Count - 1
+    IF NameTaken(GetP(i, "Name"), i) THEN SetP(i, "Name", NextName(clipType))
+    SetP(i, "X", Str(GetN(i, "X") + GRID * 2))
+    SetP(i, "Y", Str(GetN(i, "Y") + GRID * 2))
+    ' (so pasting again goes further on)
+    clipProps = kProps[i]
+    Did()
+    FillObjects()
+    SelectObj(i)
+    win.Status = GetP(i, "Name") + " is pasted. (Its code isn't: copy that in the code.)"
+END SUB
+
+' To the front (made last, so drawn over the others) or the back.
+SUB Restack (front AS Bool)
+    VAR t AS String
+    VAR p AS String
+    Remember()
+    t = kType[sel]
+    p = kProps[sel]
+    kType.RemoveAt(sel)
+    kProps.RemoveAt(sel)
+    IF front THEN
+        kType.Add(t)
+        kProps.Add(p)
+        sel = kType.Count - 1
+    ELSE
+        kType.Insert(1, t)
+        kProps.Insert(1, p)
+        sel = 1
+    END IF
+    Did()
+    FillObjects()
+    SelectObj(sel)
+END SUB
+
+' ================================================================ menus on the form
+
+' A caption as the menu reports it: without & (or a shortcut).
+FUNCTION Plain (cap AS String) AS String
+    RETURN cap.Replace("&", "")
+END FUNCTION
+
+FUNCTION HasMenu () AS Bool
+    VAR i AS Integer
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] = "MenuItem" THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+FUNCTION MenuH () AS Integer
+    IF HasMenu() THEN RETURN MENUBAR
+    RETURN 0
+END FUNCTION
+
+' Where a menu's name starts on the bar, from the form's left edge.
+FUNCTION BarX (top AS Integer) AS Integer
+    VAR i AS Integer
+    VAR x AS Integer
+    x = 6
+    FOR i = 1 TO top - 1
+        IF kType[i] = "MenuItem" AND GetN(i, "Level") = 0 THEN x = x + Plain(GetP(i, "Caption")).Length * CHARW + 14
+    NEXT
+    RETURN x
+END FUNCTION
+
+' The menu on the bar at x (from the form's left edge), or -1.
+FUNCTION TopAt (x AS Integer) AS Integer
+    VAR i AS Integer
+    VAR bx AS Integer
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] <> "MenuItem" OR GetN(i, "Level") <> 0 THEN CONTINUE
+        bx = BarX(i)
+        IF x >= bx - 6 AND x < bx + Plain(GetP(i, "Caption")).Length * CHARW + 8 THEN RETURN i
+    NEXT
+    RETURN -1
+END FUNCTION
+
+' A menu of the form, opened on the designer: choosing an item goes to its code.
+SUB ShowMenuPop (top AS Integer, x AS Integer, y AS Integer)
+    VAR i AS Integer
+    menuPop.Clear()
+    menuPop.AddMenu("Menu")
+    FOR i = top + 1 TO kType.Count - 1
+        IF kType[i] <> "MenuItem" THEN CONTINUE
+        IF GetN(i, "Level") = 0 THEN BREAK
+        IF GetP(i, "Caption") = "-" THEN
+            menuPop.AddSeparator("Menu")
+        ELSE
+            menuPop.AddItem("Menu", GetP(i, "Caption"))
+        END IF
+    NEXT
+    menuPop.AddSeparator("Menu")
+    menuPop.AddItem("Menu", "Menu Editor...")
+    menuPopTop = top
+    menuPop.Popup(design.X + x, design.Y + y)
+END SUB
+
+SUB MenuPop_OnSelect (item AS String)
+    VAR i AS Integer
+    keys.Focus()
+    IF item = "Menu Editor..." THEN
+        MenuEditor()
+        RETURN
+    END IF
+    FOR i = menuPopTop + 1 TO kType.Count - 1
+        IF kType[i] <> "MenuItem" THEN CONTINUE
+        IF GetN(i, "Level") = 0 THEN BREAK
+        IF Plain(GetP(i, "Caption")) = item THEN
+            OpenHandler(i, "onClick")
+            RETURN
+        END IF
+    NEXT
+END SUB
+
+' Ctrl+O, Ctrl+Shift+S, Alt+X, F3, Delete: keys a menu can answer to.
+FUNCTION ShortcutOk (k AS String) AS Bool
+    VAR rest AS String
+    VAR c AS Integer
+    IF k = "" OR k = "Delete" OR k = "Insert" THEN RETURN TRUE
+    IF k.StartsWith("F") AND k.Length <= 3 THEN RETURN Val(k.Substring(1, k.Length - 1)) >= 1 AND Val(k.Substring(1, k.Length - 1)) <= 12
+    rest = k
+    IF rest.StartsWith("Ctrl+") THEN
+        rest = rest.Substring(5, rest.Length - 5)
+        IF rest.StartsWith("Shift+") THEN rest = rest.Substring(6, rest.Length - 6)
+    ELSEIF rest.StartsWith("Alt+") THEN
+        rest = rest.Substring(4, rest.Length - 4)
+    ELSE
+        RETURN FALSE
+    END IF
+    IF rest.Length <> 1 THEN RETURN FALSE
+    c = Asc(rest)
+    RETURN (c >= 65 AND c <= 90) OR (c >= 48 AND c <= 57)
+END FUNCTION
+
+' A property left out of an object's lines altogether.
+SUB DropP (i AS Integer, key AS String)
+    VAR out AS Array OF String
+    VAR line AS String
+    FOR EACH line IN kProps[i].Split(EOL)
+        IF NOT line.StartsWith(key + "=") THEN out.Add(line)
+    NEXT
+    kProps[i] = out.Join(EOL)
+END SUB
+
+' ================================================================ the Menu Editor
+
+' As in Visual BASIC: the form's menus in a list, menus on the bar at the
+' left, their items indented under them.
+SUB MenuEditor ()
+    VAR l AS GUI_Label
+    VAR b AS GUI_Button
+    VAR i AS Integer
+    VAR keys AS Array OF String
+    VAR c AS Integer
+    IF codeView OR layoutView THEN ShowForm()
+    IF layoutView THEN RETURN
+    Remember()
+    Did()
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] = "MenuItem" THEN SetP(i, "Orig", GetP(i, "Name"))
+    NEXT
+    meDone = FALSE
+    meWin = GUI_Window.New("Menu Editor", 380, 334)
+    meWin.Modal = TRUE
+    meWin.Icon = "spark"
+    meWin.onClose = Me_Closed
+    l = GUI_Label.New(meWin)
+    l.Text = "Ca&ption:"
+    l.SetBounds(8, 11, 70, 16)
+    meCap = GUI_TextBox.New(meWin)
+    meCap.SetBounds(80, 8, 210, 21)
+    meCap.onChange = MeCap_OnChange
+    meCap.onEnter = Me_Next
+    l = GUI_Label.New(meWin)
+    l.Text = "Na&me:"
+    l.SetBounds(8, 37, 70, 16)
+    meName = GUI_TextBox.New(meWin)
+    meName.SetBounds(80, 34, 210, 21)
+    meName.onChange = MeName_OnChange
+    meName.onEnter = Me_Next
+    l = GUI_Label.New(meWin)
+    l.Text = "&Shortcut:"
+    l.SetBounds(8, 63, 70, 16)
+    meKey = GUI_DropDown.New(meWin)
+    meKey.SetBounds(80, 60, 110, 21)
+    keys.Add("(none)")
+    FOR c = 65 TO 90
+        keys.Add("Ctrl+" + Chr(c))
+    NEXT
+    FOR c = 1 TO 12
+        keys.Add("F" + Str(c))
+    NEXT
+    keys.Add("Delete")
+    meKey.Items = keys
+    meKey.onSelect = MeKey_OnSelect
+    meChk = GUI_CheckBox.New(meWin)
+    meChk.Text = "&Checked"
+    meChk.SetBounds(200, 62, 84, 16)
+    meChk.onChange = MeChk_OnChange
+    meEn = GUI_CheckBox.New(meWin)
+    meEn.Text = "&Enabled"
+    meEn.SetBounds(290, 62, 84, 16)
+    meEn.onChange = MeEn_OnChange
+    b = GUI_Button.New(meWin)
+    b.Text = "<"
+    b.SetBounds(8, 92, 28, 23)
+    b.onClick = Me_Out
+    b = GUI_Button.New(meWin)
+    b.Text = ">"
+    b.SetBounds(40, 92, 28, 23)
+    b.onClick = Me_In
+    b = GUI_Button.New(meWin)
+    b.Text = "Up"
+    b.SetBounds(76, 92, 40, 23)
+    b.onClick = Me_Up
+    b = GUI_Button.New(meWin)
+    b.Text = "Down"
+    b.SetBounds(120, 92, 48, 23)
+    b.onClick = Me_Down
+    b = GUI_Button.New(meWin)
+    b.Text = "&Next"
+    b.SetBounds(176, 92, 60, 23)
+    b.onClick = Me_Next
+    b = GUI_Button.New(meWin)
+    b.Text = "&Insert"
+    b.SetBounds(240, 92, 60, 23)
+    b.onClick = Me_Insert
+    b = GUI_Button.New(meWin)
+    b.Text = "&Delete"
+    b.SetBounds(304, 92, 68, 23)
+    b.onClick = Me_Delete
+    meList = GUI_ListBox.New(meWin)
+    meList.SetBounds(8, 122, 364, 170)
+    meList.Mono = TRUE
+    meList.onSelect = MeList_OnSelect
+    b = GUI_Button.New(meWin)
+    b.Text = "OK"
+    b.Default = TRUE
+    b.SetBounds(216, 302, 75, 24)
+    b.onClick = Me_Ok
+    b = GUI_Button.New(meWin)
+    b.Text = "Cancel"
+    b.Cancel = TRUE
+    b.SetBounds(297, 302, 75, 24)
+    b.onClick = Me_Cancel
+    FillMe(-1)
+    IF meIdx.Count > 0 THEN
+        meList.Selected = 0
+        MeShow()
+    END IF
+    meWin.Center()
+    meWin.Show()
+    meCap.Focus()
+END SUB
+
+' The list, with object k selected (-1: none).
+SUB FillMe (k AS Integer)
+    VAR rows AS Array OF String
+    VAR i AS Integer
+    VAR s AS String
+    meIdx.Clear()
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] <> "MenuItem" THEN CONTINUE
+        s = GetP(i, "Caption")
+        IF GetN(i, "Level") > 0 THEN s = "...." + s
+        IF GetP(i, "Shortcut") <> "" THEN s = s.PadRight(26) + GetP(i, "Shortcut")
+        meIdx.Add(i)
+        rows.Add(s)
+    NEXT
+    meList.Items = rows
+    meList.Selected = meIdx.IndexOf(k)
+    MeShow()
+END SUB
+
+FUNCTION MeCur () AS Integer
+    IF meList.Selected < 0 OR meList.Selected >= meIdx.Count THEN RETURN -1
+    RETURN meIdx[meList.Selected]
+END FUNCTION
+
+' The selected item in the boxes.
+SUB MeShow ()
+    VAR i AS Integer
+    i = MeCur()
+    meBusy = TRUE
+    IF i < 0 THEN
+        meCap.Text = ""
+        meName.Text = ""
+        meKey.Selected = 0
+        meChk.Checked = FALSE
+        meEn.Checked = TRUE
+    ELSE
+        IF meCap.Text <> GetP(i, "Caption") THEN meCap.Text = GetP(i, "Caption")
+        IF meName.Text <> GetP(i, "Name") THEN meName.Text = GetP(i, "Name")
+        meKey.Selected = MATH.Max(0, meKey.Items.IndexOf(GetP(i, "Shortcut")))
+        meChk.Checked = GetB(i, "Checked")
+        meEn.Checked = GetB(i, "Enabled")
+    END IF
+    meBusy = FALSE
+END SUB
+
+SUB MeList_OnSelect ()
+    MeShow()
+END SUB
+
+' A new, empty item at object index at.
+FUNCTION MeNew (at AS Integer, level AS Integer) AS Integer
+    kType.Insert(at, "MenuItem")
+    kProps.Insert(at, "")
+    SetP(at, "Level", Str(level))
+    SetP(at, "Caption", "")
+    SetP(at, "Name", "")
+    RETURN at
+END FUNCTION
+
+' The selected item, made if there isn't one yet.
+FUNCTION MeItem () AS Integer
+    VAR i AS Integer
+    i = MeCur()
+    IF i >= 0 THEN RETURN i
+    i = MeNew(kType.Count, 0)
+    FillMe(i)
+    RETURN i
+END FUNCTION
+
+' mnuFile, mnuFileOpen: the menu's name, then the item's, as VB programmers wrote them.
+FUNCTION AutoName (i AS Integer, cap AS String) AS String
+    VAR base AS String
+    VAR parentWord AS String
+    VAR k AS Integer
+    VAR n AS Integer
+    IF cap = "-" THEN
+        base = "mnuLine"
+    ELSE
+        IF GetN(i, "Level") > 0 THEN
+            FOR k = i - 1 TO 1 STEP -1
+                IF kType[k] = "MenuItem" AND GetN(k, "Level") = 0 THEN
+                    parentWord = CapWord(GetP(k, "Caption"))
+                    BREAK
+                END IF
+            NEXT
+        END IF
+        base = "mnu" + parentWord + CapWord(cap)
+    END IF
+    IF base = "mnu" THEN RETURN ""
+    IF NOT NameTaken(base, i) AND cap <> "-" THEN RETURN base
+    n = 1
+    WHILE NameTaken(base + Str(n), i)
+        n = n + 1
+    END WHILE
+    RETURN base + Str(n)
+END FUNCTION
+
+' The letters and digits of a caption, starting with a capital: "&Save As..." is SaveAs.
+FUNCTION CapWord (cap AS String) AS String
+    VAR out AS String
+    VAR k AS Integer
+    VAR ch AS String
+    FOR k = 0 TO cap.Length - 1
+        ch = cap.CharAt(k)
+        IF IsIdentChar(ch) AND ch <> "_" THEN out = out + ch
+    NEXT
+    IF out = "" THEN RETURN ""
+    RETURN out.CharAt(0).Upper() + out.Substring(1, out.Length - 1)
+END FUNCTION
+
+SUB MeCap_OnChange ()
+    VAR i AS Integer
+    VAR old AS String
+    VAR text AS String
+    IF meBusy THEN RETURN
+    text = meCap.Text
+    i = MeItem()
+    old = GetP(i, "Caption")
+    SetP(i, "Caption", text)
+    ' a name made from the caption follows it, until it's typed by hand
+    IF GetP(i, "Name") = "" OR GetP(i, "Name") = AutoName(i, old) THEN SetP(i, "Name", AutoName(i, text))
+    MeRow(i)
+    MeShow()
+END SUB
+
+' One line of the list again, without disturbing the rest.
+SUB MeRow (i AS Integer)
+    VAR s AS String
+    VAR r AS Integer
+    r = meIdx.IndexOf(i)
+    IF r < 0 THEN RETURN
+    s = GetP(i, "Caption")
+    IF GetN(i, "Level") > 0 THEN s = "...." + s
+    IF GetP(i, "Shortcut") <> "" THEN s = s.PadRight(26) + GetP(i, "Shortcut")
+    meList.Set(r, s)
+END SUB
+
+' (Each takes what was typed or picked first: making a new item clears the boxes.)
+SUB MeName_OnChange ()
+    VAR text AS String
+    VAR i AS Integer
+    IF meBusy THEN RETURN
+    text = meName.Text.Trim()
+    i = MeItem()
+    SetP(i, "Name", text)
+    MeShow()
+END SUB
+
+SUB MeKey_OnSelect ()
+    VAR i AS Integer
+    VAR k AS Integer
+    IF meBusy THEN RETURN
+    k = meKey.Selected
+    i = MeItem()
+    IF k <= 0 THEN
+        SetP(i, "Shortcut", "")
+    ELSE
+        SetP(i, "Shortcut", meKey.Items[k])
+    END IF
+    MeRow(i)
+    MeShow()
+END SUB
+
+SUB MeChk_OnChange ()
+    VAR on AS Bool
+    VAR i AS Integer
+    IF meBusy THEN RETURN
+    on = meChk.Checked
+    i = MeItem()
+    IF on THEN
+        SetP(i, "Checked", "TRUE")
+    ELSE
+        SetP(i, "Checked", "FALSE")
+    END IF
+    MeShow()
+END SUB
+
+SUB MeEn_OnChange ()
+    VAR on AS Bool
+    VAR i AS Integer
+    IF meBusy THEN RETURN
+    on = meEn.Checked
+    i = MeItem()
+    IF on THEN
+        SetP(i, "Enabled", "TRUE")
+    ELSE
+        SetP(i, "Enabled", "FALSE")
+    END IF
+    MeShow()
+END SUB
+
+' Next: the item after this one, or a new one at the end, at the same level.
+SUB Me_Next ()
+    VAR i AS Integer
+    VAR r AS Integer
+    i = MeCur()
+    r = meList.Selected
+    IF i >= 0 AND r < meIdx.Count - 1 THEN
+        meList.Selected = r + 1
+        MeShow()
+    ELSE
+        IF i >= 0 AND GetP(i, "Caption") = "" THEN RETURN
+        IF i >= 0 THEN
+            FillMe(MeNew(kType.Count, GetN(i, "Level")))
+        ELSE
+            FillMe(MeNew(kType.Count, 0))
+        END IF
+    END IF
+    meCap.Focus()
+END SUB
+
+' Insert: a new item before this one.
+SUB Me_Insert ()
+    VAR i AS Integer
+    i = MeCur()
+    IF i < 0 THEN
+        FillMe(MeNew(kType.Count, 0))
+    ELSE
+        FillMe(MeNew(i, GetN(i, "Level")))
+    END IF
+    meCap.Focus()
+END SUB
+
+SUB Me_Delete ()
+    VAR i AS Integer
+    VAR r AS Integer
+    i = MeCur()
+    IF i < 0 THEN RETURN
+    r = meList.Selected
+    kType.RemoveAt(i)
+    kProps.RemoveAt(i)
+    FillMe(-1)
+    IF meIdx.Count > 0 THEN
+        meList.Selected = MATH.Min(r, meIdx.Count - 1)
+        MeShow()
+    END IF
+    meCap.Focus()
+END SUB
+
+' < and >: a menu on the bar, or an item in the menu above.
+SUB Me_Out ()
+    VAR i AS Integer
+    i = MeCur()
+    IF i < 0 THEN RETURN
+    SetP(i, "Level", "0")
+    FillMe(i)
+    meCap.Focus()
+END SUB
+
+SUB Me_In ()
+    VAR i AS Integer
+    i = MeCur()
+    IF i < 0 THEN RETURN
+    IF meList.Selected = 0 THEN
+        Say("The first line is a menu on the bar: the items go under it.", "info")
+        RETURN
+    END IF
+    SetP(i, "Level", "1")
+    FillMe(i)
+    meCap.Focus()
+END SUB
+
+SUB Me_Up ()
+    MeSwap(-1)
+END SUB
+
+SUB Me_Down ()
+    MeSwap(1)
+END SUB
+
+' The selected item swapped with the one above (-1) or below (1).
+SUB MeSwap (dir AS Integer)
+    VAR r AS Integer
+    VAR a AS Integer
+    VAR b AS Integer
+    VAR t AS String
+    r = meList.Selected
+    IF r < 0 OR r + dir < 0 OR r + dir >= meIdx.Count THEN RETURN
+    a = meIdx[r]
+    b = meIdx[r + dir]
+    t = kProps[a]
+    kProps[a] = kProps[b]
+    kProps[b] = t
+    FillMe(b)
+    meCap.Focus()
+END SUB
+
+SUB Me_Ok ()
+    VAR i AS Integer
+    VAR n AS String
+    VAR o AS String
+    ' (empty lines are left out)
+    i = kType.Count - 1
+    WHILE i >= 1
+        IF kType[i] = "MenuItem" AND GetP(i, "Caption").Trim() = "" AND GetP(i, "Name").Trim() = "" THEN
+            kType.RemoveAt(i)
+            kProps.RemoveAt(i)
+        END IF
+        i = i - 1
+    END WHILE
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] <> "MenuItem" THEN CONTINUE
+        n = GetP(i, "Name").Trim()
+        IF GetP(i, "Caption").Trim() = "" THEN
+            FillMe(i)
+            Say("Each item needs a caption: what the menu shows.", "warn")
+            RETURN
+        END IF
+        IF NOT IsIdent(n) THEN
+            FillMe(i)
+            Say(Plain(GetP(i, "Caption")) + " needs a name for the code: letters, digits and _, starting with a letter.", "warn")
+            RETURN
+        END IF
+        IF NameTaken(n, i) THEN
+            FillMe(i)
+            Say("Something else is already called " + n + ".", "warn")
+            RETURN
+        END IF
+    NEXT
+    ' renamed items: their SUBs too
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] <> "MenuItem" THEN CONTINUE
+        o = GetP(i, "Orig")
+        n = GetP(i, "Name")
+        IF o <> "" AND o <> n THEN editor.Text = Renamed(editor.Text, o, n)
+        DropP(i, "Orig")
+    NEXT
+    ' (no change: nothing to undo)
+    IF undoModel.Count > 0 THEN
+        IF undoModel[undoModel.Count - 1] = Snapshot() THEN
+            undoModel.RemoveAt(undoModel.Count - 1)
+            undoCode.RemoveAt(undoCode.Count - 1)
+        END IF
+    END IF
+    Did()
+    meDone = TRUE
+    meWin.Close()
+    FillObjects()
+    SelectObj(0)
+    IF HasMenu() THEN win.Status = "Click a menu on the form, then an item, to write what it does."
+END SUB
+
+SUB Me_Cancel ()
+    meWin.Close()
+END SUB
+
+' Closed without OK: the menus as they were.
+SUB Me_Closed ()
+    VAR k AS Integer
+    IF meDone THEN RETURN
+    meDone = TRUE
+    k = undoModel.Count - 1
+    IF k >= 0 THEN
+        LoadSnap(undoModel[k])
+        undoModel.RemoveAt(k)
+        undoCode.RemoveAt(k)
+    END IF
+    FillObjects()
+    SelectObj(0)
+END SUB
+
+' ================================================================ anchors
+
+' An Anchor value tidied: the edges named, in order.
+FUNCTION Anchors (v AS String) AS String
+    VAR out AS Array OF String
+    VAR u AS String
+    VAR e AS String
+    u = "," + v.Upper().Replace(" ", "").Replace(";", ",").Replace("+", ",") + ","
+    FOR EACH e IN ["Top", "Bottom", "Left", "Right"]
+        IF u.Contains("," + e.Upper() + ",") THEN out.Add(e)
+    NEXT
+    RETURN out.Join(",")
+END FUNCTION
+
+' Is any control anchored other than to the top left (so the program lays them out)?
+FUNCTION Anchored () AS Bool
+    VAR i AS Integer
+    FOR i = 1 TO kType.Count - 1
+        IF Movable(i) AND kType[i] <> "Timer" THEN
+            IF GetP(i, "Anchor") <> "Top,Left" THEN RETURN TRUE
+        END IF
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' Code for a position (pos TRUE) or a size along one direction, as the window
+' grows by d: anchored at both ends it stretches; at the far end it moves; at
+' neither it stays in the middle.
+FUNCTION Span (pos AS Integer, size AS Integer, anchor AS String, near AS String, far AS String, d AS String, wantPos AS Bool) AS String
+    VAR a AS Bool
+    VAR b AS Bool
+    a = ("," + anchor + ",").Contains("," + near + ",")
+    b = ("," + anchor + ",").Contains("," + far + ",")
+    IF NOT wantPos THEN
+        IF a AND b THEN RETURN "MATH.Max(" + Str(GRID) + ", " + Str(size) + " + " + d + ")"
+        RETURN Str(size)
+    END IF
+    IF a AND b THEN RETURN Str(pos)
+    IF b THEN RETURN Str(pos) + " + " + d
+    IF a THEN RETURN Str(pos)
+    RETURN Str(pos) + " + Int(" + d + " / 2)"
+END FUNCTION
+
+' The form grew by dw, dh on the designer: its anchored controls follow.
+SUB FollowForm (dw AS Integer, dh AS Integer)
+    VAR i AS Integer
+    VAR an AS String
+    FOR i = 1 TO kType.Count - 1
+        IF NOT Movable(i) OR kType[i] = "Timer" THEN CONTINUE
+        an = "," + GetP(i, "Anchor") + ","
+        IF dw <> 0 THEN
+            IF an.Contains(",Left,") AND an.Contains(",Right,") THEN
+                SetP(i, "Width", Str(MATH.Max(GRID, GetN(i, "Width") + dw)))
+            ELSEIF an.Contains(",Right,") THEN
+                SetP(i, "X", Str(MATH.Max(0, GetN(i, "X") + dw)))
+            ELSEIF NOT an.Contains(",Left,") THEN
+                SetP(i, "X", Str(MATH.Max(0, GetN(i, "X") + Int(dw / 2))))
+            END IF
+        END IF
+        IF dh <> 0 THEN
+            IF an.Contains(",Top,") AND an.Contains(",Bottom,") THEN
+                SetP(i, "Height", Str(MATH.Max(GRID, GetN(i, "Height") + dh)))
+            ELSEIF an.Contains(",Bottom,") THEN
+                SetP(i, "Y", Str(MATH.Max(0, GetN(i, "Y") + dh)))
+            ELSEIF NOT an.Contains(",Top,") THEN
+                SetP(i, "Y", Str(MATH.Max(0, GetN(i, "Y") + Int(dh / 2))))
+            END IF
+        END IF
+    NEXT
+END SUB
+
+' ================================================================ the layout, as text
+
+' As Visual BASIC kept a form in its .FRM file: a Begin...End for each object,
+' with every property. Editing it and going back to the Form or the Code
+' applies it.
+FUNCTION LayoutText () AS String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR e AS String
+    VAR key AS String
+    VAR kind AS String
+    out.Add("' The form's layout. Change values here, then go")
+    out.Add("' back to the Form or the Code to apply them.")
+    out.Add("' Later objects are drawn over earlier ones.")
+    out.Add("' Each one's name is on its Begin line.")
+    out.Add("")
+    FOR i = 0 TO kType.Count - 1
+        out.Add("Begin " + kType[i] + " " + GetP(i, "Name"))
+        FOR EACH e IN Props(kType[i])
+            key = e.Split("|")[0]
+            IF key = "Name" THEN CONTINUE
+            kind = PropKind(kType[i], key)
+            IF kind = "int" OR kind = "bool" OR kind = "color" THEN
+                out.Add("    " + key + " = " + GetP(i, key))
+            ELSE
+                out.Add("    " + key + " = " + Lit(GetP(i, key)))
+            END IF
+        NEXT
+        out.Add("End")
+        out.Add("")
+    NEXT
+    RETURN out.Join(EOL)
+END FUNCTION
+
+SUB ShowLayout ()
+    VAR k AS Integer
+    VAR lines AS Array OF String
+    IF layoutView THEN RETURN
+    layoutView = TRUE
+    codeView = FALSE
+    design.Visible = FALSE
+    keys.Visible = FALSE
+    editor.Visible = FALSE
+    objList.Visible = FALSE
+    evtList.Visible = FALSE
+    layoutEd.Visible = TRUE
+    formBtn.Enabled = TRUE
+    codeBtn.Enabled = TRUE
+    layBtn.Enabled = FALSE
+    tool = ""
+    toolbox.Selected = 0
+    layoutShown = LayoutText()
+    layoutEd.Text = layoutShown
+    ' at the selected object
+    lines = layoutShown.Split(EOL)
+    FOR k = 0 TO lines.Count - 1
+        IF lines[k] = "Begin " + kType[sel] + " " + GetP(sel, "Name") THEN
+            ' (the cursor at the end of the line, not the line selected)
+            layoutEd.GotoLine(k + 1)
+            layoutEd.Insert(lines[k])
+            layoutShown = layoutEd.Text
+            BREAK
+        END IF
+    NEXT
+    layoutEd.Focus()
+    win.Status = "The form's layout: change it here, then go back to the Form or the Code."
+END SUB
+
+' Out of the layout view, with its changes applied: FALSE (and still there) if they're wrong.
+FUNCTION LeaveLayout () AS Bool
+    IF NOT layoutView THEN RETURN TRUE
+    IF NOT ApplyLayout() THEN RETURN FALSE
+    layoutView = FALSE
+    layoutEd.Visible = FALSE
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION ApplyLayout () AS Bool
+    VAR before AS String
+    VAR beforeCode AS String
+    VAR oldTypes AS Array OF String
+    VAR oldNames AS Array OF String
+    VAR msg AS String
+    VAR i AS Integer
+    VAR line AS Integer
+    IF layoutEd.Text = layoutShown THEN RETURN TRUE
+    before = Snapshot()
+    beforeCode = editor.Text
+    FOR i = 0 TO kType.Count - 1
+        oldTypes.Add(kType[i])
+        oldNames.Add(GetP(i, "Name"))
+    NEXT
+    msg = ParseLayout(layoutEd.Text)
+    IF msg <> "" THEN
+        Say("The layout has a mistake, so it isn't applied yet." + EOL + EOL + msg, "warn")
+        line = Int(Val(msg.Substring(5, msg.IndexOf(":") - 5)))
+        IF line > 0 THEN layoutEd.GotoLine(line)
+        RETURN FALSE
+    END IF
+    ' an object with a new name in the same place: its code follows
+    FOR i = 0 TO MATH.Min(oldTypes.Count, kType.Count) - 1
+        IF oldTypes[i] = kType[i] AND oldNames[i] <> GetP(i, "Name") THEN editor.Text = Renamed(editor.Text, oldNames[i], GetP(i, "Name"))
+    NEXT
+    IF Snapshot() <> before THEN PushUndo(before, beforeCode)
+    Did()
+    layoutShown = layoutEd.Text
+    IF sel >= kType.Count THEN sel = 0
+    FillObjects()
+    FillProps()
+    RETURN TRUE
+END FUNCTION
+
+' The layout read into the form. "" when it's good; otherwise what's wrong,
+' as "Line n: ...", and the form is as it was.
+FUNCTION ParseLayout (text AS String) AS String
+    VAR old AS String
+    VAR lines AS Array OF String
+    VAR k AS Integer
+    VAR t AS String
+    VAR i AS Integer
+    VAR rest AS String
+    VAR typ AS String
+    VAR nm AS String
+    VAR key AS String
+    VAR v AS String
+    VAR why AS String
+    VAR at AS Integer
+    old = Snapshot()
+    kType.Clear()
+    kProps.Clear()
+    i = -1
+    lines = text.Replace(Chr(13), "").Split(EOL)
+    FOR k = 0 TO lines.Count - 1
+        t = lines[k].Trim()
+        IF t = "" OR t.StartsWith("'") THEN CONTINUE
+        IF t.Upper().StartsWith("BEGIN ") THEN
+            rest = t.Substring(6, t.Length - 6).Trim()
+            at = rest.IndexOf(" ")
+            IF i >= 0 THEN
+                why = "a Begin before the End of " + GetP(i, "Name") + "."
+            ELSEIF at < 0 THEN
+                why = "Begin needs a kind and a name, like: Begin Button Command1"
+            ELSE
+                typ = KindOf(rest.Substring(0, at))
+                nm = rest.Substring(at + 1, rest.Length - at - 1).Trim()
+                IF typ = "" THEN
+                    why = Q + rest.Substring(0, at) + Q + " isn't a kind of object. The kinds: Form, " + KindList() + "."
+                ELSEIF typ = "Form" AND kType.Count > 0 THEN
+                    why = "there's only one Form, and it comes first."
+                ELSEIF typ <> "Form" AND kType.Count = 0 THEN
+                    why = "the Form comes first."
+                ELSEIF NOT IsIdent(nm) THEN
+                    why = Q + nm + Q + " can't be a name: letters, digits and _, starting with a letter."
+                ELSEIF NameTaken(nm, -1) THEN
+                    why = "two things are called " + nm + "."
+                ELSE
+                    kType.Add(typ)
+                    kProps.Add("")
+                    i = kType.Count - 1
+                    SetP(i, "Name", nm)
+                END IF
+            END IF
+        ELSEIF t.Upper() = "END" THEN
+            IF i < 0 THEN why = "an End without a Begin."
+            i = -1
+        ELSEIF i < 0 THEN
+            why = "this is outside any Begin...End."
+        ELSEIF NOT t.Contains("=") THEN
+            why = "a property is written Key = value."
+        ELSE
+            key = KeyOf(kType[i], t.Substring(0, t.IndexOf("=")).Trim())
+            v = t.Substring(t.IndexOf("=") + 1, t.Length - t.IndexOf("=") - 1).Trim()
+            IF key = "Name" THEN
+                why = "the name goes on the Begin line."
+            ELSEIF key = "" THEN
+                why = "a " + kType[i] + " has no " + t.Substring(0, t.IndexOf("=")).Trim() + ". It has: " + KeyList(kType[i]) + "."
+            ELSE
+                IF v.StartsWith(Q) THEN v = Unlit(v)
+                IF v <> Chr(0) THEN v = Checked(kType[i], key, v)
+                IF v = Chr(0) THEN
+                    why = "that isn't a good " + key + ". " + KindHelp(PropKind(kType[i], key))
+                ELSE
+                    SetP(i, key, v)
+                END IF
+            END IF
+        END IF
+        IF why <> "" THEN
+            LoadSnap(old)
+            RETURN "Line " + Str(k + 1) + ": " + why
+        END IF
+    NEXT
+    IF i >= 0 THEN why = GetP(i, "Name") + " has no End."
+    IF kType.Count = 0 THEN why = "there's no Begin Form."
+    IF why <> "" THEN
+        LoadSnap(old)
+        RETURN "Line " + Str(lines.Count) + ": " + why
+    END IF
+    RETURN ""
+END FUNCTION
+
+' A kind of object as written (any case), or "".
+FUNCTION KindOf (s AS String) AS String
+    VAR k AS String
+    FOR EACH k IN ["Form", "Label", "Button", "TextBox", "TextArea", "CheckBox", "RadioButton", "ListBox", "DropDown", "ProgressBar", "Canvas", "Timer", "MenuItem"]
+        IF k.Lower() = s.Lower() THEN RETURN k
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION KindList () AS String
+    RETURN "Label, Button, TextBox, TextArea, CheckBox, RadioButton, ListBox, DropDown, ProgressBar, Canvas, Timer and MenuItem"
+END FUNCTION
+
+' A property of kind t as written (any case), or "".
+FUNCTION KeyOf (t AS String, s AS String) AS String
+    VAR e AS String
+    FOR EACH e IN Props(t)
+        IF e.Split("|")[0].Lower() = s.Lower() THEN RETURN e.Split("|")[0]
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION KeyList (t AS String) AS String
+    VAR out AS Array OF String
+    VAR e AS String
+    FOR EACH e IN Props(t)
+        IF e.Split("|")[0] <> "Name" THEN out.Add(e.Split("|")[0])
+    NEXT
+    RETURN out.Join(", ")
+END FUNCTION
+
+' "He said ""hi""" as He said "hi"; Chr(0) if it isn't a whole string.
+FUNCTION Unlit (v AS String) AS String
+    VAR inner AS String
+    IF v.Length < 2 OR NOT v.EndsWith(Q) THEN RETURN Chr(0)
+    inner = v.Substring(1, v.Length - 2)
+    IF inner.Replace(Q + Q, "").Contains(Q) THEN RETURN Chr(0)
+    RETURN inner.Replace(Q + Q, Q)
+END FUNCTION
+
+' A value for a property, tidied; Chr(0) if it can't be one.
+FUNCTION Checked (t AS String, key AS String, v AS String) AS String
+    VAR kind AS String
+    VAR opts AS Array OF String
+    VAR k AS Integer
+    VAR ch AS String
+    kind = PropKind(t, key)
+    IF kind = "int" OR kind = "color" THEN
+        IF v = "" OR v = "-" THEN RETURN Chr(0)
+        FOR k = 0 TO v.Length - 1
+            ch = v.CharAt(k)
+            IF NOT (IsDigit(ch) OR (k = 0 AND ch = "-")) THEN RETURN Chr(0)
+        NEXT
+        IF kind = "color" AND (Val(v) < 0 OR Val(v) > 15) THEN RETURN Chr(0)
+        IF (key = "X" OR key = "Y") AND Val(v) < 0 THEN RETURN Chr(0)
+        IF (key = "Width" OR key = "Height") AND Val(v) < 1 THEN RETURN Chr(0)
+        IF key = "Level" AND (Val(v) < 0 OR Val(v) > 1) THEN RETURN Chr(0)
+        RETURN Str(Int(Val(v)))
+    END IF
+    IF kind = "bool" THEN
+        IF v.Upper() = "TRUE" OR v.Upper() = "FALSE" THEN RETURN v.Upper()
+        RETURN Chr(0)
+    END IF
+    IF kind.StartsWith("choice:") THEN
+        opts = kind.Substring(7, kind.Length - 7).Split(",")
+        IF opts.Contains(v.Lower()) THEN RETURN v.Lower()
+        RETURN Chr(0)
+    END IF
+    IF kind = "anchor" THEN
+        IF v.Trim() <> "" AND Anchors(v) = "" THEN RETURN Chr(0)
+        RETURN Anchors(v)
+    END IF
+    IF kind = "shortcut" THEN
+        IF ShortcutOk(v) THEN RETURN v
+        RETURN Chr(0)
+    END IF
+    IF v.Contains(Chr(10)) THEN RETURN Chr(0)
+    RETURN v
+END FUNCTION
+
+FUNCTION IsDigit (ch AS String) AS Bool
+    RETURN Asc(ch) >= 48 AND Asc(ch) <= 57
+END FUNCTION
+
+FUNCTION KindHelp (kind AS String) AS String
+    IF kind = "int" THEN RETURN "It's a whole number (X and Y not below 0, Width and Height at least 1)."
+    IF kind = "bool" THEN RETURN "It's TRUE or FALSE."
+    IF kind = "color" THEN RETURN "It's a colour from 0 to 15."
+    IF kind.StartsWith("choice:") THEN RETURN "It's one of: " + kind.Substring(7, kind.Length - 7).Replace(",", ", ") + "."
+    IF kind = "anchor" THEN RETURN "It's edges from Top, Bottom, Left and Right, like " + Q + "Top,Right" + Q + "."
+    IF kind = "shortcut" THEN RETURN "It's like " + Q + "Ctrl+O" + Q + " or " + Q + "F3" + Q + ", or " + Q + Q + " for none."
+    RETURN "It's text in quotes: " + Q + "like this" + Q + "."
+END FUNCTION
 
 ' ================================================================ running
 
@@ -1725,6 +3122,10 @@ SUB CodeBtn_OnClick ()
     ShowCode()
 END SUB
 
+SUB LayBtn_OnClick ()
+    ShowLayout()
+END SUB
+
 SUB RunBtn_OnClick ()
     RunIt()
 END SUB
@@ -1741,6 +3142,10 @@ SUB Menu_OnSelect (item AS String)
             SaveAs()
         CASE "Exit"
             win.Close()
+        CASE "Undo", "Redo", "Cut", "Copy", "Paste", "Duplicate", "Bring to Front", "Send to Back"
+            EditCmd(item)
+        CASE "Menu Editor..."
+            MenuEditor()
         CASE "Delete Control"
             IF sel > 0 THEN
                 DeleteSelected()
@@ -1751,6 +3156,8 @@ SUB Menu_OnSelect (item AS String)
             ShowCode()
         CASE "Form"
             ShowForm()
+        CASE "Layout"
+            ShowLayout()
         CASE "Start"
             RunIt()
         CASE "End"

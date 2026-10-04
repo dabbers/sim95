@@ -45,7 +45,8 @@ A series of programs for the sim95 playground
 * [`vspark/`](vspark/) – Visual SPARK, a Visual BASIC-style IDE: draw a
   window with a toolbox and a form designer, set properties, double-click a
   control to write its event's code from a template, and run it with F5.
-  Projects are ordinary .SPK files.
+  Also a Menu Editor, anchors for resizable windows, undo, copy and paste,
+  and the form's layout as editable text. Projects are ordinary .SPK files.
 * [`welcome/`](welcome/) – the Welcome Wagon, a greeter bot for
   STARTHERE. It waits in `#general` on every machine's Chat, says hello to
   newcomers, and points them at STARTHERE's sites. It also links every

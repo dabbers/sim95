@@ -221,7 +221,7 @@ await test("save as, then run: the program works, with its events joined up", as
   const file = dev.read("C:\\MYFILES\\GREET.SPK");
   assert.match(file, /^' PROJECT1\.SPK - made with Visual SPARK/, "your code first");
   assert.match(file, /\n' ===== Visual SPARK form: the designer writes everything from here to END OF FORM\. =====\n' FORM Form\|Name=Form1\|Title=Greeter\|Width=240\|Height=120\|/);
-  assert.match(file, /\n' CTRL Button\|Name=Command1\|Text=&Greet\|X=16\|Y=80\|Width=80\|Height=24\|Visible=TRUE\|Enabled=TRUE\|Default=TRUE\|Cancel=FALSE\n/);
+  assert.match(file, /\n' CTRL Button\|Name=Command1\|Text=&Greet\|X=16\|Y=80\|Width=80\|Height=24\|Visible=TRUE\|Anchor=Top,Left\|Enabled=TRUE\|Default=TRUE\|Cancel=FALSE\n/);
   assert.match(file, /\nVAR Command1 AS GUI_Button\n/);
   assert.match(file, /\n    Form1 = GUI_Window\.New\("Greeter", 240, 120\)\n/);
   assert.match(file, /\n    Command1\.SetBounds\(16, 80, 80, 24\)\n    Command1\.Text = "&Greet"\n    Command1\.Default = TRUE\n    Command1\.onClick = Command1_OnClick\n/);
@@ -342,6 +342,212 @@ await test("the Counter template counts; the Vapor game's file is a Vapor item",
   ide.menu("End");
   const game = dev.read("C:\\VSPARK\\TEMPLATE\\GAME.SPK");
   assert.match(game.split("\n")[0], /^' VAPOR\|id=MYGAME\|name=My Game\|kind=game\|version=1\|/);
+});
+
+// a new project from a template (0: the empty form)
+async function fresh(k = 0) {
+  dev.ui.answers.push(true);
+  ide.menu("New Project...");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 2, "New Project");
+  ide.pick(dev.widgets(ide.pid(), "ListBox")[2], k);
+  dev.widgets(ide.pid(), "Button").find((b) => b.get("Text") === "OK").call("Click");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 1 && ide.propObj().get("Items").length >= 1, "the new project");
+  dev.ui.dialogs.splice(0);
+}
+const objects = () => ide.propObj().get("Items").map((s) => s.split("  ")[0]);
+const button = (text, pid = ide.pid()) => dev.widgets(pid, "Button").find((b) => b.get("Text") === text);
+
+await test("Edit: undo and redo, copy, paste and duplicate, front and back, Shift+arrows to size", async () => {
+  await fresh();
+  await ide.tool("Button");
+  await ide.drag(16, 16, 16, 16);
+  await wait(() => ide.prop("Name") === "Command1", "Command1");
+  ide.keys().fire("onKey", "ArrowRight");
+  await wait(() => ide.prop("X") === "24", "nudged");
+  ide.menu("Undo");
+  await wait(() => ide.prop("X") === "16", "undone: " + ide.prop("X"));
+  ide.menu("Redo");
+  await wait(() => ide.prop("X") === "24", "redone");
+  ide.keys().fire("onKey", "Shift+ArrowRight");
+  ide.keys().fire("onKey", "Shift+ArrowDown");
+  await wait(() => ide.prop("Width") === "88" && ide.prop("Height") === "32", "sized: " + ide.prop("Width") + "x" + ide.prop("Height"));
+  ide.menu("Copy");
+  ide.menu("Paste");
+  await wait(() => ide.prop("Name") === "Command2", "pasted");
+  assert.deepEqual([ide.prop("X"), ide.prop("Y"), ide.prop("Width"), ide.prop("Text")], ["40", "32", "88", "Command1"]);
+  ide.menu("Duplicate");
+  await wait(() => ide.prop("Name") === "Command3", "duplicated");
+  assert.deepEqual([ide.prop("X"), ide.prop("Y")], ["56", "48"]);
+  await ide.select("Command1");
+  ide.menu("Bring to Front");
+  await wait(() => objects().join() === "Form1,Command2,Command3,Command1", "to the front: " + objects());
+  await ide.select("Command3");
+  ide.menu("Send to Back");
+  await wait(() => objects().join() === "Form1,Command3,Command2,Command1", "to the back: " + objects());
+  ide.menu("Undo");
+  await wait(() => objects().join() === "Form1,Command2,Command3,Command1", "undone: " + objects());
+  // undoing a rename puts its code back too
+  await ide.select("Command1");
+  ide.ctx().fire("onSelect", "View Code");
+  await wait(() => /SUB Command1_OnClick \(\)/.test(ide.code()), "its SUB");
+  ide.menu("Form");
+  await ide.select("Command1");
+  await ide.set("Name", "cmdGo");
+  await wait(() => /SUB cmdGo_OnClick \(\)/.test(ide.code()), "renamed");
+  ide.menu("Undo");
+  await wait(() => ide.prop("Name") === "Command1" && /SUB Command1_OnClick \(\)/.test(ide.code()), "rename undone: " + ide.prop("Name"));
+  // and the Edit menu leaves the code to the code window's own keys
+  ide.menu("Code");
+  ide.menu("Paste");
+  await wait(() => /use Ctrl\+Z/.test(ide.status()), "the code's own keys");
+  assert.equal(objects().length, 4);
+  ide.menu("Form");
+  assert.equal(errorsOf(), "");
+});
+
+await test("the Menu Editor: menus on the form, their code from the designer, and they work when it runs", async () => {
+  await fresh();
+  const me = {
+    cap: () => dev.widgets(ide.pid(), "TextBox")[1],
+    name: () => dev.widgets(ide.pid(), "TextBox")[2],
+    key: () => dev.widgets(ide.pid(), "DropDown")[3],
+    list: () => dev.widgets(ide.pid(), "ListBox").at(-1),
+    async type(text) { me.cap().set("Text", text); me.cap().fire("onChange"); await sleep(40); },
+    async click(text) { button(text).fire("onClick"); await sleep(60); },
+  };
+  ide.menu("Menu Editor...");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 2, "the Menu Editor");
+  await me.type("&File");
+  assert.equal(me.name().get("Text"), "mnuFile");
+  await me.click("&Next");
+  await me.click(">");
+  await me.type("&Open...");
+  assert.equal(me.name().get("Text"), "mnuFileOpen");
+  me.key().set("Selected", me.key().get("Items").indexOf("Ctrl+O"));
+  me.key().fire("onSelect");
+  await me.click("&Next");
+  await me.type("-");
+  await me.click("&Next");
+  await me.type("E&xit");
+  assert.deepEqual(me.list().get("Items").map((s) => s.replace(/ +/g, " ")), ["&File", "....&Open... Ctrl+O", "....-", "....E&xit"]);
+  await me.click("OK");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 1, "closed");
+  assert.deepEqual(objects(), ["Form1", "mnuFile", "mnuFileOpen", "mnuLine1", "mnuFileExit"]);
+  assert.ok(ide.drawn().includes("File"), "the menu bar on the form");
+  // the menu on the designer: its items, and choosing one goes to its code
+  ide.design().fire("onMouseDown", CX + 10, 10 + 25, 1);
+  await wait(() => ide.w("Menu", 3).items.join() === "Open...,Exit,Menu Editor...", "the File menu: " + ide.w("Menu", 3).items);
+  ide.w("Menu", 3).fire("onSelect", "Open...");
+  await wait(() => /SUB mnuFileOpen_OnClick \(\)\n    ' when Open\.\.\. is chosen from the menu/.test(ide.code()), "its SUB: " + ide.code());
+  ide.editor().set("Text", ide.code().replace(`    ' Form1.Title = "Chosen!"`, `    Form1.Title = "Chosen!"`));
+  ide.menu("Start");
+  await wait(() => proc("RUN") && dev.widgets(proc("RUN"), "Window")[0]?.get("Visible"), "running: " + errorsOf(), 20000);
+  const file = dev.read("C:\\VSPARK\\RUN.SPK");
+  assert.match(file, /    MenuBar = GUI_Menu\.New\(Form1\)\n    MenuBar\.AddMenu\("&File"\)\n    MenuBar\.AddItem\("&File", "&Open\.\.\." \+ Chr\(9\) \+ "Ctrl\+O"\)\n    MenuBar\.AddSeparator\("&File"\)\n    MenuBar\.AddItem\("&File", "E&xit"\)\n    MenuBar\.onSelect = MenuBar_OnSelect\n/);
+  assert.match(file, /SUB MenuBar_OnSelect \(item AS String\)\n    SELECT CASE item\n        CASE "Open\.\.\."\n            mnuFileOpen_OnClick\(\)\n    END SELECT\nEND SUB\n/);
+  dev.widgets(proc("RUN"), "Menu")[0].fire("onSelect", "Open...");
+  await wait(() => dev.widgets(proc("RUN"), "Window")[0].get("Title") === "Chosen!", "the item ran its SUB");
+  ide.menu("End");
+  await wait(() => !proc("RUN"), "ended");
+  // renaming an item in the editor renames its SUB; Cancel changes nothing
+  ide.menu("Menu Editor...");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 2, "the Menu Editor again");
+  ide.pick(me.list(), 1);
+  await sleep(40);
+  me.name().set("Text", "mnuOpen");
+  me.name().fire("onChange");
+  await me.click("OK");
+  await wait(() => /SUB mnuOpen_OnClick \(\)/.test(ide.code()) && objects().includes("mnuOpen"), "renamed: " + objects());
+  ide.menu("Menu Editor...");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 2, "and again");
+  await me.click("&Delete");
+  await me.click("Cancel");
+  await wait(() => dev.widgets(ide.pid(), "Window").length === 1, "cancelled");
+  assert.deepEqual(objects(), ["Form1", "mnuFile", "mnuOpen", "mnuLine1", "mnuFileExit"]);
+  // a bad shortcut is refused in Properties
+  await ide.select("mnuFileExit");
+  dev.ui.dialogs.splice(0);
+  await ide.set("Shortcut", "Ctrl+Banana");
+  assert.match(said(), /isn't a shortcut/);
+  await ide.set("Shortcut", "Ctrl+Q");
+  assert.equal(ide.prop("Shortcut"), "Ctrl+Q");
+  assert.equal(errorsOf(), "");
+});
+
+await test("anchors: controls keep to the edges they're anchored to, on the designer and when the program's window is resized", async () => {
+  await fresh();
+  await ide.tool("TextArea");
+  await ide.drag(8, 8, 8, 8);
+  await wait(() => ide.prop("Name") === "Memo1", "Memo1");
+  await ide.set("Width", "296");
+  await ide.set("Height", "176");
+  await ide.set("Anchor", "top, bottom, left, right");
+  assert.equal(ide.prop("Anchor"), "Top,Bottom,Left,Right");
+  await ide.tool("Button");
+  await ide.drag(224, 200, 224, 200);
+  await wait(() => ide.prop("Name") === "Command1", "Command1");
+  ide.props().set("Selected", ide.props().get("Items").findIndex((l) => l.startsWith("Anchor")));
+  ide.props().fire("onSelect");
+  for (let k = 0; k < 3; k++) { ide.props().fire("onDblClick"); await sleep(60); }
+  assert.equal(ide.prop("Anchor"), "Bottom,Right", "double-click goes through the usual ones");
+  await ide.select("Form1");
+  await ide.set("Width", "400");
+  await ide.set("Height", "280");
+  await ide.select("Command1");
+  assert.deepEqual([ide.prop("X"), ide.prop("Y")], ["304", "240"], "followed the corner");
+  await ide.select("Memo1");
+  assert.deepEqual([ide.prop("Width"), ide.prop("Height")], ["376", "216"], "stretched");
+  ide.menu("Start");
+  await wait(() => proc("RUN") && dev.widgets(proc("RUN"), "Window")[0]?.get("Visible"), "running: " + errorsOf(), 20000);
+  const w = dev.widgets(proc("RUN"), "Window")[0];
+  w.set("Width", 500);
+  w.set("Height", 300);
+  w.fire("onResize");
+  await sleep(200);
+  const b = dev.widgets(proc("RUN"), "Button")[0], m = dev.widgets(proc("RUN"), "TextArea")[0];
+  assert.deepEqual([b.get("X"), b.get("Y"), b.get("Width")], [404, 260, 80]);
+  assert.deepEqual([m.get("X"), m.get("Width"), m.get("Height")], [8, 476, 236]);
+  ide.menu("End");
+  await wait(() => !proc("RUN"), "ended");
+  assert.equal(errorsOf(), "");
+});
+
+await test("the layout view: the form as text; changes apply on going back, and mistakes are pointed out", async () => {
+  const lay = () => dev.widgets(ide.pid(), "TextArea")[1];
+  ide.menu("Layout");
+  await wait(() => lay().get("Visible") && /^Begin Form Form1$/m.test(lay().get("Text")), "the layout");
+  const text = lay().get("Text");
+  assert.match(text, /\nBegin Button Command1\n    Text = "Command1"\n    X = 304\n    Y = 240\n    Width = 80\n    Height = 24\n    Visible = TRUE\n    Anchor = "Bottom,Right"\n/);
+  lay().set("Text", text.replace("Begin Button Command1", "Begin Button cmdOk").replace("    X = 304", "    X = 296").replace(`Text = "Command1"`, `Text = "Say ""OK"""`));
+  ide.menu("Form");
+  await wait(() => !lay().get("Visible"), "applied");
+  await ide.select("cmdOk");
+  assert.deepEqual([ide.prop("X"), ide.prop("Text")], ["296", `Say "OK"`], ide.props().get("Items").join(" / "));
+  // a mistake: the layout stays, and says where
+  ide.menu("Layout");
+  await wait(() => lay().get("Visible"), "the layout again");
+  dev.ui.dialogs.splice(0);
+  const bad = lay().get("Text").replace("    Default = FALSE", "    Default = maybe");
+  lay().set("Text", bad);
+  ide.menu("Form");
+  await wait(() => /Line \d+: that isn't a good Default\. It's TRUE or FALSE\./.test(said()), "the mistake");
+  assert.ok(lay().get("Visible"), "still in the layout");
+  lay().set("Text", bad.replace("Begin Button cmdOk", "Begin Gizmo cmdOk").replace("    Default = maybe", "    Default = TRUE"));
+  ide.menu("Form");
+  await wait(() => /"Gizmo" isn't a kind of object/.test(said()), "an unknown kind");
+  lay().set("Text", bad.replace("    Default = maybe", "    Default = TRUE"));
+  ide.menu("Form");
+  await wait(() => !lay().get("Visible"), "fixed and applied");
+  await ide.select("cmdOk");
+  assert.equal(ide.prop("Default"), "TRUE");
+  ide.menu("Undo");
+  await wait(() => ide.prop("Default") === "FALSE", "undone");
+  ide.menu("Start");
+  await wait(() => proc("RUN") && dev.widgets(proc("RUN"), "Window")[0]?.get("Visible"), "it runs: " + errorsOf(), 20000);
+  assert.equal(dev.widgets(proc("RUN"), "Button")[0].get("Text"), `Say "OK"`);
+  ide.menu("End");
+  await wait(() => !proc("RUN"), "ended");
+  assert.equal(errorsOf(), "");
 });
 
 await test("closing with changes asks to save first", async () => {
