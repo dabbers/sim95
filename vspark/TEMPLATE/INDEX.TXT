@@ -1,0 +1,6 @@
+EMPTY.SPK|Empty form|A form with nothing on it yet: draw on it, then write its code.
+HELLO.SPK|Hello, world|A label and a button that changes it. The smallest real program.
+COUNTER.SPK|Counter|A timer that counts the seconds, and a button to start again.
+PAINT.SPK|Paint|A canvas to draw on with the mouse, in four colours.
+CHAT.SPK|Chat client|Talks to any machine's Chat service (port 6667), in #general.
+GAME.SPK|Vapor game|Catch the falling stars, with the arrow keys. Ready to publish in a Vapor store.

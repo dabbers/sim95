@@ -1,0 +1,16 @@
+' PROJECT1.SPK - made with Visual SPARK: a button that says hello.
+
+SUB Main ()
+    InitForm()
+    Form1.Show()
+END SUB
+
+SUB Command1_OnClick ()
+    Label1.Text = "Hello, world!"
+END SUB
+
+' ===== Visual SPARK form: the designer writes everything from here to END OF FORM. =====
+' FORM Form|Name=Form1|Title=Hello|Width=240|Height=96
+' CTRL Label|Name=Label1|Text=Press the button.|X=16|Y=16|Width=208|Height=16
+' CTRL Button|Name=Command1|Text=Say &Hello|X=16|Y=48|Width=96|Height=24|Default=TRUE
+' ===== END OF FORM =====

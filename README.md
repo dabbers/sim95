@@ -42,6 +42,10 @@ A series of programs for the sim95 playground
   server that serves many sites by name, Personal Web Manager to say which
   pages each name gets (`coolsite.sim`, `coolbook.sim` for SimBook...), `DIG`,
   and the resolver every program uses to look names up.
+* [`vspark/`](vspark/) – Visual SPARK, a Visual BASIC-style IDE: draw a
+  window with a toolbox and a form designer, set properties, double-click a
+  control to write its event's code from a template, and run it with F5.
+  Projects are ordinary .SPK files.
 * [`welcome/`](welcome/) – the Welcome Wagon, a greeter bot for
   STARTHERE. It waits in `#general` on every machine's Chat, says hello to
   newcomers, and points them at STARTHERE's sites. It also links every
@@ -90,5 +94,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

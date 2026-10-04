@@ -1,0 +1,53 @@
+' VAPOR|id=MYGAME|name=My Game|kind=game|version=1|category=Fun|run=C:\GAMES\MYGAME\MYGAME.SPK|files=C:\GAMES\MYGAME\MYGAME.SPK|tasks=MYGAME|startup=|folder=|about=Catch the falling stars. Made with Visual SPARK.
+' PROJECT1.SPK - a Vapor game made with Visual SPARK. To put it in a store:
+' change id (8 letters at most) and name in the line above, and MYGAME in the
+' paths to the same id; save it in C:\MYFILES on the store's machine; then
+' Vapor > Publish Apps. Raise version each time you publish a new one.
+
+VAR px AS Integer     ' the basket
+VAR sx AS Integer     ' the star
+VAR sy AS Integer
+VAR score AS Integer
+
+SUB Main ()
+    InitForm()
+    Form1.Show()
+    px = 100
+    NewStar()
+    Picture1.Focus()
+END SUB
+
+SUB NewStar ()
+    sx = 8 + Rnd(224)
+    sy = 0
+END SUB
+
+SUB Timer1_OnTick ()
+    sy = sy + 4
+    IF sy >= 184 THEN
+        IF sx >= px - 4 AND sx <= px + 44 THEN
+            score = score + 1
+        ELSE
+            score = 0
+        END IF
+        Label1.Text = "Score: " + Str(score)
+        NewStar()
+    END IF
+    Picture1.Clear()
+    Picture1.SetColor(11)
+    Picture1.FillCircle(sx, sy, 4)
+    Picture1.SetColor(6)
+    Picture1.FillRect(px, 188, 40, 8)
+END SUB
+
+SUB Picture1_OnKey (key AS String)
+    IF key = "ArrowLeft" THEN px = MATH.Max(0, px - 12)
+    IF key = "ArrowRight" THEN px = MATH.Min(200, px + 12)
+END SUB
+
+' ===== Visual SPARK form: the designer writes everything from here to END OF FORM. =====
+' FORM Form|Name=Form1|Title=My Game|Width=256|Height=240|Resizable=FALSE
+' CTRL Label|Name=Label1|Text=Score: 0|X=8|Y=8|Width=240|Height=16|Bold=TRUE
+' CTRL Canvas|Name=Picture1|X=8|Y=32|Width=240|Height=200|Background=0
+' CTRL Timer|Name=Timer1|X=216|Y=4|Interval=80|Enabled=TRUE
+' ===== END OF FORM =====

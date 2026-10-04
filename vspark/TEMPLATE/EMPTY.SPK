@@ -1,0 +1,11 @@
+' PROJECT1.SPK - made with Visual SPARK. Your code goes here; the form is at
+' the end of the file, and the designer looks after it.
+
+SUB Main ()
+    InitForm()
+    Form1.Show()
+END SUB
+
+' ===== Visual SPARK form: the designer writes everything from here to END OF FORM. =====
+' FORM Form|Name=Form1|Title=Form1|Width=320|Height=240
+' ===== END OF FORM =====

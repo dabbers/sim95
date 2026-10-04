@@ -1,0 +1,1713 @@
+' VSPARK.SPK - Visual SPARK: draw a program's window, then write what happens
+' when things in it are clicked, typed into or ticked. In the spirit of a
+' certain Visual BASIC.
+'
+'   Toolbox      pick a control, then drag where it goes on the form (or
+'                double-click it to drop one on the form)
+'   Designer     click to select, drag to move, the corner handle to size;
+'                Delete removes; double-click goes to the control's code
+'   Properties   pick a property, type its value, Enter; double-click a
+'                TRUE/FALSE or a choice to switch it
+'   Code         two drop-downs: an object and one of its events. Picking
+'                one goes to its SUB, writing it from a template if need be
+'   Run (F5)     saves and runs the program
+'
+' A project is one ordinary .SPK file that runs without Visual SPARK. Your
+' code comes first; the form comes last, between two marker lines, and the
+' designer writes that part every time it saves:
+'   ' FORM Form|Name=Form1|Title=...    what the designer reads back
+'   ' CTRL Button|Name=Command1|X=...
+'   VAR Command1 AS GUI_Button          what the program runs
+'   SUB InitForm () ... END SUB
+' A control's event is joined to its SUB (Command1.onClick =
+' Command1_OnClick) when that SUB is in your code.
+
+CONST HOME = "C:\VSPARK"
+CONST TEMPLATES = "C:\VSPARK\TEMPLATE"
+CONST SCRATCH = "C:\VSPARK\RUN.SPK"
+CONST MARKSTART = "' ===== Visual SPARK form"
+CONST MARKEND = "' ===== END OF FORM ====="
+CONST GRID = 8
+CONST FX = 10                     ' where the form is drawn on the designer
+CONST FY = 10
+CONST CX = 12                     ' the form's client area, on the designer
+CONST CY = 32
+CONST CHARW = 9                   ' a character, roughly, in a canvas's (fixed-pitch) text
+
+VAR EOL AS String
+VAR Q AS String
+VAR win AS GUI_Window
+VAR bar AS GUI_Menu
+VAR toolbox AS GUI_ListBox
+VAR design AS GUI_Canvas
+VAR editor AS GUI_TextArea
+VAR objList AS GUI_DropDown
+VAR evtList AS GUI_DropDown
+VAR formBtn AS GUI_Button
+VAR codeBtn AS GUI_Button
+VAR runBtn AS GUI_Button
+VAR propObj AS GUI_DropDown
+VAR propList AS GUI_ListBox
+VAR propEdit AS GUI_TextBox
+VAR propHelp AS GUI_TextArea
+
+' The form (0) and its controls: their type, and their properties as
+' Key=Value lines.
+VAR kType AS Array OF String
+VAR kProps AS Array OF String
+VAR sel AS Integer                ' the selected object
+VAR tool AS String                ' the control the toolbox will draw ("": the pointer)
+VAR projPath AS String            ' the project's file ("" until it is saved)
+VAR projName AS String
+VAR saved AS String               ' the project as last saved or opened
+VAR runPid AS Integer
+VAR codeView AS Bool
+VAR propKeys AS Array OF String   ' the properties behind propList
+VAR evtNames AS Array OF String   ' the events behind evtList
+
+' Dragging on the designer: new, move, size or form.
+VAR dragMode AS String
+VAR dragX0 AS Integer
+VAR dragY0 AS Integer
+VAR dragOX AS Integer
+VAR dragOY AS Integer
+VAR rx AS Integer
+VAR ry AS Integer
+VAR rw AS Integer
+VAR rh AS Integer
+VAR lastDown AS Integer
+VAR lastDownIdx AS Integer
+
+' File > New Project
+VAR tplWin AS GUI_Window
+VAR tplList AS GUI_ListBox
+VAR tplAbout AS GUI_Label
+VAR tplFiles AS Array OF String
+VAR tplNotes AS Array OF String
+
+SUB Main ()
+    VAR l AS GUI_Label
+    VAR hint AS String
+    VAR k AS Integer
+    EOL = Chr(10)
+    Q = Chr(34)
+    IF NOT FS.Exists(HOME) THEN FS.MakeDir(HOME)
+    win = GUI_Window.New("Visual SPARK", 780, 510)
+    win.Icon = "spark"
+    win.onClose = Win_OnClose
+    bar = GUI_Menu.New(win)
+    bar.onSelect = Menu_OnSelect
+    bar.AddMenu("&File")
+    bar.AddItem("&File", "&New Project..." + Chr(9) + "Ctrl+N")
+    bar.AddItem("&File", "&Open Project..." + Chr(9) + "Ctrl+O")
+    bar.AddItem("&File", "&Save Project" + Chr(9) + "Ctrl+S")
+    bar.AddItem("&File", "Save Project &As...")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "E&xit")
+    bar.AddMenu("&View")
+    bar.AddItem("&View", "&Code" + Chr(9) + "F7")
+    bar.AddItem("&View", "&Form" + Chr(9) + "Shift+F7")
+    bar.AddMenu("&Insert")
+    bar.AddItem("&Insert", "&Message Box")
+    bar.AddItem("&Insert", "&Yes or No Question")
+    bar.AddItem("&Insert", "&Open a File")
+    bar.AddItem("&Insert", "&Save a File")
+    bar.AddItem("&Insert", "&Random Number")
+    bar.AddItem("&Insert", "Run a &Program")
+    bar.AddMenu("&Run")
+    bar.AddItem("&Run", "&Start" + Chr(9) + "F5")
+    bar.AddItem("&Run", "&End")
+    bar.AddMenu("&Help")
+    bar.AddItem("&Help", "SPARK &Reference")
+    bar.AddItem("&Help", "&About Visual SPARK")
+
+    l = GUI_Label.New(win)
+    l.Text = "Toolbox"
+    l.Bold = TRUE
+    l.SetBounds(6, 8, 120, 16)
+    toolbox = GUI_ListBox.New(win)
+    toolbox.SetBounds(6, 26, 120, 220)
+    toolbox.Items = ["Pointer", "Label", "Button", "TextBox", "TextArea", "CheckBox", "RadioButton", "ListBox", "DropDown", "ProgressBar", "Canvas", "Timer"]
+    toolbox.onSelect = Toolbox_OnSelect
+    toolbox.onDblClick = Toolbox_OnDblClick
+    ' (labels don't wrap: a line each)
+    k = 0
+    FOR EACH hint IN ["Pick a control, then", "drag on the form where", "it goes.", "", "Double-click a control", "on the form to write", "its code. F5 runs it."]
+        l = GUI_Label.New(win)
+        l.Text = hint
+        l.SetBounds(6, 252 + k * 16, 124, 16)
+        k = k + 1
+    NEXT
+
+    formBtn = GUI_Button.New(win)
+    formBtn.Text = "&Form"
+    formBtn.SetBounds(134, 4, 70, 23)
+    formBtn.onClick = FormBtn_OnClick
+    codeBtn = GUI_Button.New(win)
+    codeBtn.Text = "&Code"
+    codeBtn.SetBounds(208, 4, 70, 23)
+    codeBtn.onClick = CodeBtn_OnClick
+    runBtn = GUI_Button.New(win)
+    runBtn.Text = "Run (F5)"
+    runBtn.SetBounds(514, 4, 70, 23)
+    runBtn.onClick = RunBtn_OnClick
+
+    design = GUI_Canvas.New(win)
+    design.SetBounds(134, 32, 450, 470)
+    design.Background = 8
+    design.onDraw = Design_OnDraw
+    design.onMouseDown = Design_OnMouseDown
+    design.onMouseMove = Design_OnMouseMove
+    design.onMouseUp = Design_OnMouseUp
+    design.onKey = Design_OnKey
+
+    objList = GUI_DropDown.New(win)
+    objList.SetBounds(134, 32, 220, 21)
+    objList.onSelect = ObjList_OnSelect
+    evtList = GUI_DropDown.New(win)
+    evtList.SetBounds(364, 32, 220, 21)
+    evtList.onSelect = EvtList_OnSelect
+    editor = GUI_TextArea.New(win)
+    editor.SetBounds(134, 58, 450, 444)
+    editor.Syntax = "SPARK"
+
+    l = GUI_Label.New(win)
+    l.Text = "Properties"
+    l.Bold = TRUE
+    l.SetBounds(592, 8, 180, 16)
+    propObj = GUI_DropDown.New(win)
+    propObj.SetBounds(592, 26, 182, 21)
+    propObj.onSelect = PropObj_OnSelect
+    propList = GUI_ListBox.New(win)
+    propList.SetBounds(592, 52, 182, 300)
+    propList.Mono = TRUE
+    propList.onSelect = PropList_OnSelect
+    propList.onDblClick = PropList_OnDblClick
+    propEdit = GUI_TextBox.New(win)
+    propEdit.SetBounds(592, 358, 182, 21)
+    propEdit.onEnter = PropEdit_OnEnter
+    propHelp = GUI_TextArea.New(win)
+    propHelp.SetBounds(592, 384, 182, 118)
+    propHelp.ReadOnly = TRUE
+    propHelp.WordWrap = TRUE
+
+    ' a project to start with: the one asked for, or an empty form
+    IF SYS.Args.Count > 0 THEN
+        IF FS.Exists(SYS.Args[0]) THEN
+            LoadText(FS.Read(SYS.Args[0]), SYS.Args[0])
+        END IF
+    END IF
+    IF kType.Count = 0 THEN LoadTemplate("EMPTY.SPK")
+    ShowForm()
+    win.Show()
+END SUB
+
+' (A window that is closing can't be kept open: so the question is whether
+' to save first.)
+SUB Win_OnClose ()
+    VAR box AS GUI_MessageBox
+    EndRun()
+    IF Dirty() THEN
+        box = GUI_MessageBox.New(win)
+        box.Title = "Visual SPARK"
+        box.Kind = "confirm"
+        box.Buttons = "yesno"
+        box.Text = "Save the changes to " + projName + " before closing?"
+        IF box.Show() THEN SaveProject()
+    END IF
+    SYS.Exit(0)
+END SUB
+
+SUB Say (text AS String, kind AS String)
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = "Visual SPARK"
+    box.Kind = kind
+    box.Text = text
+    box.Show()
+END SUB
+
+' ================================================================ the model
+
+FUNCTION GetP (i AS Integer, key AS String) AS String
+    VAR line AS String
+    FOR EACH line IN kProps[i].Split(EOL)
+        IF line.StartsWith(key + "=") THEN RETURN line.Substring(key.Length + 1, line.Length - key.Length - 1)
+    NEXT
+    RETURN PropDefault(kType[i], key)
+END FUNCTION
+
+FUNCTION GetN (i AS Integer, key AS String) AS Integer
+    RETURN Int(Val(GetP(i, key)))
+END FUNCTION
+
+FUNCTION GetB (i AS Integer, key AS String) AS Bool
+    RETURN GetP(i, key).Upper() = "TRUE"
+END FUNCTION
+
+SUB SetP (i AS Integer, key AS String, value AS String)
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR found AS Bool
+    FOR EACH line IN kProps[i].Split(EOL)
+        IF line = "" THEN CONTINUE
+        IF line.StartsWith(key + "=") THEN
+            out.Add(key + "=" + value)
+            found = TRUE
+        ELSE
+            out.Add(line)
+        END IF
+    NEXT
+    IF NOT found THEN out.Add(key + "=" + value)
+    kProps[i] = out.Join(EOL)
+END SUB
+
+' Each type's properties, in order: Key|kind|default. Kinds: name, text,
+' int, bool, items (separated by ;), color (0-15), choice:a,b,c.
+FUNCTION Props (t AS String) AS Array OF String
+    VAR out AS Array OF String
+    IF t = "Form" THEN
+        out = ["Name|name|Form1", "Title|text|Form1", "Width|int|320", "Height|int|240", "Status|text|", "Resizable|bool|TRUE", "Icon|choice:app,notes,terminal,spark,voyager,chat,network,settings,sketch,mines,monitor,help,folder,computer,info|app"]
+        RETURN out
+    END IF
+    out.Add("Name|name|")
+    IF t <> "Timer" AND t <> "ProgressBar" AND t <> "Canvas" THEN out.Add("Text|text|")
+    out.Add("X|int|0")
+    out.Add("Y|int|0")
+    IF t <> "Timer" THEN
+        out.Add("Width|int|64")
+        out.Add("Height|int|24")
+        out.Add("Visible|bool|TRUE")
+    END IF
+    out.Add("Enabled|bool|TRUE")
+    SELECT CASE t
+        CASE "Label"
+            out.Add("Align|choice:left,center,right|left")
+            out.Add("Bold|bool|FALSE")
+        CASE "Button"
+            out.Add("Default|bool|FALSE")
+            out.Add("Cancel|bool|FALSE")
+        CASE "TextBox"
+            out.Add("Password|bool|FALSE")
+            out.Add("ReadOnly|bool|FALSE")
+            out.Add("MaxLength|int|0")
+        CASE "TextArea"
+            out.Add("ReadOnly|bool|FALSE")
+            out.Add("WordWrap|bool|FALSE")
+        CASE "CheckBox"
+            out.Add("Checked|bool|FALSE")
+        CASE "RadioButton"
+            out.Add("Checked|bool|FALSE")
+            out.Add("Group|text|")
+        CASE "ListBox"
+            out.Add("Items|items|")
+            out.Add("Selected|int|-1")
+            out.Add("Mono|bool|FALSE")
+        CASE "DropDown"
+            out.Add("Items|items|")
+            out.Add("Selected|int|-1")
+        CASE "ProgressBar"
+            out.Add("Value|int|0")
+            out.Add("Max|int|100")
+        CASE "Canvas"
+            out.Add("Background|color|15")
+        CASE "Timer"
+            out.Add("Interval|int|1000")
+    END SELECT
+    RETURN out
+END FUNCTION
+
+FUNCTION PropEntry (t AS String, key AS String) AS String
+    VAR e AS String
+    FOR EACH e IN Props(t)
+        IF e.StartsWith(key + "|") THEN RETURN e
+    NEXT
+    RETURN ""
+END FUNCTION
+
+FUNCTION PropKind (t AS String, key AS String) AS String
+    VAR e AS String
+    e = PropEntry(t, key)
+    IF e = "" THEN RETURN "text"
+    RETURN e.Split("|")[1]
+END FUNCTION
+
+FUNCTION PropDefault (t AS String, key AS String) AS String
+    VAR e AS String
+    e = PropEntry(t, key)
+    IF e = "" THEN RETURN ""
+    RETURN e.Split("|")[2]
+END FUNCTION
+
+' Command1, Label1...: the names Visual BASIC gave them.
+FUNCTION Prefix (t AS String) AS String
+    SELECT CASE t
+        CASE "Button"
+            RETURN "Command"
+        CASE "TextBox"
+            RETURN "Text"
+        CASE "TextArea"
+            RETURN "Memo"
+        CASE "CheckBox"
+            RETURN "Check"
+        CASE "RadioButton"
+            RETURN "Option"
+        CASE "ListBox"
+            RETURN "List"
+        CASE "DropDown"
+            RETURN "Combo"
+        CASE "ProgressBar"
+            RETURN "Progress"
+        CASE "Canvas"
+            RETURN "Picture"
+    END SELECT
+    RETURN t
+END FUNCTION
+
+FUNCTION NameTaken (name AS String, but AS Integer) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO kType.Count - 1
+        IF i <> but AND GetP(i, "Name").Lower() = name.Lower() THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+FUNCTION NextName (t AS String) AS String
+    VAR n AS Integer
+    n = 1
+    WHILE NameTaken(Prefix(t) + Str(n), -1)
+        n = n + 1
+    END WHILE
+    RETURN Prefix(t) + Str(n)
+END FUNCTION
+
+FUNCTION DefaultW (t AS String) AS Integer
+    SELECT CASE t
+        CASE "Label"
+            RETURN 80
+        CASE "Button"
+            RETURN 80
+        CASE "TextArea"
+            RETURN 160
+        CASE "ListBox"
+            RETURN 120
+        CASE "ProgressBar"
+            RETURN 160
+        CASE "Canvas"
+            RETURN 160
+        CASE "Timer"
+            RETURN 24
+    END SELECT
+    RETURN 120
+END FUNCTION
+
+FUNCTION DefaultH (t AS String) AS Integer
+    SELECT CASE t
+        CASE "Label"
+            RETURN 16
+        CASE "TextBox"
+            RETURN 24
+        CASE "DropDown"
+            RETURN 24
+        CASE "CheckBox"
+            RETURN 16
+        CASE "RadioButton"
+            RETURN 16
+        CASE "ProgressBar"
+            RETURN 16
+        CASE "TextArea"
+            RETURN 80
+        CASE "ListBox"
+            RETURN 80
+        CASE "Canvas"
+            RETURN 96
+    END SELECT
+    RETURN 24
+END FUNCTION
+
+FUNCTION AddControl (t AS String, x AS Integer, y AS Integer, w AS Integer, h AS Integer) AS Integer
+    VAR i AS Integer
+    VAR name AS String
+    name = NextName(t)
+    kType.Add(t)
+    kProps.Add("")
+    i = kType.Count - 1
+    SetP(i, "Name", name)
+    IF t = "Label" OR t = "Button" OR t = "CheckBox" OR t = "RadioButton" THEN SetP(i, "Text", name)
+    SetP(i, "X", Str(x))
+    SetP(i, "Y", Str(y))
+    IF t <> "Timer" THEN
+        SetP(i, "Width", Str(w))
+        SetP(i, "Height", Str(h))
+    END IF
+    RETURN i
+END FUNCTION
+
+FUNCTION ClassOf (t AS String) AS String
+    IF t = "Form" THEN RETURN "GUI_Window"
+    RETURN "GUI_" + t
+END FUNCTION
+
+' ================================================================ events
+
+' Each type's events; the first is the one a double-click goes to.
+FUNCTION Events (t AS String) AS Array OF String
+    VAR out AS Array OF String
+    SELECT CASE t
+        CASE "Form"
+            out = ["Load", "onClose", "onResize", "onActivate", "onKey"]
+        CASE "Button"
+            out = ["onClick", "onKey"]
+        CASE "TextBox"
+            out = ["onChange", "onEnter", "onKey"]
+        CASE "TextArea"
+            out = ["onChange", "onCursor", "onKey"]
+        CASE "CheckBox"
+            out = ["onChange", "onKey"]
+        CASE "RadioButton"
+            out = ["onChange", "onKey"]
+        CASE "ListBox"
+            out = ["onSelect", "onDblClick", "onKey"]
+        CASE "DropDown"
+            out = ["onSelect", "onKey"]
+        CASE "Canvas"
+            out = ["onMouseDown", "onMouseMove", "onMouseUp", "onDraw", "onKey"]
+        CASE "Timer"
+            out = ["onTick"]
+        CASE ELSE
+            out = ["onKey"]
+    END SELECT
+    RETURN out
+END FUNCTION
+
+FUNCTION Params (evt AS String) AS String
+    SELECT CASE evt
+        CASE "onKey"
+            RETURN "key AS String"
+        CASE "onDraw"
+            RETURN "canvas AS GUI_Canvas"
+        CASE "onMouseDown"
+            RETURN "x AS Integer, y AS Integer, button AS Integer"
+        CASE "onMouseUp"
+            RETURN "x AS Integer, y AS Integer, button AS Integer"
+        CASE "onMouseMove"
+            RETURN "x AS Integer, y AS Integer"
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+' The SUB an event goes to: Command1_OnClick, or Main for the form's Load.
+FUNCTION HandlerOf (i AS Integer, evt AS String) AS String
+    IF evt = "Load" THEN RETURN "Main"
+    RETURN GetP(i, "Name") + "_On" + evt.Substring(2, evt.Length - 2)
+END FUNCTION
+
+' What a new SUB starts with: a line on when it runs, and an example.
+FUNCTION Body (i AS Integer, evt AS String) AS String
+    VAR n AS String
+    VAR form AS String
+    n = GetP(i, "Name")
+    form = GetP(0, "Name")
+    SELECT CASE evt
+        CASE "Load"
+            RETURN "    InitForm()" + EOL + "    " + form + ".Show()"
+        CASE "onClick"
+            RETURN "    ' when " + n + " is clicked. For example:" + EOL + "    ' " + form + ".Title = " + Q + "Clicked!" + Q
+        CASE "onChange"
+            IF kType[i] = "CheckBox" OR kType[i] = "RadioButton" THEN RETURN "    ' when " + n + " is ticked or unticked: " + n + ".Checked says which"
+            RETURN "    ' when the text in " + n + " changes: it's in " + n + ".Text"
+        CASE "onEnter"
+            RETURN "    ' when Enter is pressed in " + n + ". For example:" + EOL + "    ' " + form + ".Title = " + n + ".Text"
+        CASE "onSelect"
+            RETURN "    ' when something in " + n + " is picked: " + n + ".Selected is which (from 0)"
+        CASE "onDblClick"
+            RETURN "    ' when an item in " + n + " is double-clicked"
+        CASE "onTick"
+            RETURN "    ' every " + n + ".Interval milliseconds (" + n + ".Stop() stops it)"
+        CASE "onKey"
+            RETURN "    ' a key: " + Q + "A" + Q + ", " + Q + "Enter" + Q + ", " + Q + "ArrowLeft" + Q + ", " + Q + "Ctrl+S" + Q + "..." + EOL + "    IF key = " + Q + "Escape" + Q + " THEN " + form + ".Close()"
+        CASE "onMouseDown"
+            RETURN "    ' x and y are where, inside " + n + ". For example:" + EOL + "    " + n + ".SetColor(12)" + EOL + "    " + n + ".FillCircle(x, y, 3)"
+        CASE "onMouseMove"
+            RETURN "    ' the mouse moved over " + n + ", to x, y"
+        CASE "onMouseUp"
+            RETURN "    ' the mouse button went up over " + n
+        CASE "onDraw"
+            RETURN "    ' draw " + n + " here: it's shown, or its size changed" + EOL + "    canvas.SetColor(4)" + EOL + "    canvas.Text(8, 8, " + Q + "Hello" + Q + ")"
+        CASE "onClose"
+            RETURN "    ' the window is closing" + EOL + "    SYS.Exit(0)"
+        CASE "onResize"
+            RETURN "    ' the window changed size: " + form + ".Width and " + form + ".Height"
+        CASE "onActivate"
+            RETURN "    ' the window came to the front"
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+' ================================================================ reading and writing projects
+
+FUNCTION Enc (v AS String) AS String
+    RETURN v.Replace("%", "%25").Replace("|", "%7C")
+END FUNCTION
+
+FUNCTION Dec (v AS String) AS String
+    RETURN v.Replace("%7C", "|").Replace("%25", "%")
+END FUNCTION
+
+' A SPARK string literal: "He said ""hi"""
+FUNCTION Lit (s AS String) AS String
+    RETURN Q + s.Replace(Q, Q + Q) + Q
+END FUNCTION
+
+' The SUBs in the code, upper case, as ",NAME,NAME,".
+FUNCTION SubNames () AS String
+    VAR out AS String
+    VAR line AS String
+    VAR t AS String
+    VAR n AS String
+    out = ","
+    FOR EACH line IN editor.Text.Lines()
+        t = line.Trim()
+        IF t.Upper().StartsWith("SUB ") OR t.Upper().StartsWith("FUNCTION ") THEN
+            n = t.Substring(t.IndexOf(" ") + 1, t.Length - t.IndexOf(" ") - 1).Trim()
+            IF n.Contains("(") THEN n = n.Substring(0, n.IndexOf("("))
+            IF n.Contains(" ") THEN n = n.Substring(0, n.IndexOf(" "))
+            out = out + n.Upper() + ","
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+' The line (from 1) the SUB starts on, or 0.
+FUNCTION FindSub (name AS String) AS Integer
+    VAR lines AS Array OF String
+    VAR k AS Integer
+    VAR t AS String
+    lines = editor.Text.Lines()
+    FOR k = 0 TO lines.Count - 1
+        t = lines[k].Trim().Upper()
+        IF t.StartsWith("SUB " + name.Upper() + " ") OR t.StartsWith("SUB " + name.Upper() + "(") OR t = "SUB " + name.Upper() THEN RETURN k + 1
+    NEXT
+    RETURN 0
+END FUNCTION
+
+' The designer's part of the file: what it reads back, then what runs.
+FUNCTION Block () AS String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    VAR e AS String
+    VAR key AS String
+    VAR line AS String
+    VAR n AS String
+    VAR t AS String
+    VAR subs AS String
+    VAR item AS String
+    VAR evt AS String
+    subs = SubNames()
+    out.Add(MARKSTART + ": the designer writes everything from here to END OF FORM. =====")
+    FOR i = 0 TO kType.Count - 1
+        line = ""
+        FOR EACH e IN Props(kType[i])
+            key = e.Split("|")[0]
+            line = line + "|" + key + "=" + Enc(GetP(i, key))
+        NEXT
+        IF i = 0 THEN
+            out.Add("' FORM " + kType[i] + line)
+        ELSE
+            out.Add("' CTRL " + kType[i] + line)
+        END IF
+    NEXT
+    FOR i = 0 TO kType.Count - 1
+        out.Add("VAR " + GetP(i, "Name") + " AS " + ClassOf(kType[i]))
+    NEXT
+    out.Add("")
+    out.Add("SUB InitForm ()")
+    n = GetP(0, "Name")
+    out.Add("    " + n + " = GUI_Window.New(" + Lit(GetP(0, "Title")) + ", " + Str(GetN(0, "Width")) + ", " + Str(GetN(0, "Height")) + ")")
+    IF GetP(0, "Status") <> "" THEN out.Add("    " + n + ".Status = " + Lit(GetP(0, "Status")))
+    IF NOT GetB(0, "Resizable") THEN out.Add("    " + n + ".Resizable = FALSE")
+    IF GetP(0, "Icon") <> "app" THEN out.Add("    " + n + ".Icon = " + Lit(GetP(0, "Icon")))
+    FOR EACH evt IN Events("Form")
+        IF evt <> "Load" AND subs.Contains("," + HandlerOf(0, evt).Upper() + ",") THEN out.Add("    " + n + "." + evt + " = " + HandlerOf(0, evt))
+    NEXT
+    FOR i = 1 TO kType.Count - 1
+        n = GetP(i, "Name")
+        t = kType[i]
+        out.Add("    " + n + " = " + ClassOf(t) + ".New(" + GetP(0, "Name") + ")")
+        IF t <> "Timer" THEN out.Add("    " + n + ".SetBounds(" + Str(GetN(i, "X")) + ", " + Str(GetN(i, "Y")) + ", " + Str(GetN(i, "Width")) + ", " + Str(GetN(i, "Height")) + ")")
+        IF PropEntry(t, "Text") <> "" AND GetP(i, "Text") <> "" THEN out.Add("    " + n + ".Text = " + Lit(GetP(i, "Text")))
+        IF t <> "Timer" AND NOT GetB(i, "Visible") THEN out.Add("    " + n + ".Visible = FALSE")
+        IF t <> "Timer" AND NOT GetB(i, "Enabled") THEN out.Add("    " + n + ".Enabled = FALSE")
+        SELECT CASE t
+            CASE "Label"
+                IF GetP(i, "Align") <> "left" THEN out.Add("    " + n + ".Align = " + Lit(GetP(i, "Align")))
+                IF GetB(i, "Bold") THEN out.Add("    " + n + ".Bold = TRUE")
+            CASE "Button"
+                IF GetB(i, "Default") THEN out.Add("    " + n + ".Default = TRUE")
+                IF GetB(i, "Cancel") THEN out.Add("    " + n + ".Cancel = TRUE")
+            CASE "TextBox"
+                IF GetB(i, "Password") THEN out.Add("    " + n + ".Password = TRUE")
+                IF GetB(i, "ReadOnly") THEN out.Add("    " + n + ".ReadOnly = TRUE")
+                IF GetN(i, "MaxLength") > 0 THEN out.Add("    " + n + ".MaxLength = " + Str(GetN(i, "MaxLength")))
+            CASE "TextArea"
+                IF GetB(i, "ReadOnly") THEN out.Add("    " + n + ".ReadOnly = TRUE")
+                IF GetB(i, "WordWrap") THEN out.Add("    " + n + ".WordWrap = TRUE")
+            CASE "CheckBox"
+                IF GetB(i, "Checked") THEN out.Add("    " + n + ".Checked = TRUE")
+            CASE "RadioButton"
+                IF GetP(i, "Group") <> "" THEN out.Add("    " + n + ".Group = " + Lit(GetP(i, "Group")))
+                IF GetB(i, "Checked") THEN out.Add("    " + n + ".Checked = TRUE")
+            CASE "ListBox"
+                IF GetB(i, "Mono") THEN out.Add("    " + n + ".Mono = TRUE")
+                FOR EACH item IN GetP(i, "Items").Split(";")
+                    IF item.Trim() <> "" THEN out.Add("    " + n + ".Add(" + Lit(item.Trim()) + ")")
+                NEXT
+                IF GetN(i, "Selected") >= 0 THEN out.Add("    " + n + ".Selected = " + Str(GetN(i, "Selected")))
+            CASE "DropDown"
+                FOR EACH item IN GetP(i, "Items").Split(";")
+                    IF item.Trim() <> "" THEN out.Add("    " + n + ".Add(" + Lit(item.Trim()) + ")")
+                NEXT
+                IF GetN(i, "Selected") >= 0 THEN out.Add("    " + n + ".Selected = " + Str(GetN(i, "Selected")))
+            CASE "ProgressBar"
+                IF GetN(i, "Max") <> 100 THEN out.Add("    " + n + ".Max = " + Str(GetN(i, "Max")))
+                IF GetN(i, "Value") <> 0 THEN out.Add("    " + n + ".Value = " + Str(GetN(i, "Value")))
+            CASE "Canvas"
+                IF GetN(i, "Background") <> 15 THEN
+                    out.Add("    " + n + ".Background = " + Str(GetN(i, "Background")))
+                    out.Add("    " + n + ".Clear()")
+                END IF
+            CASE "Timer"
+                out.Add("    " + n + ".Interval = " + Str(MATH.Max(1, GetN(i, "Interval"))))
+        END SELECT
+        FOR EACH evt IN Events(t)
+            IF subs.Contains("," + HandlerOf(i, evt).Upper() + ",") THEN out.Add("    " + n + "." + evt + " = " + HandlerOf(i, evt))
+        NEXT
+    NEXT
+    ' timers start last, when everything they might touch is there
+    FOR i = 1 TO kType.Count - 1
+        IF kType[i] = "Timer" AND GetB(i, "Enabled") THEN out.Add("    " + GetP(i, "Name") + ".Start()")
+    NEXT
+    out.Add("END SUB")
+    out.Add(MARKEND)
+    RETURN out.Join(EOL) + EOL
+END FUNCTION
+
+' The code without blank lines at its end.
+FUNCTION Trimmed (code AS String) AS String
+    VAR lines AS Array OF String
+    lines = code.Replace(Chr(13), "").Split(EOL)
+    WHILE lines.Count > 0
+        IF lines[lines.Count - 1].Trim() <> "" THEN BREAK
+        lines.RemoveAt(lines.Count - 1)
+    END WHILE
+    RETURN lines.Join(EOL)
+END FUNCTION
+
+' The whole file: the code, then the form.
+FUNCTION Assemble () AS String
+    RETURN Trimmed(editor.Text) + EOL + EOL + Block()
+END FUNCTION
+
+' A project's file into the designer and the code window.
+SUB LoadText (text AS String, src AS String)
+    VAR code AS Array OF String
+    VAR line AS String
+    VAR inForm AS Bool
+    VAR p AS Array OF String
+    VAR k AS Integer
+    VAR i AS Integer
+    VAR kv AS String
+    kType.Clear()
+    kProps.Clear()
+    FOR EACH line IN text.Replace(Chr(13), "").Split(EOL)
+        IF line.StartsWith(MARKSTART) THEN
+            inForm = TRUE
+            CONTINUE
+        END IF
+        IF line.StartsWith(MARKEND) THEN
+            inForm = FALSE
+            CONTINUE
+        END IF
+        IF NOT inForm THEN
+            code.Add(line)
+        ELSEIF line.StartsWith("' FORM ") OR line.StartsWith("' CTRL ") THEN
+            p = line.Substring(7, line.Length - 7).Split("|")
+            kType.Add(p[0])
+            kProps.Add("")
+            i = kType.Count - 1
+            FOR k = 1 TO p.Count - 1
+                kv = p[k]
+                IF kv.Contains("=") THEN SetP(i, kv.Substring(0, kv.IndexOf("=")), Dec(kv.Substring(kv.IndexOf("=") + 1, kv.Length - kv.IndexOf("=") - 1)))
+            NEXT
+        END IF
+    NEXT
+    ' a file with no form (not made here): an empty form to start one
+    IF kType.Count = 0 OR kType[0] <> "Form" THEN
+        kType.Insert(0, "Form")
+        kProps.Insert(0, "")
+    END IF
+    editor.Text = Trimmed(code.Join(EOL)) + EOL
+    projPath = src
+    IF src = "" THEN
+        projName = "PROJECT1.SPK"
+    ELSE
+        projName = src.Substring(LastIndex(src, "\") + 1, src.Length - LastIndex(src, "\") - 1)
+    END IF
+    saved = Assemble()
+    sel = 0
+    tool = ""
+    toolbox.Selected = 0
+    FillObjects()
+    FillProps()
+    UpdateTitle()
+    Draw()
+END SUB
+
+FUNCTION LastIndex (s AS String, c AS String) AS Integer
+    VAR k AS Integer
+    FOR k = s.Length - 1 TO 0 STEP -1
+        IF s.CharAt(k) = c THEN RETURN k
+    NEXT
+    RETURN -1
+END FUNCTION
+
+SUB LoadTemplate (file AS String)
+    IF FS.Exists(TEMPLATES + "\" + file) THEN
+        LoadText(FS.Read(TEMPLATES + "\" + file), "")
+    ELSE
+        LoadText("SUB Main ()" + EOL + "    InitForm()" + EOL + "    Form1.Show()" + EOL + "END SUB" + EOL, "")
+    END IF
+    editor.Text = editor.Text.Replace("PROJECT1.SPK", projName)
+    saved = Assemble()
+END SUB
+
+SUB UpdateTitle ()
+    win.Title = "Visual SPARK - " + projName
+END SUB
+
+FUNCTION Dirty () AS Bool
+    RETURN Assemble() <> saved
+END FUNCTION
+
+FUNCTION MayDiscard () AS Bool
+    VAR box AS GUI_MessageBox
+    IF NOT Dirty() THEN RETURN TRUE
+    box = GUI_MessageBox.New(win)
+    box.Title = "Visual SPARK"
+    box.Kind = "confirm"
+    box.Buttons = "yesno"
+    box.Text = projName + " has changes that aren't saved." + EOL + EOL + "Throw them away?"
+    RETURN box.Show()
+END FUNCTION
+
+FUNCTION SaveTo (target AS String) AS Bool
+    TRY
+        FS.Write(target, Assemble())
+    CATCH err
+        Say("Couldn't save " + target + ":" + EOL + EOL + err, "error")
+        RETURN FALSE
+    END TRY
+    RETURN TRUE
+END FUNCTION
+
+SUB SaveProject ()
+    IF projPath = "" THEN
+        SaveAs()
+        RETURN
+    END IF
+    IF SaveTo(projPath) THEN
+        saved = Assemble()
+        win.Status = "Saved " + projPath
+    END IF
+END SUB
+
+SUB SaveAs ()
+    VAR fd AS GUI_FileDialog
+    VAR p AS String
+    fd = GUI_FileDialog.New(win)
+    fd.Title = "Save Project As"
+    fd.Filter = "*.SPK"
+    fd.Path = "C:\MYFILES"
+    fd.FileName = projName
+    p = fd.ShowSave()
+    IF p = "" THEN RETURN
+    IF NOT p.Upper().EndsWith(".SPK") THEN p = p + ".SPK"
+    projPath = p.Upper()
+    projName = projPath.Substring(LastIndex(projPath, "\") + 1, projPath.Length - LastIndex(projPath, "\") - 1)
+    UpdateTitle()
+    SaveProject()
+END SUB
+
+SUB OpenProject ()
+    VAR fd AS GUI_FileDialog
+    VAR p AS String
+    IF NOT MayDiscard() THEN RETURN
+    fd = GUI_FileDialog.New(win)
+    fd.Title = "Open Project"
+    fd.Filter = "*.SPK"
+    fd.Path = "C:\MYFILES"
+    p = fd.ShowOpen()
+    IF p = "" THEN RETURN
+    IF NOT FS.Exists(p) THEN
+        Say("There is no file called " + p + ".", "error")
+        RETURN
+    END IF
+    LoadText(FS.Read(p), p.Upper())
+    ShowForm()
+    win.Status = "Opened " + p
+END SUB
+
+' ================================================================ File > New Project
+
+SUB NewProject ()
+    VAR line AS String
+    VAR names AS Array OF String
+    VAR b AS GUI_Button
+    IF NOT MayDiscard() THEN RETURN
+    tplFiles.Clear()
+    tplNotes.Clear()
+    FOR EACH line IN ReadOr(TEMPLATES + "\INDEX.TXT", "EMPTY.SPK|Empty form|A form with nothing on it yet.").Lines()
+        IF line.Split("|").Count < 3 THEN CONTINUE
+        tplFiles.Add(line.Split("|")[0])
+        names.Add(line.Split("|")[1])
+        tplNotes.Add(line.Split("|")[2])
+    NEXT
+    tplWin = GUI_Window.New("New Project", 320, 230)
+    tplWin.Modal = TRUE
+    tplWin.Icon = "spark"
+    tplList = GUI_ListBox.New(tplWin)
+    tplList.SetBounds(8, 8, 304, 130)
+    tplList.Items = names
+    tplList.Selected = 0
+    tplList.onSelect = TplList_OnSelect
+    tplList.onDblClick = Tpl_Ok
+    tplAbout = GUI_Label.New(tplWin)
+    tplAbout.SetBounds(8, 144, 304, 44)
+    IF tplNotes.Count > 0 THEN tplAbout.Text = tplNotes[0]
+    b = GUI_Button.New(tplWin)
+    b.Text = "OK"
+    b.Default = TRUE
+    b.SetBounds(156, 196, 75, 24)
+    b.onClick = Tpl_Ok
+    b = GUI_Button.New(tplWin)
+    b.Text = "Cancel"
+    b.Cancel = TRUE
+    b.SetBounds(237, 196, 75, 24)
+    b.onClick = Tpl_Cancel
+    tplWin.Center()
+    tplWin.Show()
+    tplList.Focus()
+END SUB
+
+FUNCTION ReadOr (p AS String, fallback AS String) AS String
+    IF FS.Exists(p) THEN RETURN FS.Read(p)
+    RETURN fallback
+END FUNCTION
+
+SUB TplList_OnSelect ()
+    IF tplList.Selected >= 0 AND tplList.Selected < tplNotes.Count THEN tplAbout.Text = tplNotes[tplList.Selected]
+END SUB
+
+SUB Tpl_Ok ()
+    VAR k AS Integer
+    k = tplList.Selected
+    IF k < 0 OR k >= tplFiles.Count THEN RETURN
+    tplWin.Close()
+    LoadTemplate(tplFiles[k])
+    ShowForm()
+    win.Status = "A new project, from " + tplFiles[k] + ". Run it with F5."
+END SUB
+
+SUB Tpl_Cancel ()
+    tplWin.Close()
+END SUB
+
+' ================================================================ the designer
+
+FUNCTION Snap (v AS Integer) AS Integer
+    RETURN Int((v + GRID / 2) / GRID) * GRID
+END FUNCTION
+
+' Text cut to fit w pixels.
+FUNCTION Fit (s AS String, w AS Integer) AS String
+    VAR most AS Integer
+    most = MATH.Max(0, Int(w / CHARW))
+    IF s.Length > most THEN RETURN s.Substring(0, most)
+    RETURN s
+END FUNCTION
+
+SUB Bevel (x AS Integer, y AS Integer, w AS Integer, h AS Integer, raised AS Bool)
+    IF raised THEN
+        design.SetColor(15)
+    ELSE
+        design.SetColor(8)
+    END IF
+    design.Line(x, y, x + w - 1, y)
+    design.Line(x, y, x, y + h - 1)
+    IF raised THEN
+        design.SetColor(0)
+    ELSE
+        design.SetColor(15)
+    END IF
+    design.Line(x, y + h - 1, x + w - 1, y + h - 1)
+    design.Line(x + w - 1, y, x + w - 1, y + h - 1)
+END SUB
+
+SUB Draw ()
+    VAR w AS Integer
+    VAR h AS Integer
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR i AS Integer
+    IF codeView THEN RETURN
+    w = GetN(0, "Width")
+    h = GetN(0, "Height")
+    design.Background = 8
+    design.Clear()
+    ' the window: frame, title bar, client area with its grid
+    design.SetColor(7)
+    design.FillRect(FX, FY, w + 4, h + 24)
+    Bevel(FX, FY, w + 4, h + 24, TRUE)
+    design.SetColor(4)
+    design.FillRect(FX + 2, FY + 2, w, 18)
+    design.SetColor(15)
+    design.Text(FX + 6, FY + 5, Fit(GetP(0, "Title"), w - 12))
+    design.SetColor(8)
+    FOR y = 0 TO h - 1 STEP 16
+        FOR x = 0 TO w - 1 STEP 16
+            design.Pixel(CX + x, CY + y)
+        NEXT
+    NEXT
+    FOR i = 1 TO kType.Count - 1
+        DrawControl(i)
+    NEXT
+    ' the selection, and its handle
+    design.SetColor(0)
+    IF sel = 0 THEN
+        design.FillRect(CX + w - 3, CY + h - 3, 6, 6)
+    ELSEIF sel > 0 AND sel < kType.Count THEN
+        x = CX + GetN(sel, "X")
+        y = CY + GetN(sel, "Y")
+        design.SetColor(4)
+        design.Rect(x - 2, y - 2, CtlW(sel) + 4, CtlH(sel) + 4)
+        IF kType[sel] <> "Timer" THEN
+            design.SetColor(0)
+            design.FillRect(x + CtlW(sel) - 3, y + CtlH(sel) - 3, 6, 6)
+        END IF
+    END IF
+    ' a control being drawn
+    IF dragMode = "new" THEN
+        design.SetColor(0)
+        design.Rect(CX + rx, CY + ry, MATH.Max(1, rw), MATH.Max(1, rh))
+    END IF
+END SUB
+
+FUNCTION Stars (n AS Integer) AS String
+    VAR out AS String
+    VAR k AS Integer
+    FOR k = 1 TO n
+        out = out + "*"
+    NEXT
+    RETURN out
+END FUNCTION
+
+FUNCTION CtlW (i AS Integer) AS Integer
+    IF kType[i] = "Timer" THEN RETURN 24
+    RETURN GetN(i, "Width")
+END FUNCTION
+
+FUNCTION CtlH (i AS Integer) AS Integer
+    IF kType[i] = "Timer" THEN RETURN 24
+    RETURN GetN(i, "Height")
+END FUNCTION
+
+SUB DrawControl (i AS Integer)
+    VAR t AS String
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR w AS Integer
+    VAR h AS Integer
+    VAR s AS String
+    VAR ink AS Integer
+    VAR k AS Integer
+    VAR item AS String
+    t = kType[i]
+    x = CX + GetN(i, "X")
+    y = CY + GetN(i, "Y")
+    w = CtlW(i)
+    h = CtlH(i)
+    s = GetP(i, "Text").Replace("&", "")
+    ink = 0
+    IF NOT GetB(i, "Enabled") THEN ink = 8
+    SELECT CASE t
+        CASE "Label"
+            design.SetColor(ink)
+            s = Fit(s, w)
+            IF GetP(i, "Align") = "center" THEN
+                design.Text(x + MATH.Max(0, Int((w - s.Length * CHARW) / 2)), y + 2, s)
+            ELSEIF GetP(i, "Align") = "right" THEN
+                design.Text(x + MATH.Max(0, w - s.Length * CHARW), y + 2, s)
+            ELSE
+                design.Text(x, y + 2, s)
+            END IF
+        CASE "Button"
+            design.SetColor(7)
+            design.FillRect(x, y, w, h)
+            Bevel(x, y, w, h, TRUE)
+            IF GetB(i, "Default") THEN
+                design.SetColor(0)
+                design.Rect(x - 1, y - 1, w + 2, h + 2)
+            END IF
+            s = Fit(s, w - 2)
+            design.SetColor(ink)
+            design.Text(x + MATH.Max(2, Int((w - s.Length * CHARW) / 2)), y + Int((h - 12) / 2), s)
+        CASE "TextBox"
+            design.SetColor(15)
+            design.FillRect(x, y, w, h)
+            Bevel(x, y, w, h, FALSE)
+            IF GetB(i, "Password") THEN s = Stars(s.Length)
+            design.SetColor(ink)
+            design.Text(x + 4, y + Int((h - 12) / 2), Fit(s, w - 8))
+        CASE "TextArea"
+            design.SetColor(15)
+            design.FillRect(x, y, w, h)
+            Bevel(x, y, w, h, FALSE)
+            design.SetColor(7)
+            design.FillRect(x + w - 15, y + 1, 14, h - 2)
+            design.SetColor(ink)
+            design.Text(x + 4, y + 4, Fit(s, w - 22))
+        CASE "CheckBox"
+            design.SetColor(15)
+            design.FillRect(x, y + Int((h - 13) / 2), 13, 13)
+            Bevel(x, y + Int((h - 13) / 2), 13, 13, FALSE)
+            IF GetB(i, "Checked") THEN
+                design.SetColor(0)
+                design.Line(x + 3, y + Int((h - 13) / 2) + 3, x + 9, y + Int((h - 13) / 2) + 9)
+                design.Line(x + 9, y + Int((h - 13) / 2) + 3, x + 3, y + Int((h - 13) / 2) + 9)
+            END IF
+            design.SetColor(ink)
+            design.Text(x + 18, y + Int((h - 12) / 2), Fit(s, w - 18))
+        CASE "RadioButton"
+            design.SetColor(15)
+            design.FillCircle(x + 6, y + Int(h / 2), 6)
+            design.SetColor(8)
+            design.Circle(x + 6, y + Int(h / 2), 6)
+            IF GetB(i, "Checked") THEN
+                design.SetColor(0)
+                design.FillCircle(x + 6, y + Int(h / 2), 2)
+            END IF
+            design.SetColor(ink)
+            design.Text(x + 18, y + Int((h - 12) / 2), Fit(s, w - 18))
+        CASE "ListBox"
+            design.SetColor(15)
+            design.FillRect(x, y, w, h)
+            Bevel(x, y, w, h, FALSE)
+            design.SetColor(ink)
+            k = 0
+            FOR EACH item IN GetP(i, "Items").Split(";")
+                IF item.Trim() = "" OR 4 + k * 14 + 12 > h THEN CONTINUE
+                design.Text(x + 4, y + 3 + k * 14, Fit(item.Trim(), w - 8))
+                k = k + 1
+            NEXT
+        CASE "DropDown"
+            design.SetColor(15)
+            design.FillRect(x, y, w, h)
+            Bevel(x, y, w, h, FALSE)
+            design.SetColor(7)
+            design.FillRect(x + w - 17, y + 2, 15, h - 4)
+            Bevel(x + w - 17, y + 2, 15, h - 4, TRUE)
+            design.SetColor(0)
+            design.Line(x + w - 13, y + Int(h / 2) - 2, x + w - 6, y + Int(h / 2) - 2)
+            design.Line(x + w - 12, y + Int(h / 2) - 1, x + w - 7, y + Int(h / 2) - 1)
+            design.Line(x + w - 11, y + Int(h / 2), x + w - 8, y + Int(h / 2))
+            k = GetN(i, "Selected")
+            IF k >= 0 AND k < GetP(i, "Items").Split(";").Count THEN
+                design.SetColor(ink)
+                design.Text(x + 4, y + Int((h - 12) / 2), Fit(GetP(i, "Items").Split(";")[k].Trim(), w - 24))
+            END IF
+        CASE "ProgressBar"
+            design.SetColor(7)
+            design.FillRect(x, y, w, h)
+            Bevel(x, y, w, h, FALSE)
+            IF GetN(i, "Max") > 0 THEN
+                design.SetColor(4)
+                design.FillRect(x + 2, y + 2, Int((w - 4) * MATH.Min(GetN(i, "Value"), GetN(i, "Max")) / GetN(i, "Max")), h - 4)
+            END IF
+        CASE "Canvas"
+            design.SetColor(MATH.Max(0, MATH.Min(15, GetN(i, "Background"))))
+            design.FillRect(x, y, w, h)
+            design.SetColor(8)
+            design.Rect(x, y, w, h)
+            design.Text(x + 4, y + 4, Fit(GetP(i, "Name"), w - 8))
+        CASE "Timer"
+            design.SetColor(7)
+            design.FillRect(x, y, 24, 24)
+            Bevel(x, y, 24, 24, TRUE)
+            design.SetColor(15)
+            design.FillCircle(x + 12, y + 12, 8)
+            design.SetColor(0)
+            design.Circle(x + 12, y + 12, 8)
+            design.Line(x + 12, y + 12, x + 12, y + 6)
+            design.Line(x + 12, y + 12, x + 16, y + 12)
+    END SELECT
+END SUB
+
+' Which object is at x, y on the designer: a control (the one on top), the
+' form, or -1.
+FUNCTION HitAt (x AS Integer, y AS Integer) AS Integer
+    VAR i AS Integer
+    VAR px AS Integer
+    VAR py AS Integer
+    px = x - CX
+    py = y - CY
+    FOR i = kType.Count - 1 TO 1 STEP -1
+        IF px >= GetN(i, "X") AND py >= GetN(i, "Y") AND px < GetN(i, "X") + CtlW(i) AND py < GetN(i, "Y") + CtlH(i) THEN RETURN i
+    NEXT
+    IF x >= FX AND y >= FY AND x < CX + GetN(0, "Width") + 2 AND y < CY + GetN(0, "Height") + 2 THEN RETURN 0
+    RETURN -1
+END FUNCTION
+
+FUNCTION Near (x AS Integer, y AS Integer, hx AS Integer, hy AS Integer) AS Bool
+    RETURN Abs(x - hx) <= 4 AND Abs(y - hy) <= 4
+END FUNCTION
+
+SUB Design_OnDraw (canvas AS GUI_Canvas)
+    Draw()
+END SUB
+
+SUB Design_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    design.Focus()
+    ' drawing a new control
+    IF tool <> "" THEN
+        dragMode = "new"
+        dragX0 = MATH.Max(0, Snap(x - CX))
+        dragY0 = MATH.Max(0, Snap(y - CY))
+        rx = dragX0
+        ry = dragY0
+        rw = 0
+        rh = 0
+        RETURN
+    END IF
+    ' the selected control's handle: sizing it
+    IF sel > 0 AND sel < kType.Count THEN
+        IF kType[sel] <> "Timer" AND Near(x, y, CX + GetN(sel, "X") + CtlW(sel), CY + GetN(sel, "Y") + CtlH(sel)) THEN
+            dragMode = "size"
+            RETURN
+        END IF
+    END IF
+    ' the form's handle: sizing the form
+    IF Near(x, y, CX + GetN(0, "Width"), CY + GetN(0, "Height")) THEN
+        SelectObj(0)
+        dragMode = "form"
+        RETURN
+    END IF
+    i = HitAt(x, y)
+    IF i < 0 THEN RETURN
+    ' a second click on the same thing, quickly: its code
+    IF i = lastDownIdx AND lastDown <> 0 AND SYS.Ticks - lastDown < 450 THEN
+        lastDown = 0
+        OpenHandler(i, Events(kType[i])[0])
+        RETURN
+    END IF
+    lastDown = SYS.Ticks
+    lastDownIdx = i
+    SelectObj(i)
+    IF i > 0 THEN
+        dragMode = "move"
+        dragOX = x - CX - GetN(i, "X")
+        dragOY = y - CY - GetN(i, "Y")
+    END IF
+END SUB
+
+SUB Design_OnMouseMove (x AS Integer, y AS Integer)
+    VAR nx AS Integer
+    VAR ny AS Integer
+    SELECT CASE dragMode
+        CASE "new"
+            nx = MATH.Max(0, Snap(x - CX))
+            ny = MATH.Max(0, Snap(y - CY))
+            rx = MATH.Min(dragX0, nx)
+            ry = MATH.Min(dragY0, ny)
+            rw = Int(Abs(nx - dragX0))
+            rh = Int(Abs(ny - dragY0))
+            Draw()
+        CASE "move"
+            nx = MATH.Max(0, Snap(x - CX - dragOX))
+            ny = MATH.Max(0, Snap(y - CY - dragOY))
+            IF nx <> GetN(sel, "X") OR ny <> GetN(sel, "Y") THEN
+                SetP(sel, "X", Str(nx))
+                SetP(sel, "Y", Str(ny))
+                Draw()
+            END IF
+        CASE "size"
+            nx = MATH.Max(GRID, Snap(x - CX - GetN(sel, "X")))
+            ny = MATH.Max(GRID, Snap(y - CY - GetN(sel, "Y")))
+            IF nx <> GetN(sel, "Width") OR ny <> GetN(sel, "Height") THEN
+                SetP(sel, "Width", Str(nx))
+                SetP(sel, "Height", Str(ny))
+                Draw()
+            END IF
+        CASE "form"
+            nx = MATH.Max(64, Snap(x - CX))
+            ny = MATH.Max(32, Snap(y - CY))
+            IF nx <> GetN(0, "Width") OR ny <> GetN(0, "Height") THEN
+                SetP(0, "Width", Str(nx))
+                SetP(0, "Height", Str(ny))
+                Draw()
+            END IF
+    END SELECT
+END SUB
+
+SUB Design_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    VAR mode AS String
+    mode = dragMode
+    dragMode = ""
+    IF mode = "new" THEN
+        ' a click, not a drag: the control's usual size
+        IF rw < GRID OR rh < GRID THEN
+            rw = DefaultW(tool)
+            rh = DefaultH(tool)
+        END IF
+        i = AddControl(tool, rx, ry, rw, rh)
+        tool = ""
+        toolbox.Selected = 0
+        FillObjects()
+        SelectObj(i)
+        win.Status = GetP(i, "Name") + " is on the form. Double-click it to write its code."
+    ELSEIF mode <> "" THEN
+        FillProps()
+        Draw()
+    END IF
+END SUB
+
+SUB Design_OnKey (key AS String)
+    IF sel <= 0 OR sel >= kType.Count THEN RETURN
+    SELECT CASE key
+        CASE "Delete"
+            DeleteSelected()
+        CASE "ArrowLeft"
+            SetP(sel, "X", Str(MATH.Max(0, GetN(sel, "X") - GRID)))
+        CASE "ArrowRight"
+            SetP(sel, "X", Str(GetN(sel, "X") + GRID))
+        CASE "ArrowUp"
+            SetP(sel, "Y", Str(MATH.Max(0, GetN(sel, "Y") - GRID)))
+        CASE "ArrowDown"
+            SetP(sel, "Y", Str(GetN(sel, "Y") + GRID))
+        CASE ELSE
+            RETURN
+    END SELECT
+    FillProps()
+    Draw()
+END SUB
+
+SUB DeleteSelected ()
+    VAR name AS String
+    IF sel <= 0 OR sel >= kType.Count THEN RETURN
+    name = GetP(sel, "Name")
+    kType.RemoveAt(sel)
+    kProps.RemoveAt(sel)
+    FillObjects()
+    SelectObj(0)
+    win.Status = name + " is gone from the form. (Its code is still there: delete that too, or it won't run.)"
+END SUB
+
+SUB SelectObj (i AS Integer)
+    IF i < 0 OR i >= kType.Count THEN RETURN
+    sel = i
+    IF propObj.Selected <> i THEN propObj.Selected = i
+    FillProps()
+    Draw()
+END SUB
+
+SUB Toolbox_OnSelect ()
+    IF toolbox.Selected <= 0 THEN
+        tool = ""
+    ELSE
+        tool = toolbox.Get(toolbox.Selected)
+        win.Status = "Drag on the form where the " + tool + " goes."
+        IF codeView THEN ShowForm()
+    END IF
+END SUB
+
+' Double-click: one dropped on the form, a little below the last.
+SUB Toolbox_OnDblClick ()
+    VAR t AS String
+    VAR i AS Integer
+    VAR at AS Integer
+    IF toolbox.Selected <= 0 THEN RETURN
+    t = toolbox.Get(toolbox.Selected)
+    at = 8 + ((kType.Count - 1) MOD 8) * 16
+    i = AddControl(t, at, at, DefaultW(t), DefaultH(t))
+    tool = ""
+    toolbox.Selected = 0
+    FillObjects()
+    IF codeView THEN ShowForm()
+    SelectObj(i)
+END SUB
+
+' ================================================================ properties
+
+FUNCTION ObjLabel (i AS Integer) AS String
+    RETURN GetP(i, "Name") + "  (" + kType[i] + ")"
+END FUNCTION
+
+SUB FillObjects ()
+    VAR names AS Array OF String
+    VAR i AS Integer
+    FOR i = 0 TO kType.Count - 1
+        names.Add(ObjLabel(i))
+    NEXT
+    propObj.Items = names
+    propObj.Selected = sel
+    objList.Items = names
+END SUB
+
+SUB FillProps ()
+    VAR lines AS Array OF String
+    VAR e AS String
+    VAR key AS String
+    VAR keep AS Integer
+    IF sel < 0 OR sel >= kType.Count THEN RETURN
+    keep = propList.Selected
+    propKeys.Clear()
+    FOR EACH e IN Props(kType[sel])
+        key = e.Split("|")[0]
+        propKeys.Add(key)
+        lines.Add(key.PadRight(11) + GetP(sel, key))
+    NEXT
+    propList.Items = lines
+    IF keep >= 0 AND keep < lines.Count THEN propList.Selected = keep
+    IF propObj.Selected <> sel THEN propObj.Selected = sel
+END SUB
+
+SUB PropObj_OnSelect ()
+    IF propObj.Selected >= 0 AND propObj.Selected <> sel THEN SelectObj(propObj.Selected)
+END SUB
+
+SUB PropList_OnSelect ()
+    VAR key AS String
+    VAR kind AS String
+    IF propList.Selected < 0 OR propList.Selected >= propKeys.Count THEN RETURN
+    key = propKeys[propList.Selected]
+    kind = PropKind(kType[sel], key)
+    propEdit.Text = GetP(sel, key)
+    IF kind = "bool" THEN
+        propHelp.Text = key + ": TRUE or FALSE. Double-click it to switch."
+    ELSEIF kind.StartsWith("choice:") THEN
+        propHelp.Text = key + ": one of " + kind.Substring(7, kind.Length - 7).Replace(",", ", ") + ". Double-click it for the next."
+    ELSEIF kind = "items" THEN
+        propHelp.Text = key + ": the items, with ; between them. Type them and press Enter."
+    ELSEIF kind = "color" THEN
+        propHelp.Text = key + ": a colour, 0-15: 0 black, 4 navy, 7 silver, 9 red, 10 lime, 11 yellow, 12 blue, 15 white."
+    ELSEIF kind = "name" THEN
+        propHelp.Text = "Name: what the code calls it. Letters, digits and _, starting with a letter."
+    ELSE
+        propHelp.Text = key + ": type it and press Enter."
+    END IF
+END SUB
+
+SUB PropList_OnDblClick ()
+    VAR key AS String
+    VAR kind AS String
+    VAR opts AS Array OF String
+    VAR k AS Integer
+    IF propList.Selected < 0 OR propList.Selected >= propKeys.Count THEN RETURN
+    key = propKeys[propList.Selected]
+    kind = PropKind(kType[sel], key)
+    IF kind = "bool" THEN
+        IF GetB(sel, key) THEN
+            Apply(key, "FALSE")
+        ELSE
+            Apply(key, "TRUE")
+        END IF
+    ELSEIF kind.StartsWith("choice:") THEN
+        opts = kind.Substring(7, kind.Length - 7).Split(",")
+        k = opts.IndexOf(GetP(sel, key))
+        Apply(key, opts[(k + 1) MOD opts.Count])
+    ELSE
+        propEdit.Focus()
+        propEdit.SelectAll()
+    END IF
+END SUB
+
+SUB PropEdit_OnEnter ()
+    IF propList.Selected < 0 OR propList.Selected >= propKeys.Count THEN RETURN
+    Apply(propKeys[propList.Selected], propEdit.Text)
+END SUB
+
+' A property set by hand, checked first.
+SUB Apply (key AS String, value AS String)
+    VAR kind AS String
+    VAR old AS String
+    VAR opts AS Array OF String
+    kind = PropKind(kType[sel], key)
+    value = value.Replace(Chr(13), "").Replace(Chr(10), " ")
+    IF kind = "name" THEN
+        value = value.Trim()
+        IF NOT IsIdent(value) THEN
+            Say(Q + value + Q + " can't be a name: use letters, digits and _, starting with a letter.", "warn")
+            RETURN
+        END IF
+        IF NameTaken(value, sel) THEN
+            Say("Something else is already called " + value + ".", "warn")
+            RETURN
+        END IF
+        old = GetP(sel, "Name")
+        IF old <> value THEN editor.Text = Renamed(editor.Text, old, value)
+    ELSEIF kind = "int" THEN
+        value = Str(Int(Val(value)))
+        IF (key = "X" OR key = "Y") AND Val(value) < 0 THEN value = "0"
+        IF (key = "Width" OR key = "Height") AND Val(value) < GRID THEN value = Str(GRID)
+    ELSEIF kind = "bool" THEN
+        IF value.Trim().Upper().StartsWith("T") OR value.Trim().Upper().StartsWith("Y") OR value.Trim() = "1" THEN
+            value = "TRUE"
+        ELSE
+            value = "FALSE"
+        END IF
+    ELSEIF kind = "color" THEN
+        value = Str(MATH.Max(0, MATH.Min(15, Int(Val(value)))))
+    ELSEIF kind.StartsWith("choice:") THEN
+        opts = kind.Substring(7, kind.Length - 7).Split(",")
+        IF NOT opts.Contains(value.Trim().Lower()) THEN
+            Say(key + " is one of: " + opts.Join(", ") + ".", "warn")
+            RETURN
+        END IF
+        value = value.Trim().Lower()
+    END IF
+    SetP(sel, key, value)
+    IF kind = "name" THEN FillObjects()
+    FillProps()
+    PropList_OnSelect()
+    Draw()
+END SUB
+
+FUNCTION IsIdent (s AS String) AS Bool
+    VAR k AS Integer
+    VAR c AS Integer
+    IF s = "" OR s.Length > 30 THEN RETURN FALSE
+    FOR k = 0 TO s.Length - 1
+        c = Asc(s.CharAt(k).Upper())
+        IF c >= 65 AND c <= 90 THEN CONTINUE
+        IF k > 0 AND ((c >= 48 AND c <= 57) OR c = 95) THEN CONTINUE
+        RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION IsIdentChar (ch AS String) AS Bool
+    VAR c AS Integer
+    c = Asc(ch.Upper())
+    RETURN (c >= 65 AND c <= 90) OR (c >= 48 AND c <= 57) OR c = 95
+END FUNCTION
+
+' The code with a control's old name changed to its new one wherever it is
+' the control: Old.Text, and its SUBs, Old_OnClick (not inside other words).
+FUNCTION Renamed (code AS String, old AS String, name AS String) AS String
+    VAR out AS String
+    VAR rest AS String
+    VAR k AS Integer
+    VAR after AS String
+    VAR before AS String
+    rest = code
+    WHILE rest <> ""
+        k = rest.IndexOf(old)
+        IF k < 0 THEN
+            out = out + rest
+            rest = ""
+        ELSE
+            before = ""
+            IF k > 0 THEN before = rest.CharAt(k - 1)
+            IF k = 0 AND out <> "" THEN before = out.CharAt(out.Length - 1)
+            after = ""
+            IF k + old.Length < rest.Length THEN after = rest.CharAt(k + old.Length)
+            IF (before = "" OR NOT IsIdentChar(before)) AND (after = "." OR (after = "_" AND rest.Substring(k + old.Length, MATH.Min(3, rest.Length - k - old.Length)) = "_On")) THEN
+                out = out + rest.Substring(0, k) + name
+            ELSE
+                out = out + rest.Substring(0, k + old.Length)
+            END IF
+            rest = rest.Substring(k + old.Length, rest.Length - k - old.Length)
+        END IF
+    END WHILE
+    RETURN out
+END FUNCTION
+
+' ================================================================ the code window
+
+SUB ShowForm ()
+    codeView = FALSE
+    editor.Visible = FALSE
+    objList.Visible = FALSE
+    evtList.Visible = FALSE
+    design.Visible = TRUE
+    formBtn.Enabled = FALSE
+    codeBtn.Enabled = TRUE
+    Draw()
+END SUB
+
+SUB ShowCode ()
+    codeView = TRUE
+    design.Visible = FALSE
+    editor.Visible = TRUE
+    objList.Visible = TRUE
+    evtList.Visible = TRUE
+    formBtn.Enabled = TRUE
+    codeBtn.Enabled = FALSE
+    tool = ""
+    toolbox.Selected = 0
+    FillObjects()
+    IF objList.Selected <> sel THEN objList.Selected = sel
+    FillEvents(sel)
+END SUB
+
+' The events of object i, with "(code)" after those that have a SUB.
+SUB FillEvents (i AS Integer)
+    VAR names AS Array OF String
+    VAR evt AS String
+    VAR subs AS String
+    IF i < 0 OR i >= kType.Count THEN RETURN
+    subs = SubNames()
+    evtNames.Clear()
+    FOR EACH evt IN Events(kType[i])
+        evtNames.Add(evt)
+        IF subs.Contains("," + HandlerOf(i, evt).Upper() + ",") THEN
+            names.Add(evt + "  (code)")
+        ELSE
+            names.Add(evt)
+        END IF
+    NEXT
+    evtList.Items = names
+END SUB
+
+SUB ObjList_OnSelect ()
+    IF objList.Selected < 0 THEN RETURN
+    FillEvents(objList.Selected)
+END SUB
+
+SUB EvtList_OnSelect ()
+    VAR i AS Integer
+    i = objList.Selected
+    IF i < 0 OR i >= kType.Count OR evtList.Selected < 0 OR evtList.Selected >= evtNames.Count THEN RETURN
+    OpenHandler(i, evtNames[evtList.Selected])
+END SUB
+
+' The SUB for object i's event: there already, or written from its template.
+SUB OpenHandler (i AS Integer, evt AS String)
+    VAR name AS String
+    VAR line AS Integer
+    name = HandlerOf(i, evt)
+    line = FindSub(name)
+    IF line = 0 THEN
+        editor.Text = Trimmed(editor.Text) + EOL + EOL + "SUB " + name + " (" + Params(evt) + ")" + EOL + Body(i, evt) + EOL + "END SUB" + EOL
+        line = FindSub(name)
+        win.Status = name + " is new: write what happens there."
+    END IF
+    sel = i
+    IF NOT codeView THEN ShowCode()
+    IF objList.Selected <> i THEN objList.Selected = i
+    FillEvents(i)
+    editor.GotoLine(line + 1)
+    editor.Focus()
+END SUB
+
+' Insert menu: a piece of code at the cursor.
+SUB Snippet (which AS String)
+    VAR form AS String
+    VAR s AS String
+    VAR I4 AS String
+    form = GetP(0, "Name")
+    I4 = EOL + "    "
+    SELECT CASE which
+        CASE "Message Box"
+            s = "VAR box AS GUI_MessageBox" + I4 + "box = GUI_MessageBox.New(" + form + ")" + I4 + "box.Title = " + Lit("Hello") + I4 + "box.Text = " + Lit("Hello from Visual SPARK!") + I4 + "box.Show()"
+        CASE "Yes or No Question"
+            s = "VAR ask AS GUI_MessageBox" + I4 + "ask = GUI_MessageBox.New(" + form + ")" + I4 + "ask.Kind = " + Lit("confirm") + I4 + "ask.Buttons = " + Lit("yesno") + I4 + "ask.Text = " + Lit("Are you sure?") + I4 + "IF ask.Show() THEN" + I4 + "    ' they said yes" + I4 + "END IF"
+        CASE "Open a File"
+            s = "VAR openDlg AS GUI_FileDialog" + I4 + "VAR chosen AS String" + I4 + "openDlg = GUI_FileDialog.New(" + form + ")" + I4 + "openDlg.Path = " + Lit("C:\MYFILES") + I4 + "chosen = openDlg.ShowOpen()" + I4 + "IF chosen <> " + Q + Q + " THEN" + I4 + "    ' the file's text: FS.Read(chosen)" + I4 + "END IF"
+        CASE "Save a File"
+            s = "VAR saveDlg AS GUI_FileDialog" + I4 + "VAR target AS String" + I4 + "saveDlg = GUI_FileDialog.New(" + form + ")" + I4 + "saveDlg.Path = " + Lit("C:\MYFILES") + I4 + "target = saveDlg.ShowSave()" + I4 + "IF target <> " + Q + Q + " THEN FS.Write(target, " + Lit("what to save") + ")"
+        CASE "Random Number"
+            s = "' a whole number from 1 to 6, like a die" + I4 + "VAR roll AS Integer" + I4 + "roll = 1 + Rnd(6)"
+        CASE "Run a Program"
+            s = "SYS.Run(" + Lit("C:\PROGRAMS\NOTES.SPK") + ")"
+    END SELECT
+    IF s = "" THEN RETURN
+    IF NOT codeView THEN ShowCode()
+    ' (whole lines, at the start of the cursor's line, inside a SUB)
+    editor.Insert("    " + s + EOL)
+    editor.Focus()
+END SUB
+
+' ================================================================ running
+
+FUNCTION Alive (pid AS Integer) AS Bool
+    VAR task AS String
+    IF pid <= 0 THEN RETURN FALSE
+    FOR EACH task IN SYS.Tasks()
+        IF Int(Val(task.Split("|")[0])) = pid THEN RETURN TRUE
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' Run: the project saved (where it lives, or in C:\VSPARK if it has no
+' home yet) and started. A run still going is ended first.
+SUB RunIt ()
+    VAR target AS String
+    target = projPath
+    IF target = "" THEN target = SCRATCH
+    IF NOT SaveTo(target) THEN RETURN
+    IF projPath <> "" THEN saved = Assemble()
+    EndRun()
+    runPid = SYS.Run(target)
+    win.Status = "Running " + projName + ". (Errors show in their own window; Run > End stops it.)"
+END SUB
+
+SUB EndRun ()
+    IF Alive(runPid) THEN SYS.Kill(runPid)
+    runPid = 0
+END SUB
+
+' ================================================================ menus and buttons
+
+SUB FormBtn_OnClick ()
+    ShowForm()
+END SUB
+
+SUB CodeBtn_OnClick ()
+    ShowCode()
+END SUB
+
+SUB RunBtn_OnClick ()
+    RunIt()
+END SUB
+
+SUB Menu_OnSelect (item AS String)
+    SELECT CASE item
+        CASE "New Project..."
+            NewProject()
+        CASE "Open Project..."
+            OpenProject()
+        CASE "Save Project"
+            SaveProject()
+        CASE "Save Project As..."
+            SaveAs()
+        CASE "Exit"
+            win.Close()
+        CASE "Code"
+            ShowCode()
+        CASE "Form"
+            ShowForm()
+        CASE "Start"
+            RunIt()
+        CASE "End"
+            EndRun()
+            win.Status = "Stopped."
+        CASE "SPARK Reference"
+            SYS.Start("C:\PROGRAMS\NOTES.SPK", "C:\DOCS\SPARK.TXT")
+        CASE "About Visual SPARK"
+            Say("Visual SPARK 1.0 for SIM95" + EOL + EOL + "Draw a window, double-click what's on it, and write what happens. F5 runs it." + EOL + EOL + "A project is an ordinary .SPK file: your code, then the form, which the designer writes.", "info")
+        CASE ELSE
+            Snippet(item)
+    END SELECT
+END SUB

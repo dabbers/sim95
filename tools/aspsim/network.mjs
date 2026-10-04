@@ -67,6 +67,10 @@ class Widget {
   }
   get(p) {
     if (p === "Items") return [...this.items];
+    if (this.type === "TextArea" && (p === "Line" || p === "Column")) {
+      const before = String(this.props.Text ?? "").slice(0, this.props.SelStart ?? 0).split("\n");
+      return p === "Line" ? before.length : before[before.length - 1].length + 1;
+    }
     if (p === "Count") return this.items.length;
     if (p === "Title" || p === "Text") return this.type === "Window" ? this.props.Title : this.props.Text;
     if (p === "Focused" || p === "Active") return false;
@@ -81,6 +85,29 @@ class Widget {
     if (this.type === "Timer" && p === "Interval" && this.timer) { clearInterval(this.timer); this.timer = setInterval(() => this.fire("onTick"), Math.max(1, v)); }
   }
   call(m, ...a) {
+    // File dialogs: noted in ui.fileDialogs, answered from ui.files ("" = Cancel)
+    if (this.type === "FileDialog" && (m === "ShowOpen" || m === "ShowSave")) {
+      this.ui.fileDialogs.push({ pid: this.pid, mode: m === "ShowOpen" ? "open" : "save", title: this.props.Title, path: this.props.Path, filter: this.props.Filter, fileName: this.props.FileName });
+      return Promise.resolve(this.ui.files.length ? this.ui.files.shift() : "");
+    }
+    // A canvas keeps what was drawn on it since it was last cleared, for tests to look at
+    if (this.type === "Canvas" && m !== "SetBounds" && m !== "Focus" && m !== "Destroy") {
+      if (m === "Clear") this.ops = [];
+      else (this.ops ||= []).length < 20000 && this.ops.push([m, ...a]);
+      if (m === "SetColor") this.props.Color = a[0];
+      return;
+    }
+    if (this.type === "TextArea") {
+      const text = String(this.props.Text ?? "");
+      const lines = text.split("\n");
+      switch (m) {
+        case "GotoLine": { const n = Math.max(1, Math.min(lines.length, a[0])); this.props.SelStart = lines.slice(0, n - 1).reduce((t, l) => t + l.length + 1, 0); this.props.SelLength = 0; return; }
+        case "Insert": { const at = Math.min(text.length, this.props.SelStart ?? text.length); this.props.Text = text.slice(0, at) + String(a[0]) + text.slice(at); this.props.SelStart = at + String(a[0]).length; this.fire("onChange"); return; }
+        case "GetLine": return lines[a[0] - 1] ?? "";
+        case "LineCount": return lines.length;
+        default: break;
+      }
+    }
     if (this.type === "MessageBox" && m === "Show") {
       // A dialog: noted in ui.dialogs, answered from ui.answers (OK/Yes when empty)
       const d = { pid: this.pid, kind: this.props.Kind || "info", buttons: this.props.Buttons || "ok", title: this.props.Title, text: this.props.Text };
@@ -155,7 +182,7 @@ function htmlElements(html) {
 }
 
 class UI {
-  constructor() { this.widgets = []; this.kernel = null; this.dialogs = []; this.answers = []; }
+  constructor() { this.widgets = []; this.kernel = null; this.dialogs = []; this.answers = []; this.fileDialogs = []; this.files = []; }
   resource(pid, kind, n) { this.kernel?.proc(pid)?.sys.resource(kind, n); }
   registryFor(pid) {
     return { create: (type, parent, ...args) => new Widget(this, pid, type, parent, args), spec() {}, types: () => [] };

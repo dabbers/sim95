@@ -1,0 +1,41 @@
+' PROJECT1.SPK - made with Visual SPARK: draw with the mouse.
+
+VAR drawing AS Bool
+
+SUB Main ()
+    InitForm()
+    Form1.Show()
+END SUB
+
+' The colour picked in Combo1, as a palette number.
+FUNCTION Ink () AS Integer
+    VAR inks AS Array OF Integer
+    inks = [0, 9, 2, 12]
+    IF Combo1.Selected < 0 THEN RETURN 0
+    RETURN inks[Combo1.Selected]
+END FUNCTION
+
+SUB Picture1_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    drawing = TRUE
+    Picture1.SetColor(Ink())
+    Picture1.FillCircle(x, y, 2)
+END SUB
+
+SUB Picture1_OnMouseMove (x AS Integer, y AS Integer)
+    IF drawing THEN Picture1.FillCircle(x, y, 2)
+END SUB
+
+SUB Picture1_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
+    drawing = FALSE
+END SUB
+
+SUB Command1_OnClick ()
+    Picture1.Clear()
+END SUB
+
+' ===== Visual SPARK form: the designer writes everything from here to END OF FORM. =====
+' FORM Form|Name=Form1|Title=Paint|Width=320|Height=248
+' CTRL Canvas|Name=Picture1|X=8|Y=8|Width=304|Height=200|Background=15
+' CTRL DropDown|Name=Combo1|X=8|Y=216|Width=120|Height=24|Items=Black;Red;Green;Blue|Selected=0
+' CTRL Button|Name=Command1|Text=&Clear|X=232|Y=216|Width=80|Height=24
+' ===== END OF FORM =====

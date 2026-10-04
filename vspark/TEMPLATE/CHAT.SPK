@@ -1,0 +1,67 @@
+' PROJECT1.SPK - made with Visual SPARK: a chat client. Every machine runs a
+' Chat service on port 6667; put a machine's name in the box and Connect.
+
+VAR sock AS NET_Socket
+VAR conn AS NET_Connection
+VAR connected AS Bool
+
+SUB Main ()
+    InitForm()
+    sock = NET_Socket.New()
+    sock.onMessage = Sock_OnMessage
+    sock.onClose = Sock_OnClose
+    Text1.Text = NET.HostName.Split(".")[0].Lower()
+    Form1.Show()
+END SUB
+
+SUB Command1_OnClick ()
+    IF connected THEN RETURN
+    TRY
+        conn = sock.Connect(Text1.Text.Trim(), 6667)
+    CATCH err
+        List1.Add("*** Can't connect: " + err)
+        RETURN
+    END TRY
+    connected = TRUE
+    ' (the name first: JOIN goes once the service says it's taken)
+    conn.Send("NICK " + NET.HostName.Split(".")[0].Lower())
+END SUB
+
+SUB Sock_OnMessage (c AS NET_Connection, message AS String)
+    VAR p AS Array OF String
+    VAR cut AS Integer
+    p = message.Split(" ")
+    IF message.StartsWith("OK You are now ") THEN
+        conn.Send("JOIN #general")
+        List1.Add("*** Connected to " + Text1.Text)
+    ELSEIF p[0] = "MSG" AND p.Count >= 4 THEN
+        cut = p[0].Length + p[1].Length + p[2].Length + 3
+        List1.Add("<" + p[2] + "> " + message.Substring(cut, message.Length - cut))
+    ELSEIF p[0] = "JOIN" AND p.Count >= 3 THEN
+        List1.Add("*** " + p[2] + " came in")
+    ELSEIF p[0] = "PART" AND p.Count >= 3 THEN
+        List1.Add("*** " + p[2] + " left")
+    END IF
+    List1.ScrollToEnd()
+END SUB
+
+SUB Sock_OnClose (c AS NET_Connection)
+    connected = FALSE
+    List1.Add("*** Disconnected")
+END SUB
+
+SUB Command2_OnClick ()
+    IF NOT connected OR Text2.Text.Trim() = "" THEN RETURN
+    conn.Send("MSG #general " + Text2.Text)
+    Text2.Text = ""
+END SUB
+
+' ===== Visual SPARK form: the designer writes everything from here to END OF FORM. =====
+' FORM Form|Name=Form1|Title=Chat|Width=360|Height=264
+' CTRL Label|Name=Label1|Text=Machine:|X=8|Y=12|Width=56|Height=16
+' CTRL TextBox|Name=Text1|X=64|Y=8|Width=200|Height=24
+' CTRL Button|Name=Command1|Text=&Connect|X=272|Y=8|Width=80|Height=24
+' CTRL ListBox|Name=List1|X=8|Y=40|Width=344|Height=184
+' CTRL TextBox|Name=Text2|X=8|Y=232|Width=256|Height=24
+' CTRL Button|Name=Command2|Text=&Send|X=272|Y=232|Width=80|Height=24|Default=TRUE
+' ===== END OF FORM =====

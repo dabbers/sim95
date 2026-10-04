@@ -488,6 +488,22 @@ END SUB
     NicDone()`,
     code: () => startService + "\n" + read("simnic/SETUP.SPK").replace(/^CONST NICHOST = "[^"]*"/m, `CONST NICHOST = "${CENTRAL}"`),
   },
+  // Visual SPARK: build programs the Visual BASIC way. A Vapor app.
+  vspark: {
+    vapor: { id: "VSPARK", name: "Visual SPARK", kind: "program", category: "Programming", run: "C:\\PROGRAMS\\VSPARK.SPK", tasks: "VSPARK", startup: "", about: "Build programs the Visual BASIC way: draw the window, double-click what's on it, and write what happens. F5 runs it. Templates for a hello, a counter, paint, a chat client and a Vapor game." },
+    title: "Visual SPARK",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes Visual
+' SPARK to C:\\PROGRAMS\\VSPARK.SPK, and its project templates to
+' C:\\VSPARK\\TEMPLATE, and starts it. Draw a window, double-click what's on it,
+' and write what happens; F5 runs it. Projects are ordinary .SPK files (keep
+' them in C:\\MYFILES): they run without Visual SPARK.`,
+    copy: [["vspark/PROGRAMS", "C:\\PROGRAMS"], ["vspark/TEMPLATE", "C:\\VSPARK\\TEMPLATE"]],
+    dirs: ["C:\\VSPARK", "C:\\VSPARK\\TEMPLATE"],
+    first: [],
+    last: [`SYS.Start("C:\\PROGRAMS\\VSPARK.SPK", "")`],
+    done: `Print("Visual SPARK is running. Next time, start C:\\PROGRAMS\\VSPARK.SPK from Files, or open it from Vapor's Library.")`,
+    code: () => "",
+  },
   // The Welcome Wagon: the greeter bot, for the central host only (like
   // SimNIC, no vapor header: one greeter is plenty, two would talk at once).
   welcome: {
