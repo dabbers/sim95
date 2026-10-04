@@ -250,6 +250,94 @@ END FUNCTION
   return code;
 }
 
+// Explorer's icons: explorer/src/ICONS.TXT is 16 by 16 character art in
+// SIM95's own icon letters (the built-in icons are copied there, so Explorer's
+// match the desktop's). Each becomes SIM95PIC pictures for the Canvas: 16 and
+// 32 (doubled), plain, picked (dithered with navy, as Windows 95 does) and
+// ghosted (cut), on white; and the toolbar's, on silver, plain and greyed.
+function explorerIcons() {
+  const PAL = { k: "0", w: "F", g: "8", l: "7", b: "4", B: "C", c: "E", t: "6", y: "B", o: "3", a: "F", r: "9", m: "1", G: "A", d: "2", p: "5", M: "D", s: "7", e: "F", n: "B", f: "F" };
+  const DARK = "kgbmotdpBr";
+  const icons = [];
+  let name = null, rows = [];
+  for (const l of read("explorer/src/ICONS.TXT").replace(/\r/g, "").split("\n")) {
+    if (l.startsWith("# ")) { if (name) icons.push([name, rows]); name = l.slice(2).trim(); rows = []; }
+    else if (l.trim()) rows.push(l);
+  }
+  if (name) icons.push([name, rows]);
+  const pic = (grid, bg, fn) => `SIM95PIC ${grid[0].length} ${grid.length};` + grid.map((r, y) => [...r].map((ch, x) => (ch === "." ? bg : fn ? fn(ch, x, y) : PAL[ch])).join("")).join(";");
+  const twice = (g) => g.flatMap((r) => { const d = [...r].map((c) => c + c).join(""); return [d, d]; });
+  const sel = (ch, x, y) => ((x + y) % 2 === 0 ? "4" : PAL[ch]);
+  const ghost = (ch, x, y) => ((x + y) % 2 === 0 ? "F" : PAL[ch]);
+  const off = (g) => g.map((r, y) => [...r].map((ch, x) => {
+    if (ch !== "." && DARK.includes(ch)) return "8";
+    const up = y > 0 && x > 0 ? g[y - 1][x - 1] : ".";
+    return up !== "." && DARK.includes(up) ? "F" : "7";
+  }).join(""));
+  const L = [];
+  for (const [n, g] of icons) {
+    if (g.length !== 16 || g.some((r) => r.length !== 16)) throw new Error("Icon " + n + " isn't 16 by 16");
+    const big = twice(g);
+    if (n.startsWith("t_")) {
+      L.push(`    IcAdd(${lit(n)}, "", "", "", "", "", "", ${lit(pic(g, "7"))}, ${lit("SIM95PIC 16 16;" + off(g).join(";"))})`);
+    } else {
+      L.push(`    IcAdd(${lit(n)}, ${lit(pic(g, "F"))}, ${lit(pic(g, "F", sel))}, ${lit(pic(g, "F", ghost))}, ${lit(pic(big, "F"))}, ${lit(pic(big, "F", sel))}, ${lit(pic(big, "F", ghost))}, "", "")`);
+    }
+  }
+  const grid = (w, h, f) => `SIM95PIC ${w} ${h};` + Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => f(x, y)).join("")).join(";");
+  const box = (minus) => grid(9, 9, (x, y) => (x === 0 || y === 0 || x === 8 || y === 8 ? "8" : (y === 4 && x >= 2 && x <= 6) || (!minus && x === 4 && y >= 2 && y <= 6) ? "0" : "F"));
+  return `
+' ================================================================ the pictures (made by tools/build-installer.mjs)
+
+SUB IcAdd (n AS String, a AS String, b AS String, c AS String, d AS String, e AS String, f AS String, g AS String, h AS String)
+    icName.Add(n)
+    ic16.Add(a.Replace(";", Chr(10)))
+    ic16s.Add(b.Replace(";", Chr(10)))
+    ic16g.Add(c.Replace(";", Chr(10)))
+    ic32.Add(d.Replace(";", Chr(10)))
+    ic32s.Add(e.Replace(";", Chr(10)))
+    ic32g.Add(f.Replace(";", Chr(10)))
+    icTool.Add(g.Replace(";", Chr(10)))
+    icToolOff.Add(h.Replace(";", Chr(10)))
+END SUB
+
+SUB LoadIcons ()
+${L.join("\n")}
+    picPlus = ${lit(box(false))}.Replace(";", Chr(10))
+    picMinus = ${lit(box(true))}.Replace(";", Chr(10))
+    picVDots = ${lit(grid(1, 18, (x, y) => (y % 2 ? "F" : "8")))}.Replace(";", Chr(10))
+    picVHalf = ${lit(grid(1, 9, (x, y) => (y % 2 ? "F" : "8")))}.Replace(";", Chr(10))
+    picHDots = ${lit(grid(9, 1, (x) => (x % 2 ? "F" : "8")))}.Replace(";", Chr(10))
+    picTrack = ${lit(grid(16, 16, (x, y) => ((x + y) % 2 ? "F" : "7")))}.Replace(";", Chr(10))
+    picLatch = ${lit(grid(19, 18, (x, y) => ((x + y) % 2 ? "F" : "7")))}.Replace(";", Chr(10))
+END SUB
+`;
+}
+const explorerSource = () => ["MAIN", "VFS", "VIEW", "ACTIONS"].map((f) => read(`explorer/src/${f}.SPK`)).join("\n") + explorerIcons();
+
+// What FILES.SPK becomes when Explorer takes its place: the desktop's
+// My Computer (FILES.SPK C:\) opens My Computer; anything else as given.
+const explorerLauncher = () => `' FILES.SPK - opens Explorer (EXPLORER LAUNCHER). Explorer's installer put this
+' here; the Files that was here is FILES.BAK. If Explorer has gone, Files is
+' put back as it was, and started.
+SUB Main ()
+    VAR a AS String
+    VAR k AS Integer
+    FOR k = 0 TO SYS.Args.Count - 1
+        a = a + " " + SYS.Args[k]
+    NEXT
+    a = a.Trim()
+    IF FS.Exists("C:\\PROGRAMS\\EXPLORER.SPK") THEN
+        IF a = "C:\\" THEN a = "::COMPUTER"
+        SYS.Start("C:\\PROGRAMS\\EXPLORER.SPK", a)
+    ELSEIF FS.Exists("C:\\PROGRAMS\\FILES.BAK") THEN
+        FS.Write("C:\\PROGRAMS\\FILES.SPK", FS.Read("C:\\PROGRAMS\\FILES.BAK"))
+        FS.Delete("C:\\PROGRAMS\\FILES.BAK")
+        SYS.Start("C:\\PROGRAMS\\FILES.SPK", a)
+    END IF
+END SUB
+`;
+
 const apps = {
   simbook: {
     folder: "BOOK",
@@ -738,6 +826,63 @@ SUB FilesFix ()
 END SUB
 `;
     },
+  },
+  // Explorer: the file manager as Windows 95 has it, with mapped network
+  // drives. Its installer offers to put it where Files was, so My Computer
+  // and My Files on the desktop open it (FILES.SPK becomes a launcher).
+  explorer: {
+    vapor: { id: "EXPLORER", name: "Explorer", kind: "program", category: "System", run: "C:\\PROGRAMS\\EXPLORER.SPK", tasks: "EXPLORER", startup: "", about: "The file manager as Windows 95 has it: folders in a tree, files as icons, a list or details, and the network in the same window. Map another machine's disk as Z: and it's there every time. Drag and drop, Cut, Copy and Paste between machines, a Recycle Bin, Find, and Undo." },
+    title: "Explorer",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It writes
+' C:\\PROGRAMS\\EXPLORER.SPK: the file manager as Windows 95 has it, with the
+' folders in a tree and the network beside them. Tools > Map Network Drive
+' makes another machine's disk a drive letter. It asks whether My Computer and
+' My Files on the desktop should open Explorer: then C:\\PROGRAMS\\FILES.SPK
+' starts Explorer, and the Files that was there is kept as FILES.BAK.`,
+    copy: [],
+    generated: [{ dest: "C:\\PROGRAMS\\EXPLORER.SPK", text: () => explorerSource() }],
+    dirs: [],
+    first: [],
+    last: ["ExplorerDefault()"],
+    done: `Print("Open Explorer from C:\\PROGRAMS\\EXPLORER.SPK, or My Computer on the desktop.")`,
+    code: () => `
+VAR exWin AS GUI_Window
+
+' Files (FILES.SPK) becomes a launcher for Explorer, if wanted; the Files
+' that was there is kept as FILES.BAK, and comes back if Explorer is removed.
+SUB ExplorerDefault ()
+    VAR box AS GUI_MessageBox
+    VAR now AS String
+    IF NOT FS.Exists("C:\\PROGRAMS\\FILES.SPK") THEN RETURN
+    now = FS.Read("C:\\PROGRAMS\\FILES.SPK")
+    IF now.Contains("(EXPLORER LAUNCHER)") THEN
+        FS.Write("C:\\PROGRAMS\\FILES.SPK", ExplorerLauncher())
+        Print("  My Computer and My Files open Explorer.")
+        RETURN
+    END IF
+    exWin = GUI_Window.New("Explorer Setup", 10, 10)
+    box = GUI_MessageBox.New(exWin)
+    box.Title = "Explorer Setup"
+    box.Kind = "question"
+    box.Buttons = "yesno"
+    box.Text = "Should My Computer and My Files on the desktop, and the Network window's Files button, open Explorer?" + NL + NL + "(Files is kept, as C:\\PROGRAMS\\FILES.BAK. Run this again to change your mind.)"
+    IF NOT box.Show() THEN
+        exWin.Close()
+        Print("  Files is left as it is. Explorer is C:\\PROGRAMS\\EXPLORER.SPK.")
+        RETURN
+    END IF
+    exWin.Close()
+    FS.Write("C:\\PROGRAMS\\FILES.BAK", now)
+    FS.Write("C:\\PROGRAMS\\FILES.SPK", ExplorerLauncher())
+    Print("  My Computer and My Files open Explorer now (the old Files is FILES.BAK).")
+END SUB
+
+FUNCTION ExplorerLauncher () AS String
+    VAR s AS String
+${explorerLauncher().replace(/\r/g, "").replace(/\n$/, "").split("\n").map((l) => `    s = s + ${lit(l)} + NL`).join("\n")}
+    RETURN s
+END FUNCTION
+`,
   },
   // The npm registry: JavaScript packages for Node on SIM95, on the central
   // host. npm (node/lib/NPM.JS) talks to API.ASP; people browse INDEX.ASP.

@@ -1,0 +1,884 @@
+' EXPLORER.SPK - Explorer, the file manager as Windows 95 has it: the folders
+' in a tree on the left, what's in one on the right as icons, a list or
+' details, and the network in the same window. Map another machine's disk as
+' a drive letter (Tools > Map Network Drive: Z: is \\BRAVO\MYFILES) and it's in
+' the tree under My Computer, next to (C:), every time Explorer starts.
+'
+'   EXPLORER.SPK                  opens My Computer... or the folder given:
+'   EXPLORER.SPK C:\MYFILES       EXPLORER.SPK \\BRAVO\       EXPLORER.SPK Z:\
+'   EXPLORER.SPK /folder C:\DOCS  a folder window, without the tree
+'
+' Copy, Cut and Paste work between Explorer windows (C:\SYSTEM\EXPCLIP.TXT),
+' and between machines; so do dragging files onto a folder (a move on the
+' same disk, a copy to another one, as Windows does it; drag with the right
+' button to choose). Deleting from C: goes to the Recycle Bin (C:\RECYCLED).
+' A file on another machine opens in a copy here, and what you save goes back.
+'
+' Built from explorer/src: MAIN (this), VFS (paths, the network, drives, the
+' Recycle Bin), VIEW (drawing the tree and the files, the mouse and keys),
+' ACTIONS (what the menus do, and the dialogs) and the icons, which
+' tools/build-installer.mjs makes from explorer/src/ICONS.TXT.
+
+CONST ME = "C:\PROGRAMS\EXPLORER.SPK"
+CONST DRIVESFILE = "C:\SYSTEM\DRIVES.INI"
+CONST PWLFILE = "C:\SYSTEM\PASSWORD.PWL"
+CONST CLIPFILE = "C:\SYSTEM\EXPCLIP.TXT"
+CONST SETFILE = "C:\SYSTEM\EXPLORER.INI"
+CONST BINDIR = "C:\RECYCLED"
+CONST TEMPDIR = "C:\SYSTEM\TEMP"
+CONST ROWH = 18
+CONST TBH = 30
+CONST ADDRH = 26
+CONST HEADH = 20
+CONST SBW = 16
+CONST SPLITW = 5
+CONST INDENT = 19
+
+' ---- the window and its controls
+VAR win AS GUI_Window
+VAR bar AS GUI_Menu
+VAR ctx AS GUI_Menu
+VAR tb AS GUI_Canvas
+VAR combo AS GUI_DropDown
+VAR addrLabel AS GUI_Label
+VAR addr AS GUI_TextBox
+VAR cv AS GUI_Canvas
+VAR keys AS GUI_Button               ' takes the keys for the tree and the files (a Canvas gets none)
+VAR ren AS GUI_TextBox               ' typing a new name, over the old one
+VAR dialTimer AS GUI_Timer
+VAR clock AS GUI_Timer
+VAR comboPaths AS Array OF String
+VAR comboSetting AS Bool
+
+' ---- settings (C:\SYSTEM\EXPLORER.INI)
+VAR viewMode AS String               ' large, small, list, details
+VAR sortBy AS String                 ' name, type, size
+VAR showTree AS Bool
+VAR showToolbar AS Bool
+VAR showAddress AS Bool
+VAR statusOn AS Bool
+VAR hideExt AS Bool
+VAR showCaps AS Bool
+VAR treeW AS Integer
+
+' ---- where we are, and have been
+VAR cur AS String
+VAR hist AS Array OF String
+VAR hi AS Integer
+VAR travelling AS Bool
+
+' ---- the tree: what's showing, top to bottom
+VAR tPath AS Array OF String
+VAR tLabel AS Array OF String
+VAR tIcon AS Array OF String
+VAR tDepth AS Array OF Integer
+VAR tKids AS Array OF Integer        ' 0 none, 1 some, 2 not looked yet
+VAR tOpen AS Array OF Bool
+VAR tLines AS Array OF String        ' for each level above, "1": its line goes on down
+VAR tLast AS Array OF Bool
+VAR expanded AS String               ' |path|path|
+VAR noKids AS String                 ' |path| looked in, and nothing there
+VAR treeTop AS Integer
+VAR focusTree AS Bool
+
+' ---- the files in the folder
+VAR cName AS Array OF String
+VAR cPath AS Array OF String
+VAR cKind AS Array OF String         ' F, D, DRIVE, NETDRIVE, MACHINE, PLACE, APP
+VAR cSize AS Array OF Integer
+VAR cType AS Array OF String
+VAR cIcon AS Array OF String
+VAR cExtra AS Array OF String        ' Recycle Bin: where it was; Find: the folder it's in
+VAR cSel AS Array OF Bool
+VAR itX AS Array OF Integer
+VAR itY AS Array OF Integer
+VAR itW AS Array OF Integer
+VAR itH AS Array OF Integer
+VAR cFocus AS Integer
+VAR cAnchor AS Integer
+VAR listTop AS Integer
+VAR listLeft AS Integer
+VAR extentW AS Integer
+VAR extentH AS Integer
+VAR colW AS Array OF Integer
+VAR cutSet AS String
+VAR listError AS String
+
+' ---- the mouse
+VAR mode AS String                   ' "", press, drag, band, split, tthumb, lthumb, hthumb
+VAR downX AS Integer
+VAR downY AS Integer
+VAR downItem AS Integer
+VAR downButton AS Integer
+VAR grabOffset AS Integer
+VAR clickItem AS Integer
+VAR clickAt AS Integer
+VAR clickNode AS Integer
+VAR dropTarget AS String
+VAR bandX AS Integer
+VAR bandY AS Integer
+VAR lastPaint AS Integer
+VAR tbDown AS Integer
+VAR tbHintNow AS String
+
+' ---- the toolbar
+VAR tbId AS Array OF String
+VAR tbX AS Array OF Integer
+
+' ---- the network (VFS)
+VAR dialState AS String
+VAR dialHost AS String
+VAR dialErr AS String
+VAR dialConn AS NET_Connection
+VAR dialSock AS NET_Socket
+VAR nHost AS Array OF String
+VAR nConn AS Array OF NET_Connection
+VAR nSock AS Array OF NET_Socket
+VAR nReply AS Array OF String
+VAR nGot AS Array OF Bool
+VAR nClosed AS Array OF Bool
+VAR nAuthed AS Array OF Bool
+VAR lHost AS Array OF String
+VAR lUser AS Array OF String
+VAR lPass AS Array OF String
+VAR dLetter AS Array OF String
+VAR dTarget AS Array OF String
+VAR dKeep AS Array OF Bool
+VAR dDown AS Array OF Bool
+VAR machineNames AS Array OF String
+VAR machinesKnown AS Bool
+VAR mFiles AS Integer
+VAR mFolders AS Integer
+VAR mBytes AS Integer
+
+' ---- jobs, dialogs, undo
+VAR busy AS Bool
+VAR cancelFlag AS Bool
+VAR opStart AS Integer
+VAR progWin AS GUI_Window
+VAR progWhat AS GUI_Label
+VAR progFrom AS GUI_Label
+VAR progBar AS GUI_ProgressBar
+VAR progShown AS Bool
+VAR progCount AS Integer
+VAR dlg AS GUI_Window
+VAR dlgDone AS Bool
+VAR dlgOk AS Bool
+VAR dBox1 AS GUI_TextBox
+VAR dBox2 AS GUI_TextBox
+VAR dCheck1 AS GUI_CheckBox
+VAR dCheck2 AS GUI_CheckBox
+VAR dDrop AS GUI_DropDown
+VAR dList AS GUI_ListBox
+VAR lgWin AS GUI_Window
+VAR lgUser AS GUI_TextBox
+VAR lgPass AS GUI_TextBox
+VAR lgSave AS GUI_CheckBox
+VAR lgDone AS Bool
+VAR lgOk AS Bool
+VAR wLocal AS Array OF String        ' files from other machines open here: the copy,
+VAR wRemote AS Array OF String       ' where it came from,
+VAR wText AS Array OF String         ' and what it held when last sent
+VAR undoKind AS String
+VAR undoData AS Array OF String
+VAR findName AS String
+VAR findText AS String
+VAR findWhere AS String
+VAR findPaths AS Array OF String
+VAR promptAnswer AS String
+VAR repainted AS Bool
+VAR triedHost AS String
+VAR triedUser AS String
+
+' ---- icons (filled by LoadIcons, at the end)
+VAR icName AS Array OF String
+VAR ic16 AS Array OF String
+VAR ic16s AS Array OF String
+VAR ic16g AS Array OF String
+VAR ic32 AS Array OF String
+VAR ic32s AS Array OF String
+VAR ic32g AS Array OF String
+VAR icTool AS Array OF String
+VAR icToolOff AS Array OF String
+VAR picPlus AS String
+VAR picMinus AS String
+VAR picVDots AS String
+VAR picVHalf AS String
+VAR picLatch AS String
+VAR picHDots AS String
+VAR picTrack AS String
+
+SUB Main ()
+    VAR a AS String
+    VAR start AS String
+    VAR k AS Integer
+    LoadIcons()
+    LoadSettings()
+    LoadDrives()
+    IF NOT FS.Exists(TEMPDIR) THEN MakeDirs(TEMPDIR)
+    start = ""
+    FOR k = 0 TO SYS.Args.Count - 1
+        a = SYS.Args[k]
+        IF a.Lower() = "/folder" OR a.Lower() = "/n" THEN
+            showTree = FALSE
+        ELSEIF a.Lower() = "/e" THEN
+            showTree = TRUE
+        ELSEIF start = "" THEN
+            start = a
+        END IF
+    NEXT
+    cur = "::COMPUTER"
+    IF start <> "" THEN
+        IF Normalize(start, "C:\") <> "" THEN cur = Normalize(start, "C:\")
+        ' a file: its folder, with it picked
+        IF NOT IsVirtual(cur) AND NOT IsRemote(cur) THEN
+            IF FS.Exists(cur) AND NOT FS.IsDir(cur) THEN cur = ParentOf(cur)
+        END IF
+    END IF
+    expanded = "|::DESKTOP|::COMPUTER|"
+    hi = -1
+    cFocus = -1
+    cAnchor = -1
+    focusTree = FALSE
+
+    win = GUI_Window.New("Exploring", 720, 440)
+    win.Icon = "computer"
+    win.onResize = Win_OnResize
+    win.onClose = Win_OnClose
+    MakeMenus()
+    ' (the toolbar canvas first, so the folder box sits on top of it)
+    tb = GUI_Canvas.New(win)
+    tb.Background = 7
+    tb.onDraw = Tb_OnDraw
+    tb.onMouseDown = Tb_OnMouseDown
+    tb.onMouseUp = Tb_OnMouseUp
+    tb.onMouseMove = Tb_OnMouseMove
+    combo = GUI_DropDown.New(win)
+    combo.onSelect = Combo_OnSelect
+    addrLabel = GUI_Label.New(win)
+    addrLabel.Text = "A&ddress"
+    addr = GUI_TextBox.New(win)
+    addr.onEnter = Addr_OnEnter
+    ' a button too small to see, under the canvas: its keys are the tree's and the files'
+    keys = GUI_Button.New(win)
+    keys.SetBounds(2, TBH + ADDRH + 2, 1, 1)
+    keys.onKey = Keys_OnKey
+    cv = GUI_Canvas.New(win)
+    cv.Background = 7
+    cv.onDraw = Cv_OnDraw
+    cv.onMouseDown = Cv_OnMouseDown
+    cv.onMouseMove = Cv_OnMouseMove
+    cv.onMouseUp = Cv_OnMouseUp
+    ren = GUI_TextBox.New(win)
+    ren.Visible = FALSE
+    ren.onEnter = Ren_OnEnter
+    ren.onKey = Ren_OnKey
+    ren.MaxLength = 12
+    dialTimer = GUI_Timer.New(win)
+    dialTimer.Interval = 20
+    dialTimer.onTick = Dial_OnTick
+    dialTimer.Start()
+    clock = GUI_Timer.New(win)
+    clock.Interval = 1500
+    clock.onTick = Clock_OnTick
+    clock.Start()
+    MakeToolbar()
+    Layout()
+    win.Show()
+    keys.Focus()
+    Act("!go " + cur)
+    IF hist.Count = 0 THEN Act("!go ::COMPUTER")
+END SUB
+
+SUB Win_OnClose ()
+    SaveSettings()
+    ' this session's drives go with the last Explorer window
+    IF NOT OtherExplorers() THEN SaveDrives(FALSE)
+    SYS.Exit(0)
+END SUB
+
+FUNCTION OtherExplorers () AS Bool
+    VAR t AS String
+    FOR EACH t IN SYS.Tasks()
+        IF t.Split("|").Count > 1 THEN
+            IF t.Split("|")[0] <> Str(SYS.Pid) AND t.Split("|")[1].Upper().StartsWith("EXPLORER") THEN RETURN TRUE
+        END IF
+    NEXT
+    RETURN FALSE
+END FUNCTION
+
+' ---------------------------------------------------------------- settings
+
+SUB LoadSettings ()
+    VAR line AS String
+    VAR k AS String
+    VAR v AS String
+    viewMode = "large"
+    sortBy = "name"
+    showTree = TRUE
+    showToolbar = TRUE
+    showAddress = TRUE
+    statusOn = TRUE
+    hideExt = FALSE
+    showCaps = FALSE
+    treeW = 230
+    IF NOT FS.Exists(SETFILE) THEN RETURN
+    FOR EACH line IN FS.Read(SETFILE).Lines()
+        IF NOT line.Contains("=") THEN CONTINUE
+        k = line.Substring(0, line.IndexOf("=")).Trim().Lower()
+        v = line.Substring(line.IndexOf("=") + 1, line.Length - line.IndexOf("=") - 1).Trim()
+        SELECT CASE k
+            CASE "view"
+                IF "|large|small|list|details|".Contains("|" + v + "|") THEN viewMode = v
+            CASE "sort"
+                IF "|name|type|size|".Contains("|" + v + "|") THEN sortBy = v
+            CASE "tree"
+                showTree = v = "1"
+            CASE "toolbar"
+                showToolbar = v = "1"
+            CASE "address"
+                showAddress = v = "1"
+            CASE "status"
+                statusOn = v = "1"
+            CASE "hideext"
+                hideExt = v = "1"
+            CASE "caps"
+                showCaps = v = "1"
+            CASE "treewidth"
+                treeW = MATH.Max(80, MATH.Min(400, Int(Val(v))))
+        END SELECT
+    NEXT
+END SUB
+
+FUNCTION Flag (b AS Bool) AS String
+    IF b THEN RETURN "1"
+    RETURN "0"
+END FUNCTION
+
+SUB SaveSettings ()
+    TRY
+        FS.Write(SETFILE, "view=" + viewMode + Chr(10) + "sort=" + sortBy + Chr(10) + "tree=" + Flag(showTree) + Chr(10) + "toolbar=" + Flag(showToolbar) + Chr(10) + "address=" + Flag(showAddress) + Chr(10) + "status=" + Flag(statusOn) + Chr(10) + "hideext=" + Flag(hideExt) + Chr(10) + "caps=" + Flag(showCaps) + Chr(10) + "treewidth=" + Str(treeW) + Chr(10))
+    CATCH err
+    END TRY
+END SUB
+
+' ---------------------------------------------------------------- layout
+
+FUNCTION TopOfView () AS Integer
+    VAR y AS Integer
+    IF showToolbar THEN y = y + TBH
+    IF showAddress THEN y = y + ADDRH
+    RETURN y
+END FUNCTION
+
+SUB Layout ()
+    VAR y AS Integer
+    tb.Visible = showToolbar
+    combo.Visible = showToolbar
+    IF showToolbar THEN
+        tb.SetBounds(0, 0, win.Width, TBH)
+        combo.SetBounds(6, 4, 200, 22)
+        y = TBH
+    END IF
+    addrLabel.Visible = showAddress
+    addr.Visible = showAddress
+    IF showAddress THEN
+        addrLabel.SetBounds(6, y + 6, 50, 14)
+        addr.SetBounds(58, y + 2, win.Width - 64, 21)
+        y = y + ADDRH
+    END IF
+    cv.SetBounds(0, y, win.Width, MATH.Max(40, win.Height - y))
+    IF treeW > win.Width - 120 THEN treeW = MATH.Max(80, win.Width - 120)
+    IF NOT statusOn THEN win.Status = ""
+END SUB
+
+SUB Win_OnResize ()
+    EndRename(FALSE)
+    Layout()
+    LayoutList()
+    DrawToolbar()
+    Redraw()
+END SUB
+
+' ---------------------------------------------------------------- the menus
+
+SUB MakeMenus ()
+    bar = GUI_Menu.New(win)
+    bar.AddMenu("&File")
+    bar.AddItem("&File", "&Open")
+    bar.AddItem("&File", "&Explore")
+    bar.AddItem("&File", "&Edit")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "New &Folder")
+    bar.AddItem("&File", "New &Text Document")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "&Delete" + Chr(9) + "Del")
+    bar.AddItem("&File", "Rena&me" + Chr(9) + "F2")
+    bar.AddItem("&File", "P&roperties" + Chr(9) + "Alt+Enter")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "Restore")
+    bar.AddItem("&File", "Empty Recycle &Bin")
+    bar.AddSeparator("&File")
+    bar.AddItem("&File", "&Close")
+    bar.AddMenu("&Edit")
+    bar.AddItem("&Edit", "&Undo" + Chr(9) + "Ctrl+Z")
+    bar.AddSeparator("&Edit")
+    bar.AddItem("&Edit", "Cu&t" + Chr(9) + "Ctrl+X")
+    bar.AddItem("&Edit", "&Copy" + Chr(9) + "Ctrl+C")
+    bar.AddItem("&Edit", "&Paste" + Chr(9) + "Ctrl+V")
+    bar.AddSeparator("&Edit")
+    bar.AddItem("&Edit", "Select &All" + Chr(9) + "Ctrl+A")
+    bar.AddItem("&Edit", "&Invert Selection")
+    bar.AddMenu("&View")
+    bar.AddItem("&View", "&Toolbar")
+    bar.AddItem("&View", "&Address Bar")
+    bar.AddItem("&View", "Status &Bar")
+    bar.AddItem("&View", "&Folders")
+    bar.AddSeparator("&View")
+    bar.AddItem("&View", "Lar&ge Icons")
+    bar.AddItem("&View", "S&mall Icons")
+    bar.AddItem("&View", "&List")
+    bar.AddItem("&View", "&Details")
+    bar.AddSeparator("&View")
+    bar.AddItem("&View", "Arrange by &Name")
+    bar.AddItem("&View", "Arrange by T&ype")
+    bar.AddItem("&View", "Arrange by Si&ze")
+    bar.AddSeparator("&View")
+    bar.AddItem("&View", "&Refresh" + Chr(9) + "F5")
+    bar.AddItem("&View", "&Options...")
+    bar.AddMenu("&Go")
+    bar.AddItem("&Go", "&Back" + Chr(9) + "Alt+Left")
+    bar.AddItem("&Go", "&Forward" + Chr(9) + "Alt+Right")
+    bar.AddItem("&Go", "&Up One Level" + Chr(9) + "Backspace")
+    bar.AddSeparator("&Go")
+    bar.AddItem("&Go", "&My Computer")
+    bar.AddItem("&Go", "My &Files")
+    bar.AddItem("&Go", "&Network Neighborhood")
+    bar.AddItem("&Go", "&Recycle Bin")
+    bar.AddMenu("&Tools")
+    bar.AddItem("&Tools", "&Find..." + Chr(9) + "F3")
+    bar.AddSeparator("&Tools")
+    bar.AddItem("&Tools", "&Map Network Drive...")
+    bar.AddItem("&Tools", "&Disconnect Network Drive...")
+    bar.AddSeparator("&Tools")
+    bar.AddItem("&Tools", "&Go to..." + Chr(9) + "Ctrl+G")
+    bar.AddMenu("&Help")
+    bar.AddItem("&Help", "&About Explorer")
+    bar.onSelect = Menu_OnSelect
+    ctx = GUI_Menu.New(win)
+    ctx.onSelect = Menu_OnSelect
+END SUB
+
+' Ticks, and what can be chosen now.
+SUB UpdateMenus ()
+    VAR n AS Integer
+    VAR one AS Integer
+    VAR fileish AS Bool
+    n = SelCount()
+    one = FirstSel()
+    fileish = NOT IsVirtual(cur) OR cur = "::FIND"
+    bar.SetChecked("Toolbar", showToolbar)
+    bar.SetChecked("Address Bar", showAddress)
+    bar.SetChecked("Status Bar", statusOn)
+    bar.SetChecked("Folders", showTree)
+    bar.SetChecked("Large Icons", viewMode = "large")
+    bar.SetChecked("Small Icons", viewMode = "small")
+    bar.SetChecked("List", viewMode = "list")
+    bar.SetChecked("Details", viewMode = "details")
+    bar.SetChecked("Arrange by Name", sortBy = "name")
+    bar.SetChecked("Arrange by Type", sortBy = "type")
+    bar.SetChecked("Arrange by Size", sortBy = "size")
+    bar.SetEnabled("Open", n > 0)
+    bar.SetEnabled("Explore", n = 1 AND IsFolderish(one))
+    bar.SetEnabled("Edit", n = 1 AND KindOf(one) = "F")
+    bar.SetEnabled("New Folder", CanWriteHere())
+    bar.SetEnabled("New Text Document", CanWriteHere())
+    bar.SetEnabled("Delete", n > 0 AND (fileish OR cur = "::RECYCLE" OR AllKind("NETDRIVE")))
+    bar.SetEnabled("Rename", n = 1 AND (KindOf(one) = "F" OR KindOf(one) = "D") AND cur <> "::RECYCLE")
+    bar.SetEnabled("Properties", TRUE)
+    bar.SetEnabled("Restore", cur = "::RECYCLE" AND n > 0)
+    bar.SetEnabled("Empty Recycle Bin", BinLines().Count > 0)
+    bar.SetEnabled("Undo", undoKind <> "")
+    bar.SetEnabled("Cut", n > 0 AND CanCopySel())
+    bar.SetEnabled("Copy", n > 0 AND CanCopySel())
+    bar.SetEnabled("Paste", CanWriteHere() AND FS.Exists(CLIPFILE))
+    bar.SetEnabled("Back", hi > 0)
+    bar.SetEnabled("Forward", hi < hist.Count - 1)
+    bar.SetEnabled("Up One Level", ParentOf(cur) <> "")
+    bar.SetEnabled("Disconnect Network Drive...", dLetter.Count > 0)
+    DrawToolbar()
+END SUB
+
+SUB Menu_OnSelect (item AS String)
+    IF busy THEN RETURN
+    EndRename(TRUE)
+    busy = TRUE
+    TRY
+        DoCommand(item)
+    CATCH err
+        IF NOT err.StartsWith("!cancel") THEN ShowError(err)
+    END TRY
+    busy = FALSE
+    CloseProgress()
+    keys.Focus()
+    UpdateMenus()
+END SUB
+
+' ---------------------------------------------------------------- the toolbar
+
+SUB MakeToolbar ()
+    VAR ids AS Array OF String
+    VAR id AS String
+    VAR x AS Integer
+    ids = ["back", "fwd", "up", "|", "map", "unmap", "|", "cut", "copy", "paste", "|", "undo", "del", "props", "|", "large", "small", "list", "details"]
+    x = 214
+    FOR EACH id IN ids
+        tbId.Add(id)
+        tbX.Add(x)
+        IF id = "|" THEN
+            x = x + 8
+        ELSE
+            x = x + 24
+        END IF
+    NEXT
+    tbDown = -1
+END SUB
+
+FUNCTION TbHint (id AS String) AS String
+    SELECT CASE id
+        CASE "back"
+            RETURN "Back"
+        CASE "fwd"
+            RETURN "Forward"
+        CASE "up"
+            RETURN "Up One Level"
+        CASE "map"
+            RETURN "Map Network Drive"
+        CASE "unmap"
+            RETURN "Disconnect Net Drive"
+        CASE "cut"
+            RETURN "Cut"
+        CASE "copy"
+            RETURN "Copy"
+        CASE "paste"
+            RETURN "Paste"
+        CASE "undo"
+            RETURN "Undo"
+        CASE "del"
+            RETURN "Delete"
+        CASE "props"
+            RETURN "Properties"
+        CASE "large"
+            RETURN "Large Icons"
+        CASE "small"
+            RETURN "Small Icons"
+        CASE "list"
+            RETURN "List"
+        CASE "details"
+            RETURN "Details"
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+FUNCTION TbEnabled (id AS String) AS Bool
+    SELECT CASE id
+        CASE "back"
+            RETURN hi > 0
+        CASE "fwd"
+            RETURN hi < hist.Count - 1
+        CASE "up"
+            RETURN ParentOf(cur) <> ""
+        CASE "unmap"
+            RETURN dLetter.Count > 0
+        CASE "cut", "copy"
+            RETURN SelCount() > 0 AND CanCopySel()
+        CASE "paste"
+            RETURN CanWriteHere() AND FS.Exists(CLIPFILE)
+        CASE "undo"
+            RETURN undoKind <> ""
+        CASE "del"
+            RETURN SelCount() > 0 AND (NOT IsVirtual(cur) OR cur = "::RECYCLE" OR cur = "::FIND")
+    END SELECT
+    RETURN TRUE
+END FUNCTION
+
+SUB Tb_OnDraw (c AS GUI_Canvas)
+    DrawToolbar()
+END SUB
+
+SUB DrawToolbar ()
+    VAR i AS Integer
+    VAR id AS String
+    VAR x AS Integer
+    VAR on AS Bool
+    VAR latched AS Bool
+    IF NOT showToolbar OR IsNothing(tb) THEN RETURN
+    tb.SetColor(7)
+    tb.FillRect(0, 0, tb.Width, TBH)
+    ' the band's edges: a raised strip
+    tb.SetColor(15)
+    tb.Line(0, 0, tb.Width, 0)
+    tb.SetColor(8)
+    tb.Line(0, TBH - 2, tb.Width, TBH - 2)
+    tb.SetColor(15)
+    tb.Line(0, TBH - 1, tb.Width, TBH - 1)
+    FOR i = 0 TO tbId.Count - 1
+        id = tbId[i]
+        x = tbX[i]
+        IF id = "|" THEN
+            tb.SetColor(8)
+            tb.Line(x + 3, 4, x + 3, TBH - 6)
+            tb.SetColor(15)
+            tb.Line(x + 4, 4, x + 4, TBH - 6)
+            CONTINUE
+        END IF
+        IF x + 23 > tb.Width THEN CONTINUE
+        on = TbEnabled(id)
+        latched = id = viewMode
+        IF i = tbDown OR latched THEN
+            Bevel(tb, x, 3, 23, 22, FALSE)
+            IF latched AND i <> tbDown THEN tb.Picture(x + 2, 5, picLatch)
+            tb.Picture(x + 4, 7, ToolIcon(id, on))
+        ELSE
+            Bevel(tb, x, 3, 23, 22, TRUE)
+            tb.Picture(x + 3, 6, ToolIcon(id, on))
+        END IF
+    NEXT
+END SUB
+
+FUNCTION TbAt (x AS Integer, y AS Integer) AS Integer
+    VAR i AS Integer
+    IF y < 3 OR y > 25 THEN RETURN -1
+    FOR i = 0 TO tbId.Count - 1
+        IF tbId[i] <> "|" AND x >= tbX[i] AND x < tbX[i] + 23 THEN RETURN i
+    NEXT
+    RETURN -1
+END FUNCTION
+
+SUB Tb_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    IF busy THEN RETURN
+    i = TbAt(x, y)
+    IF i < 0 THEN RETURN
+    IF NOT TbEnabled(tbId[i]) THEN RETURN
+    tbDown = i
+    DrawToolbar()
+END SUB
+
+SUB Tb_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    VAR was AS Integer
+    was = tbDown
+    tbDown = -1
+    IF was < 0 THEN RETURN
+    DrawToolbar()
+    i = TbAt(x, y)
+    IF i <> was THEN RETURN
+    Menu_OnSelect(TbCommand(tbId[i]))
+END SUB
+
+SUB Tb_OnMouseMove (x AS Integer, y AS Integer)
+    VAR i AS Integer
+    VAR hint AS String
+    i = TbAt(x, y)
+    hint = ""
+    IF i >= 0 THEN hint = TbHint(tbId[i])
+    IF hint <> tbHintNow THEN
+        tbHintNow = hint
+        IF hint <> "" AND statusOn THEN
+            win.Status = hint
+        ELSE
+            ShowStatus()
+        END IF
+    END IF
+END SUB
+
+FUNCTION TbCommand (id AS String) AS String
+    SELECT CASE id
+        CASE "back"
+            RETURN "Back"
+        CASE "fwd"
+            RETURN "Forward"
+        CASE "up"
+            RETURN "Up One Level"
+        CASE "map"
+            RETURN "Map Network Drive..."
+        CASE "unmap"
+            RETURN "Disconnect Network Drive..."
+        CASE "cut"
+            RETURN "Cut"
+        CASE "copy"
+            RETURN "Copy"
+        CASE "paste"
+            RETURN "Paste"
+        CASE "undo"
+            RETURN "Undo"
+        CASE "del"
+            RETURN "Delete"
+        CASE "props"
+            RETURN "Properties"
+        CASE "large"
+            RETURN "Large Icons"
+        CASE "small"
+            RETURN "Small Icons"
+        CASE "list"
+            RETURN "List"
+        CASE "details"
+            RETURN "Details"
+    END SELECT
+    RETURN ""
+END FUNCTION
+
+' The folder box: Desktop, the folders down to this one, the drives, the network.
+SUB FillCombo ()
+    VAR chain AS Array OF String
+    VAR p AS String
+    VAR i AS Integer
+    VAR items AS Array OF String
+    VAR at AS Integer
+    VAR d AS Integer
+    p = cur
+    WHILE p <> ""
+        chain.Insert(0, p)
+        p = ParentOf(p)
+    END WHILE
+    comboPaths.Clear()
+    ComboAdd(items, "::DESKTOP", 0)
+    ComboAdd(items, "::COMPUTER", 1)
+    ComboAdd(items, "C:\", 2)
+    IF chain.Count > 3 AND chain[2] = "C:\" THEN
+        FOR i = 3 TO chain.Count - 1
+            ComboAdd(items, chain[i], i)
+        NEXT
+    END IF
+    FOR d = 0 TO dLetter.Count - 1
+        ComboAdd(items, dLetter[d] + ":\", 2)
+        IF chain.Count > 3 AND chain[2] = dLetter[d] + ":\" THEN
+            FOR i = 3 TO chain.Count - 1
+                ComboAdd(items, chain[i], i)
+            NEXT
+        END IF
+    NEXT
+    ComboAdd(items, "::NETWORK", 1)
+    IF chain.Count > 2 AND chain[1] = "::NETWORK" THEN
+        FOR i = 2 TO chain.Count - 1
+            ComboAdd(items, chain[i], i)
+        NEXT
+    END IF
+    ComboAdd(items, "::RECYCLE", 1)
+    IF cur = "::FIND" THEN ComboAdd(items, "::FIND", 1)
+    comboSetting = TRUE
+    combo.Items = items
+    at = comboPaths.IndexOf(cur)
+    combo.Selected = at
+    comboSetting = FALSE
+END SUB
+
+SUB ComboAdd (items AS Array OF String, p AS String, depth AS Integer)
+    VAR pad AS String
+    VAR k AS Integer
+    FOR k = 1 TO depth
+        pad = pad + Chr(160) + Chr(160) + Chr(160)
+    NEXT
+    items.Add(pad + PlaceLabel(p))
+    comboPaths.Add(p)
+END SUB
+
+SUB Combo_OnSelect ()
+    IF comboSetting OR busy THEN RETURN
+    IF combo.Selected < 0 OR combo.Selected >= comboPaths.Count THEN RETURN
+    Menu_OnSelect("!go " + comboPaths[combo.Selected])
+END SUB
+
+SUB Addr_OnEnter ()
+    IF busy THEN RETURN
+    Menu_OnSelect("!go " + addr.Text)
+END SUB
+
+' ---------------------------------------------------------------- going places
+
+' Shows a folder (a file: opens it). Remembered for Back, unless Back took us.
+SUB Go (target AS String)
+    VAR p AS String
+    VAR kind AS String
+    p = Normalize(target, cur)
+    IF p = "" THEN THROW "Cannot find '" + target + "'. Make sure the path or folder name is correct."
+    IF NOT IsVirtual(p) THEN
+        kind = VStat(p)
+        IF kind = "" THEN THROW "Cannot find '" + target + "'. Make sure the path or folder name is correct."
+        IF kind = "F" THEN
+            OpenFile(p, FALSE)
+            RETURN
+        END IF
+    END IF
+    cur = p
+    IF NOT travelling THEN
+        IF hi < 0 OR hist[MATH.Max(0, hi)] <> cur THEN
+            WHILE hist.Count > hi + 1
+                hist.RemoveAt(hist.Count - 1)
+            END WHILE
+            hist.Add(cur)
+            hi = hist.Count - 1
+        END IF
+    END IF
+    ' the tree shows where we are
+    p = ParentOf(cur)
+    WHILE p <> ""
+        IF NOT expanded.Contains("|" + p + "|") THEN expanded = expanded + p + "|"
+        p = ParentOf(p)
+    END WHILE
+    listTop = 0
+    listLeft = 0
+    Refresh(FALSE)
+END SUB
+
+SUB Travel (i AS Integer)
+    IF i < 0 OR i >= hist.Count THEN RETURN
+    hi = i
+    travelling = TRUE
+    TRY
+        Go(hist[i])
+    CATCH err
+        travelling = FALSE
+        THROW err
+    END TRY
+    travelling = FALSE
+END SUB
+
+' Reads the folder again, and the tree, and shows them.
+SUB Refresh (keepSel AS Bool)
+    VAR keep AS String
+    VAR i AS Integer
+    keep = "|"
+    IF keepSel THEN
+        FOR i = 0 TO cName.Count - 1
+            IF cSel[i] THEN keep = keep + cPath[i] + "|"
+        NEXT
+    END IF
+    LoadDrives()
+    LoadContents()
+    FOR i = 0 TO cName.Count - 1
+        cSel[i] = keep.Contains("|" + cPath[i] + "|")
+    NEXT
+    cFocus = FirstSel()
+    BuildTree()
+    LayoutList()
+    ScrollTreeTo(tPath.IndexOf(cur))
+    IF showAddress THEN addr.Text = AddressFor(cur)
+    IF showToolbar THEN FillCombo()
+    Redraw()
+    ShowStatus()
+    UpdateMenus()
+    ' (last: the title says the folder is all there)
+    win.Title = TitleFor(cur)
+END SUB
+
+FUNCTION TitleFor (p AS String) AS String
+    IF showTree THEN RETURN "Exploring - " + PlaceLabel(p)
+    RETURN PlaceLabel(p)
+END FUNCTION
+
+FUNCTION AddressFor (p AS String) AS String
+    IF IsVirtual(p) THEN RETURN PlaceLabel(p)
+    RETURN p
+END FUNCTION

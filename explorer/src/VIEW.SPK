@@ -1,0 +1,1705 @@
+' ================================================================ names and kinds
+
+' How a place is called: "My Computer", "(C:)", "MYFILES on 'Bravo' (Z:)", "Bravo", "Docs"
+FUNCTION PlaceLabel (p AS String) AS String
+    VAR i AS Integer
+    VAR t AS String
+    SELECT CASE p
+        CASE "::DESKTOP"
+            RETURN "Desktop"
+        CASE "::COMPUTER"
+            RETURN "My Computer"
+        CASE "::NETWORK"
+            RETURN "Network Neighborhood"
+        CASE "::RECYCLE"
+            RETURN "Recycle Bin"
+        CASE "::FIND"
+            RETURN "Search Results"
+        CASE "C:\"
+            RETURN "(C:)"
+    END SELECT
+    IF IsMapped(p) AND IsRoot(p) THEN
+        i = DriveIndex(p.Substring(0, 1))
+        IF i < 0 THEN RETURN "(" + p.Substring(0, 2) + ")"
+        t = dTarget[i]
+        IF IsRoot(t) THEN RETURN Pretty(HostOf(t), FALSE) + " (" + p.Substring(0, 2) + ")"
+        RETURN Pretty(BaseName(t), FALSE) + " on '" + Pretty(HostOf(t), FALSE) + "' (" + p.Substring(0, 2) + ")"
+    END IF
+    IF IsUnc(p) AND IsRoot(p) THEN RETURN Pretty(HostOf(p), FALSE)
+    RETURN Pretty(BaseName(p), TRUE)
+END FUNCTION
+
+' NOTES.TXT as Windows 95 shows a DOS name: Notes.txt (unless names are shown in capitals)
+FUNCTION Pretty (name AS String, isFile AS Bool) AS String
+    VAR s AS String
+    s = name
+    IF hideExt AND isFile AND KnownType(ExtOf(s)) THEN s = s.Substring(0, s.IndexOf("."))
+    IF showCaps OR s = "" THEN RETURN s
+    RETURN s.Substring(0, 1).Upper() + s.Substring(1, s.Length - 1).Lower()
+END FUNCTION
+
+FUNCTION KnownType (ext AS String) AS Bool
+    RETURN "|TXT|SPK|HTM|PIC|JS|JSN|ASP|INI|INF|EXE|RUN|SH|MD|SYS|INC|".Contains("|" + ext + "|")
+END FUNCTION
+
+FUNCTION TypeName (name AS String, kind AS String) AS String
+    VAR ext AS String
+    SELECT CASE kind
+        CASE "D"
+            RETURN "File Folder"
+        CASE "DRIVE"
+            RETURN "Local Disk"
+        CASE "NETDRIVE"
+            RETURN "Network Connection"
+        CASE "MACHINE"
+            RETURN "Computer"
+        CASE "PLACE"
+            RETURN "System Folder"
+        CASE "APP"
+            RETURN "Application"
+    END SELECT
+    ext = ExtOf(name)
+    SELECT CASE ext
+        CASE "TXT"
+            RETURN "Text Document"
+        CASE "SPK"
+            RETURN "SPARK Program"
+        CASE "HTM", "HTML"
+            RETURN "HTML Document"
+        CASE "PIC"
+            RETURN "Sketch Picture"
+        CASE "JS"
+            RETURN "JavaScript File"
+        CASE "JSN"
+            RETURN "JSON File"
+        CASE "ASP"
+            RETURN "Active SPARK Page"
+        CASE "INI", "INF"
+            RETURN "Configuration Settings"
+        CASE "EXE"
+            RETURN "Application"
+        CASE "RUN"
+            RETURN "Startup Entry"
+        CASE "SH"
+            RETURN "Shell Script"
+        CASE "MD"
+            RETURN "Markdown Document"
+        CASE "SYS"
+            RETURN "System File"
+        CASE "INC"
+            RETURN "Include File"
+        CASE "PWL"
+            RETURN "Password List"
+    END SELECT
+    IF ext = "" THEN RETURN "File"
+    RETURN ext + " File"
+END FUNCTION
+
+FUNCTION IconFor (name AS String, kind AS String, p AS String) AS String
+    SELECT CASE kind
+        CASE "D"
+            IF p = "C:\PROGRAMS" THEN RETURN "programs"
+            IF p = "C:\DOCS" THEN RETURN "docs"
+            RETURN "folder"
+        CASE "DRIVE"
+            RETURN "drive"
+        CASE "NETDRIVE"
+            IF DriveIndex(p.Substring(0, 1)) >= 0 THEN
+                IF dDown[DriveIndex(p.Substring(0, 1))] THEN RETURN "netdown"
+            END IF
+            RETURN "netdrive"
+        CASE "MACHINE"
+            RETURN "computer"
+        CASE "APP"
+            RETURN "settings"
+        CASE "PLACE"
+            SELECT CASE p
+                CASE "::COMPUTER"
+                    RETURN "computer"
+                CASE "::NETWORK"
+                    RETURN "network"
+                CASE "::RECYCLE"
+                    IF BinLines().Count > 0 THEN RETURN "recyfull"
+                    RETURN "recycle"
+                CASE "::DESKTOP"
+                    RETURN "desktop"
+            END SELECT
+            RETURN "folder"
+    END SELECT
+    SELECT CASE ExtOf(name)
+        CASE "TXT", "MD"
+            RETURN "txt"
+        CASE "SPK"
+            RETURN "spk"
+        CASE "HTM", "HTML"
+            RETURN "htm"
+        CASE "PIC"
+            RETURN "pic"
+        CASE "JS"
+            RETURN "js"
+        CASE "JSN"
+            RETURN "jsn"
+        CASE "ASP"
+            RETURN "asp"
+        CASE "INI", "INF", "SYS", "PWL"
+            RETURN "ini"
+        CASE "EXE"
+            RETURN "exe"
+        CASE "RUN"
+            RETURN "run"
+        CASE "SH"
+            RETURN "terminal"
+    END SELECT
+    RETURN "file"
+END FUNCTION
+
+' ================================================================ what's in the folder
+
+SUB AddItem (name AS String, p AS String, kind AS String, size AS Integer, extra AS String)
+    cName.Add(name)
+    cPath.Add(p)
+    cKind.Add(kind)
+    cSize.Add(size)
+    cType.Add(TypeName(name, kind))
+    cIcon.Add(IconFor(name, kind, p))
+    cExtra.Add(extra)
+    cSel.Add(FALSE)
+    itX.Add(0)
+    itY.Add(0)
+    itW.Add(0)
+    itH.Add(0)
+END SUB
+
+SUB LoadContents ()
+    VAR e AS String
+    VAR parts AS Array OF String
+    VAR d AS Integer
+    VAR m AS String
+    VAR line AS String
+    cName.Clear()
+    cPath.Clear()
+    cKind.Clear()
+    cSize.Clear()
+    cType.Clear()
+    cIcon.Clear()
+    cExtra.Clear()
+    cSel.Clear()
+    itX.Clear()
+    itY.Clear()
+    itW.Clear()
+    itH.Clear()
+    listError = ""
+    ReadCutSet()
+    SELECT CASE cur
+        CASE "::DESKTOP"
+            AddItem("My Computer", "::COMPUTER", "PLACE", 0, "")
+            AddItem("Network Neighborhood", "::NETWORK", "PLACE", 0, "")
+            AddItem("Recycle Bin", "::RECYCLE", "PLACE", 0, "")
+            RETURN
+        CASE "::COMPUTER"
+            AddItem("(C:)", "C:\", "DRIVE", 0, "")
+            FOR d = 0 TO dLetter.Count - 1
+                AddItem(PlaceLabel(dLetter[d] + ":\"), dLetter[d] + ":\", "NETDRIVE", 0, dTarget[d])
+            NEXT
+            IF FS.Exists("C:\PROGRAMS\SETTINGS.SPK") THEN AddItem("Control Panel", "C:\PROGRAMS\SETTINGS.SPK", "APP", 0, "")
+            RETURN
+        CASE "::NETWORK"
+            FOR EACH m IN Machines(FALSE)
+                AddItem(Pretty(m, FALSE), "\\" + m + "\", "MACHINE", 0, "")
+            NEXT
+            RETURN
+        CASE "::RECYCLE"
+            FOR EACH line IN BinLines()
+                parts = line.Split("|")
+                AddItem(BaseName(parts[1]), BINDIR + "\" + parts[0], parts[4], Int(Val(parts[3])), ParentOf(parts[1]))
+            NEXT
+            SortContents()
+            RETURN
+        CASE "::FIND"
+            FOR EACH e IN findPaths
+                parts = e.Split("|")
+                AddItem(BaseName(parts[0]), parts[0], parts[1], Int(Val(parts[2])), ParentOf(parts[0]))
+            NEXT
+            SortContents()
+            RETURN
+    END SELECT
+    TRY
+        FOR EACH e IN VList(cur)
+            parts = e.Split("|")
+            AddItem(parts[0], JoinPath(cur, parts[0]), parts[1], Int(Val(parts[2])), "")
+        NEXT
+        IF IsMapped(cur) THEN MarkDrive(cur, FALSE)
+    CATCH err
+        IF err.StartsWith("!cancel") THEN
+            listError = "You did not log on to \\" + HostOf(cur) + "."
+        ELSE
+            listError = err
+        END IF
+        IF IsMapped(cur) THEN MarkDrive(cur, TRUE)
+    END TRY
+    SortContents()
+END SUB
+
+SUB MarkDrive (p AS String, down AS Bool)
+    VAR i AS Integer
+    i = DriveIndex(p.Substring(0, 1))
+    IF i >= 0 THEN dDown[i] = down
+END SUB
+
+' Folders first, then by name, type or size (an insertion sort on keys)
+SUB SortContents ()
+    VAR keysArr AS Array OF String
+    VAR order AS Array OF Integer
+    VAR i AS Integer
+    VAR k AS String
+    VAR n AS Array OF String
+    VAR p AS Array OF String
+    VAR kd AS Array OF String
+    VAR sz AS Array OF Integer
+    VAR ty AS Array OF String
+    VAR ic AS Array OF String
+    VAR ex AS Array OF String
+    FOR i = 0 TO cName.Count - 1
+        k = "1"
+        IF cKind[i] <> "F" THEN k = "0"
+        SELECT CASE sortBy
+            CASE "type"
+                k = k + cType[i].Upper().PadRight(30)
+            CASE "size"
+                k = k + Str(cSize[i]).PadLeft(12)
+        END SELECT
+        keysArr.Add(k + cName[i].Upper().PadRight(14) + "|" + Str(i))
+    NEXT
+    keysArr.Sort()
+    FOR EACH k IN keysArr
+        i = Int(Val(k.Substring(k.IndexOf("|") + 1, k.Length - k.IndexOf("|") - 1)))
+        n.Add(cName[i])
+        p.Add(cPath[i])
+        kd.Add(cKind[i])
+        sz.Add(cSize[i])
+        ty.Add(cType[i])
+        ic.Add(cIcon[i])
+        ex.Add(cExtra[i])
+    NEXT
+    cName = n
+    cPath = p
+    cKind = kd
+    cSize = sz
+    cType = ty
+    cIcon = ic
+    cExtra = ex
+END SUB
+
+SUB ReadCutSet ()
+    VAR lines AS Array OF String
+    VAR k AS Integer
+    cutSet = "|"
+    IF NOT FS.Exists(CLIPFILE) THEN RETURN
+    lines = FS.Read(CLIPFILE).Lines()
+    IF lines.Count < 2 OR lines[0] <> "cut" THEN RETURN
+    FOR k = 1 TO lines.Count - 1
+        cutSet = cutSet + lines[k] + "|"
+    NEXT
+END SUB
+
+FUNCTION SelCount () AS Integer
+    VAR i AS Integer
+    VAR n AS Integer
+    FOR i = 0 TO cSel.Count - 1
+        IF cSel[i] THEN n = n + 1
+    NEXT
+    RETURN n
+END FUNCTION
+
+FUNCTION FirstSel () AS Integer
+    VAR i AS Integer
+    FOR i = 0 TO cSel.Count - 1
+        IF cSel[i] THEN RETURN i
+    NEXT
+    RETURN -1
+END FUNCTION
+
+FUNCTION KindOf (i AS Integer) AS String
+    IF i < 0 OR i >= cKind.Count THEN RETURN ""
+    RETURN cKind[i]
+END FUNCTION
+
+FUNCTION IsFolderish (i AS Integer) AS Bool
+    RETURN "|D|DRIVE|NETDRIVE|MACHINE|PLACE|".Contains("|" + KindOf(i) + "|")
+END FUNCTION
+
+FUNCTION AllKind (k AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO cSel.Count - 1
+        IF cSel[i] AND cKind[i] <> k THEN RETURN FALSE
+    NEXT
+    RETURN SelCount() > 0
+END FUNCTION
+
+FUNCTION CanCopySel () AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO cSel.Count - 1
+        IF cSel[i] AND cKind[i] <> "F" AND cKind[i] <> "D" THEN RETURN FALSE
+    NEXT
+    RETURN cur <> "::RECYCLE"
+END FUNCTION
+
+FUNCTION CanWriteHere () AS Bool
+    RETURN NOT IsVirtual(cur) AND listError = ""
+END FUNCTION
+
+' ================================================================ the tree
+
+SUB BuildTree ()
+    tPath.Clear()
+    tLabel.Clear()
+    tIcon.Clear()
+    tDepth.Clear()
+    tKids.Clear()
+    tOpen.Clear()
+    tLines.Clear()
+    tLast.Clear()
+    AddNode("::DESKTOP", 0, "", TRUE)
+END SUB
+
+' One node, and (when it's open) the nodes in it.
+SUB AddNode (p AS String, depth AS Integer, lines AS String, last AS Bool)
+    VAR kids AS Array OF String
+    VAR k AS Integer
+    VAR open AS Bool
+    VAR known AS Bool
+    VAR i AS Integer
+    VAR more AS String
+    open = expanded.Contains("|" + p + "|")
+    known = open OR NOT IsRemote(p) OR noKids.Contains("|" + p + "|")
+    IF p = "::NETWORK" AND NOT open THEN known = FALSE
+    IF known THEN kids = NodeKids(p, open)
+    tPath.Add(p)
+    tLabel.Add(PlaceLabel(p))
+    IF p.StartsWith("::") THEN
+        tIcon.Add(IconFor("", "PLACE", p))
+    ELSEIF p = "C:\" THEN
+        tIcon.Add("drive")
+    ELSEIF IsMapped(p) AND IsRoot(p) THEN
+        tIcon.Add(IconFor("", "NETDRIVE", p))
+    ELSEIF IsUnc(p) AND IsRoot(p) THEN
+        tIcon.Add("computer")
+    ELSEIF open OR p = cur THEN
+        tIcon.Add("folderopen")
+    ELSE
+        tIcon.Add(IconFor("", "D", p))
+    END IF
+    tDepth.Add(depth)
+    IF NOT known THEN
+        tKids.Add(2)
+    ELSEIF kids.Count > 0 THEN
+        tKids.Add(1)
+    ELSE
+        tKids.Add(0)
+    END IF
+    tOpen.Add(open AND kids.Count > 0)
+    tLines.Add(lines)
+    tLast.Add(last)
+    IF NOT open THEN RETURN
+    i = tPath.Count - 1
+    more = lines
+    IF depth > 0 THEN more = lines + Flag(NOT last)
+    FOR k = 0 TO kids.Count - 1
+        AddNode(kids[k], depth + 1, more, k = kids.Count - 1)
+    NEXT
+END SUB
+
+' The folders in a place (when open), or just whether there are any.
+FUNCTION NodeKids (p AS String, open AS Bool) AS Array OF String
+    VAR out AS Array OF String
+    VAR e AS String
+    VAR d AS Integer
+    VAR m AS String
+    SELECT CASE p
+        CASE "::DESKTOP"
+            out = ["::COMPUTER", "::NETWORK", "::RECYCLE"]
+            RETURN out
+        CASE "::COMPUTER"
+            out.Add("C:\")
+            FOR d = 0 TO dLetter.Count - 1
+                out.Add(dLetter[d] + ":\")
+            NEXT
+            RETURN out
+        CASE "::NETWORK"
+            FOR EACH m IN Machines(FALSE)
+                out.Add("\\" + m + "\")
+            NEXT
+            RETURN out
+        CASE "::RECYCLE", "::FIND"
+            RETURN out
+    END SELECT
+    IF IsRemote(p) THEN
+        ' (only when the node is opened: it means asking the machine)
+        TRY
+            FOR EACH e IN VList(p)
+                IF e.Split("|")[1] = "D" THEN out.Add(JoinPath(p, e.Split("|")[0]))
+            NEXT
+            IF IsMapped(p) THEN MarkDrive(p, FALSE)
+        CATCH err
+            IF IsMapped(p) THEN MarkDrive(p, TRUE)
+            expanded = expanded.Replace("|" + p + "|", "|")
+        END TRY
+        IF out.Count = 0 AND NOT noKids.Contains("|" + p + "|") THEN noKids = noKids + p + "|"
+        RETURN out
+    END IF
+    IF NOT FS.Exists(p) THEN RETURN out
+    FOR EACH e IN FS.List(p)
+        IF e.EndsWith("\") THEN out.Add(JoinPath(p, e.Substring(0, e.Length - 1)))
+    NEXT
+    RETURN out
+END FUNCTION
+
+SUB ToggleNode (i AS Integer)
+    VAR p AS String
+    IF i < 0 OR i >= tPath.Count THEN RETURN
+    p = tPath[i]
+    IF expanded.Contains("|" + p + "|") THEN
+        expanded = expanded.Replace("|" + p + "|", "|")
+        ' (a folder closed with the current one inside: show this one)
+        IF cur <> p AND cur.StartsWith(p) AND NOT IsVirtual(p) THEN Go(p)
+    ELSE
+        IF p = "::NETWORK" THEN Machines(NOT machinesKnown)
+        expanded = expanded + p + "|"
+    END IF
+    BuildTree()
+    DrawTree()
+END SUB
+
+' ================================================================ geometry
+
+FUNCTION TreeRight () AS Integer
+    IF NOT showTree THEN RETURN 0
+    RETURN treeW
+END FUNCTION
+
+FUNCTION ListLeftX () AS Integer
+    IF NOT showTree THEN RETURN 0
+    RETURN treeW + SPLITW
+END FUNCTION
+
+' the inside of each pane, below its heading, inside its sunken edge
+FUNCTION TreeInnerH () AS Integer
+    RETURN cv.Height - HEADH - 4
+END FUNCTION
+
+FUNCTION TreeNeedsBar () AS Bool
+    RETURN tPath.Count * ROWH + 4 > TreeInnerH()
+END FUNCTION
+
+' The area files are drawn in, inside the pane (x, y, w, h): items are at
+' (areaX + itX - listLeft, areaY + itY - listTop).
+FUNCTION AreaX () AS Integer
+    RETURN ListLeftX() + 2
+END FUNCTION
+
+FUNCTION AreaY () AS Integer
+    IF viewMode = "details" THEN RETURN HEADH + 2 + ROWH
+    RETURN HEADH + 2
+END FUNCTION
+
+FUNCTION AreaW () AS Integer
+    VAR w AS Integer
+    w = cv.Width - ListLeftX() - 4
+    IF viewMode <> "list" AND extentH > AreaHFull() THEN w = w - SBW
+    RETURN MATH.Max(10, w)
+END FUNCTION
+
+FUNCTION AreaHFull () AS Integer
+    RETURN cv.Height - AreaY() - 2
+END FUNCTION
+
+FUNCTION AreaH () AS Integer
+    IF viewMode = "list" AND extentW > cv.Width - ListLeftX() - 4 THEN RETURN MATH.Max(10, AreaHFull() - SBW)
+    RETURN MATH.Max(10, AreaHFull())
+END FUNCTION
+
+' Where each item goes, for the view.
+SUB LayoutList ()
+    VAR i AS Integer
+    VAR cols AS Integer
+    VAR rows AS Integer
+    VAR cellW AS Integer
+    VAR cellH AS Integer
+    VAR w AS Integer
+    VAR longest AS Integer
+    VAR pass AS Integer
+    IF IsNothing(cv) THEN RETURN
+    colW.Clear()
+    colW.Add(MATH.Max(176, MATH.Min(260, LongestName() * 8 + 30)))
+    colW.Add(72)
+    colW.Add(150)
+    IF cur = "::RECYCLE" OR cur = "::FIND" THEN colW.Add(220)
+    ' twice: the first time to find whether a scroll bar is wanted
+    FOR pass = 1 TO 2
+        w = cv.Width - ListLeftX() - 4
+        IF pass = 2 AND viewMode <> "list" AND extentH > AreaHFull() THEN w = w - SBW
+        extentW = 0
+        extentH = 0
+        SELECT CASE viewMode
+            CASE "large"
+                cellW = 100
+                cellH = 70
+                cols = MATH.Max(1, Int(w / cellW))
+                FOR i = 0 TO cName.Count - 1
+                    itX[i] = (i MOD cols) * cellW
+                    itY[i] = Int(i / cols) * cellH + 4
+                    itW[i] = cellW
+                    itH[i] = cellH - 4
+                NEXT
+                extentW = w
+                extentH = Int((cName.Count + cols - 1) / cols) * cellH + 8
+            CASE "small"
+                cellW = 132
+                cols = MATH.Max(1, Int(w / cellW))
+                FOR i = 0 TO cName.Count - 1
+                    itX[i] = (i MOD cols) * cellW + 2
+                    itY[i] = Int(i / cols) * ROWH + 2
+                    itW[i] = cellW - 4
+                    itH[i] = ROWH
+                NEXT
+                extentW = w
+                extentH = Int((cName.Count + cols - 1) / cols) * ROWH + 6
+            CASE "list"
+                longest = LongestName()
+                cellW = MATH.Max(120, MATH.Min(22 + longest * 8 + 14, 260))
+                rows = MATH.Max(1, Int((AreaHFull() - SBW - 4) / ROWH))
+                FOR i = 0 TO cName.Count - 1
+                    itX[i] = Int(i / rows) * cellW + 2
+                    itY[i] = (i MOD rows) * ROWH + 2
+                    itW[i] = cellW - 4
+                    itH[i] = ROWH
+                NEXT
+                extentW = Int((cName.Count + rows - 1) / rows) * cellW + 4
+                extentH = rows * ROWH
+            CASE ELSE
+                FOR i = 0 TO cName.Count - 1
+                    itX[i] = 0
+                    itY[i] = i * ROWH
+                    itW[i] = colW[0]
+                    itH[i] = ROWH
+                NEXT
+                extentW = SumOf(colW)
+                extentH = cName.Count * ROWH + 2
+        END SELECT
+    NEXT
+    ClampScroll()
+END SUB
+
+FUNCTION SumOf (a AS Array OF Integer) AS Integer
+    VAR n AS Integer
+    VAR x AS Integer
+    FOR EACH x IN a
+        n = n + x
+    NEXT
+    RETURN n
+END FUNCTION
+
+FUNCTION LongestName () AS Integer
+    VAR i AS Integer
+    VAR n AS Integer
+    FOR i = 0 TO cName.Count - 1
+        n = MATH.Max(n, ShownName(i).Length)
+    NEXT
+    RETURN n
+END FUNCTION
+
+FUNCTION ShownName (i AS Integer) AS String
+    IF cKind[i] = "F" OR cKind[i] = "D" THEN RETURN Pretty(cName[i], cKind[i] = "F")
+    RETURN cName[i]
+END FUNCTION
+
+SUB ClampScroll ()
+    listTop = MATH.Max(0, MATH.Min(listTop, extentH - AreaH()))
+    listLeft = MATH.Max(0, MATH.Min(listLeft, extentW - AreaW()))
+    IF viewMode <> "list" THEN listLeft = 0
+    treeTop = MATH.Max(0, MATH.Min(treeTop, tPath.Count * ROWH + 4 - TreeInnerH()))
+END SUB
+
+' ================================================================ drawing
+
+SUB Cv_OnDraw (c AS GUI_Canvas)
+    LayoutList()
+    Redraw()
+END SUB
+
+SUB Redraw ()
+    IF IsNothing(cv) THEN RETURN
+    cv.Clear()
+    IF showTree THEN
+        DrawTree()
+        DrawSplitter()
+    END IF
+    DrawList()
+    lastPaint = SYS.Ticks
+END SUB
+
+' A raised (or sunken) Windows 95 edge around x, y, w, h
+SUB Bevel (c AS GUI_Canvas, x AS Integer, y AS Integer, w AS Integer, h AS Integer, raised AS Bool)
+    IF raised THEN
+        c.SetColor(15)
+        c.Line(x, y, x + w - 2, y)
+        c.Line(x, y, x, y + h - 2)
+        c.SetColor(0)
+        c.Line(x, y + h - 1, x + w - 1, y + h - 1)
+        c.Line(x + w - 1, y, x + w - 1, y + h - 1)
+        c.SetColor(8)
+        c.Line(x + 1, y + h - 2, x + w - 2, y + h - 2)
+        c.Line(x + w - 2, y + 1, x + w - 2, y + h - 2)
+    ELSE
+        c.SetColor(8)
+        c.Line(x, y, x + w - 1, y)
+        c.Line(x, y, x, y + h - 1)
+        c.SetColor(0)
+        c.Line(x + 1, y + 1, x + w - 2, y + 1)
+        c.Line(x + 1, y + 1, x + 1, y + h - 2)
+        c.SetColor(15)
+        c.Line(x, y + h - 1, x + w - 1, y + h - 1)
+        c.Line(x + w - 1, y, x + w - 1, y + h - 1)
+        c.SetColor(7)
+        c.Line(x + 1, y + h - 2, x + w - 2, y + h - 2)
+        c.Line(x + w - 2, y + 1, x + w - 2, y + h - 2)
+    END IF
+END SUB
+
+' Text cut to fit n characters
+FUNCTION Fit (s AS String, n AS Integer) AS String
+    IF n <= 0 THEN RETURN ""
+    IF s.Length <= n THEN RETURN s
+    IF n <= 3 THEN RETURN s.Substring(0, n)
+    RETURN s.Substring(0, n - 3) + "..."
+END FUNCTION
+
+SUB Heading (x AS Integer, w AS Integer, text AS String)
+    cv.SetColor(7)
+    cv.FillRect(x, 0, w, HEADH)
+    Bevel(cv, x, 0, w, HEADH, TRUE)
+    cv.SetColor(0)
+    cv.Text(x + 6, 2, Fit(text, Int((w - 10) / 8)))
+END SUB
+
+SUB DrawSplitter ()
+    cv.SetColor(7)
+    cv.FillRect(treeW, 0, SPLITW, cv.Height)
+END SUB
+
+SUB DrawTree ()
+    VAR w AS Integer
+    VAR h AS Integer
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR i AS Integer
+    VAR d AS Integer
+    VAR right AS Integer
+    VAR top AS Integer
+    VAR bottom AS Integer
+    VAR lx AS Integer
+    VAR label AS String
+    VAR room AS Integer
+    IF NOT showTree THEN RETURN
+    w = treeW
+    h = cv.Height
+    top = HEADH + 2
+    bottom = h - 2
+    right = w - 2
+    IF TreeNeedsBar() THEN right = right - SBW
+    ClampScroll()
+    cv.SetColor(15)
+    cv.FillRect(2, top, right - 2, bottom - top)
+    FOR i = 0 TO tPath.Count - 1
+        y = top + 2 + i * ROWH - treeTop
+        IF y + ROWH < top OR y > bottom THEN CONTINUE
+        d = tDepth[i]
+        x = 6 + d * INDENT
+        ' the dotted lines: of the levels above that go on, and this one's
+        FOR lx = 1 TO d - 1
+            IF tLines[i].Substring(lx - 1, 1) = "1" THEN cv.Picture(6 + lx * INDENT - 11, y, picVDots)
+        NEXT
+        IF d > 0 THEN
+            IF tLast[i] THEN
+                cv.Picture(x - 11, y, picVHalf)
+            ELSE
+                cv.Picture(x - 11, y, picVDots)
+            END IF
+            cv.Picture(x - 11, y + 9, picHDots)
+        END IF
+        IF tKids[i] <> 0 AND d > 0 THEN
+            IF tOpen[i] THEN
+                cv.Picture(x - 15, y + 5, picMinus)
+            ELSE
+                cv.Picture(x - 15, y + 5, picPlus)
+            END IF
+        END IF
+        cv.Picture(x, y + 1, Icon(tIcon[i], 16, "n"))
+        room = Int((right - (x + 20) - 4) / 8)
+        label = Fit(tLabel[i], room)
+        IF label = "" THEN CONTINUE
+        IF tPath[i] = cur THEN
+            IF focusTree THEN
+                cv.SetColor(4)
+            ELSE
+                cv.SetColor(7)
+            END IF
+            cv.FillRect(x + 19, y + 1, label.Length * 8 + 4, 16)
+            IF focusTree THEN
+                cv.SetColor(15)
+            ELSE
+                cv.SetColor(0)
+            END IF
+        ELSEIF tPath[i] = dropTarget THEN
+            cv.SetColor(4)
+            cv.FillRect(x + 19, y + 1, label.Length * 8 + 4, 16)
+            cv.SetColor(15)
+        ELSE
+            cv.SetColor(0)
+        END IF
+        cv.Text(x + 21, y + 1, label)
+    NEXT
+    IF TreeNeedsBar() THEN VBar(right, top, bottom - top, treeTop, tPath.Count * ROWH + 4, TreeInnerH())
+    Bevel(cv, 0, HEADH, w, h - HEADH, FALSE)
+    Heading(0, w, "All Folders")
+END SUB
+
+' A vertical scroll bar at x, from y, h high: showing seen of total, from pos
+SUB VBar (x AS Integer, y AS Integer, h AS Integer, pos AS Integer, total AS Integer, seen AS Integer)
+    VAR track AS Integer
+    VAR thumb AS Integer
+    VAR at AS Integer
+    VAR k AS Integer
+    track = h - 2 * SBW
+    ' (the dotted track, in tiles; the last one ends at the bottom button)
+    k = y + SBW
+    WHILE k < y + h - SBW
+        cv.Picture(x, MATH.Min(k, y + h - SBW - 16), picTrack)
+        k = k + 16
+    END WHILE
+    Arrow(x, y, "up")
+    Arrow(x, y + h - SBW, "down")
+    IF total <= seen OR track < 8 THEN RETURN
+    thumb = MATH.Max(8, Int(track * seen / total))
+    at = y + SBW + Int((track - thumb) * pos / MATH.Max(1, total - seen))
+    cv.SetColor(7)
+    cv.FillRect(x, at, SBW, thumb)
+    Bevel(cv, x, at, SBW, thumb, TRUE)
+END SUB
+
+SUB HBar (x AS Integer, y AS Integer, w AS Integer, pos AS Integer, total AS Integer, seen AS Integer)
+    VAR track AS Integer
+    VAR thumb AS Integer
+    VAR at AS Integer
+    VAR k AS Integer
+    track = w - 2 * SBW
+    k = x + SBW
+    WHILE k < x + w - SBW
+        cv.Picture(MATH.Min(k, x + w - SBW - 16), y, picTrack)
+        k = k + 16
+    END WHILE
+    Arrow(x, y, "left")
+    Arrow(x + w - SBW, y, "right")
+    IF total <= seen OR track < 8 THEN RETURN
+    thumb = MATH.Max(8, Int(track * seen / total))
+    at = x + SBW + Int((track - thumb) * pos / MATH.Max(1, total - seen))
+    cv.SetColor(7)
+    cv.FillRect(at, y, thumb, SBW)
+    Bevel(cv, at, y, thumb, SBW, TRUE)
+END SUB
+
+' A scroll bar button with its black triangle
+SUB Arrow (x AS Integer, y AS Integer, way AS String)
+    VAR k AS Integer
+    cv.SetColor(7)
+    cv.FillRect(x, y, SBW, SBW)
+    Bevel(cv, x, y, SBW, SBW, TRUE)
+    cv.SetColor(0)
+    FOR k = 0 TO 3
+        SELECT CASE way
+            CASE "up"
+                cv.Line(x + 7 - k, y + 5 + k, x + 7 + k, y + 5 + k)
+            CASE "down"
+                cv.Line(x + 7 - k, y + 9 - k, x + 7 + k, y + 9 - k)
+            CASE "left"
+                cv.Line(x + 5 + k, y + 7 - k, x + 5 + k, y + 7 + k)
+            CASE "right"
+                cv.Line(x + 9 - k, y + 7 - k, x + 9 - k, y + 7 + k)
+        END SELECT
+    NEXT
+END SUB
+
+SUB DrawList ()
+    VAR x0 AS Integer
+    VAR ax AS Integer
+    VAR ay AS Integer
+    VAR aw AS Integer
+    VAR ah AS Integer
+    VAR i AS Integer
+    VAR head AS String
+    ax = AreaX()
+    ay = AreaY()
+    aw = AreaW()
+    ah = AreaH()
+    x0 = ListLeftX()
+    cv.SetColor(15)
+    cv.FillRect(x0 + 2, HEADH + 2, cv.Width - x0 - 4, cv.Height - HEADH - 4)
+    IF listError <> "" THEN
+        cv.SetColor(0)
+        DrawWrapped(ax + 8, ay + 8, listError, Int((aw - 16) / 8))
+    END IF
+    FOR i = 0 TO cName.Count - 1
+        DrawItem(i)
+    NEXT
+    IF mode = "band" THEN DrawBand()
+    ' what goes over the edges of the area: the bars, the column heads, the edge
+    IF viewMode <> "list" AND extentH > AreaHFull() THEN VBar(ax + aw, ay, ah, listTop, extentH, ah)
+    IF viewMode = "list" AND extentW > cv.Width - x0 - 4 THEN HBar(ax, ay + ah, aw, listLeft, extentW, aw)
+    IF viewMode = "details" THEN DrawColumns()
+    Bevel(cv, x0, HEADH, cv.Width - x0, cv.Height - HEADH, FALSE)
+    head = "Contents of '" + PlaceLabel(cur) + "'"
+    IF cur = "::FIND" THEN head = "Search Results"
+    Heading(x0, cv.Width - x0, head)
+END SUB
+
+SUB DrawWrapped (x AS Integer, y AS Integer, text AS String, n AS Integer)
+    VAR line AS String
+    VAR word AS String
+    VAR para AS String
+    FOR EACH para IN text.Lines()
+        line = ""
+        FOR EACH word IN para.Split(" ")
+            IF line <> "" AND line.Length + 1 + word.Length > n THEN
+                cv.Text(x, y, line)
+                y = y + 16
+                line = word
+            ELSEIF line = "" THEN
+                line = word
+            ELSE
+                line = line + " " + word
+            END IF
+        NEXT
+        cv.Text(x, y, line)
+        y = y + 16
+    NEXT
+END SUB
+
+FUNCTION ItemState (i AS Integer) AS String
+    IF cSel[i] THEN RETURN "s"
+    IF cutSet.Contains("|" + cPath[i] + "|") OR cPath[i] = dropTarget THEN RETURN "g"
+    RETURN "n"
+END FUNCTION
+
+SUB DrawItem (i AS Integer)
+    VAR x AS Integer
+    VAR y AS Integer
+    VAR ax AS Integer
+    VAR ay AS Integer
+    VAR label AS String
+    VAR l1 AS String
+    VAR l2 AS String
+    VAR lx AS Integer
+    VAR cx AS Integer
+    VAR k AS Integer
+    VAR st AS String
+    VAR room AS Integer
+    ax = AreaX()
+    ay = AreaY()
+    x = ax + itX[i] - listLeft
+    y = ay + itY[i] - listTop
+    IF y + itH[i] < ay - ROWH OR y > ay + AreaH() OR x > ax + AreaW() OR x + itW[i] < ax THEN RETURN
+    st = ItemState(i)
+    label = ShownName(i)
+    IF viewMode = "large" THEN
+        cv.Picture(x + Int((itW[i] - 32) / 2), y + 2, Icon(cIcon[i], 32, st))
+        ' up to two lines of 11, broken at a space where there is one
+        l1 = label
+        l2 = ""
+        IF label.Length > 11 THEN
+            k = -1
+            FOR cx = MATH.Min(11, label.Length - 1) TO 1 STEP -1
+                IF label.CharAt(cx) = " " THEN
+                    k = cx
+                    BREAK
+                END IF
+            NEXT
+            IF k < 0 THEN k = 11
+            l1 = label.Substring(0, k).Trim()
+            l2 = Fit(label.Substring(k, label.Length - k).Trim(), 11)
+        END IF
+        DrawLabel(x + Int((itW[i] - l1.Length * 8) / 2) - 2, y + 36, l1, st = "s", cPath[i] = dropTarget)
+        IF l2 <> "" THEN DrawLabel(x + Int((itW[i] - l2.Length * 8) / 2) - 2, y + 52, l2, st = "s", cPath[i] = dropTarget)
+        RETURN
+    END IF
+    cv.Picture(x + 2, y + 1, Icon(cIcon[i], 16, st))
+    room = Int((itW[i] - 26) / 8)
+    IF viewMode = "details" THEN room = Int((colW[0] - 28) / 8)
+    DrawLabel(x + 20, y + 1, Fit(label, room), st = "s", cPath[i] = dropTarget)
+    IF viewMode <> "details" THEN RETURN
+    cv.SetColor(0)
+    lx = x + colW[0]
+    IF cKind[i] = "F" THEN
+        cv.Text(lx + colW[1] - 8 - KB(cSize[i]).Length * 8, y + 1, KB(cSize[i]))
+    END IF
+    lx = lx + colW[1]
+    cv.Text(lx + 6, y + 1, Fit(cType[i], Int((colW[2] - 10) / 8)))
+    IF colW.Count > 3 THEN
+        lx = lx + colW[2]
+        cv.Text(lx + 6, y + 1, Fit(cExtra[i], Int((colW[3] - 10) / 8)))
+    END IF
+END SUB
+
+SUB DrawLabel (x AS Integer, y AS Integer, text AS String, selected AS Bool, target AS Bool)
+    IF selected OR target THEN
+        IF focusTree AND NOT target THEN
+            cv.SetColor(7)
+        ELSE
+            cv.SetColor(4)
+        END IF
+        cv.FillRect(x, y, text.Length * 8 + 4, 16)
+        IF focusTree AND NOT target THEN
+            cv.SetColor(0)
+        ELSE
+            cv.SetColor(15)
+        END IF
+    ELSE
+        cv.SetColor(0)
+    END IF
+    cv.Text(x + 2, y, text)
+END SUB
+
+' "1KB", as Windows 95 counts (a started KB is a KB)
+FUNCTION KB (n AS Integer) AS String
+    IF n = 0 THEN RETURN "0KB"
+    RETURN Str(Int((n + 1023) / 1024)) + "KB"
+END FUNCTION
+
+FUNCTION Bytes (n AS Integer) AS String
+    IF n < 1024 THEN RETURN Str(n) + " bytes"
+    IF n < 1048576 THEN RETURN Str(Int(n * 100 / 1024) / 100) + "KB"
+    RETURN Str(Int(n * 100 / 1048576) / 100) + "MB"
+END FUNCTION
+
+SUB DrawColumns ()
+    VAR x AS Integer
+    VAR k AS Integer
+    VAR names AS Array OF String
+    VAR y AS Integer
+    names = ["Name", "Size", "Type"]
+    IF cur = "::RECYCLE" THEN names.Add("Original Location")
+    IF cur = "::FIND" THEN names.Add("In Folder")
+    x = AreaX() - listLeft
+    y = HEADH + 2
+    cv.SetColor(7)
+    cv.FillRect(AreaX(), y, cv.Width - AreaX() - 2, ROWH)
+    FOR k = 0 TO colW.Count - 1
+        IF x < cv.Width - 2 THEN
+            Bevel(cv, x, y, colW[k], ROWH, TRUE)
+            cv.SetColor(0)
+            IF k = 1 THEN
+                cv.Text(x + colW[k] - 8 - names[k].Length * 8, y + 1, names[k])
+            ELSE
+                cv.Text(x + 6, y + 1, Fit(names[k], Int((colW[k] - 10) / 8)))
+            END IF
+        END IF
+        x = x + colW[k]
+    NEXT
+    ' (nothing to the right of the last one: an empty head)
+    IF x < cv.Width - 2 THEN Bevel(cv, x, y, cv.Width - 2 - x, ROWH, TRUE)
+END SUB
+
+SUB DrawBand ()
+    VAR x1 AS Integer
+    VAR y1 AS Integer
+    VAR x2 AS Integer
+    VAR y2 AS Integer
+    x1 = MATH.Min(downX, bandX)
+    y1 = MATH.Min(downY, bandY)
+    x2 = MATH.Max(downX, bandX)
+    y2 = MATH.Max(downY, bandY)
+    cv.SetColor(0)
+    cv.Rect(x1, y1, x2 - x1 + 1, y2 - y1 + 1)
+END SUB
+
+' Shows the files again, but no more than every 40ms while the mouse moves.
+SUB RepaintSoon (force AS Bool)
+    IF NOT force AND SYS.Ticks - lastPaint < 40 THEN RETURN
+    DrawList()
+    lastPaint = SYS.Ticks
+END SUB
+
+SUB ShowStatus ()
+    VAR n AS Integer
+    VAR total AS Integer
+    VAR i AS Integer
+    VAR s AS String
+    IF NOT statusOn THEN RETURN
+    n = SelCount()
+    IF listError <> "" THEN
+        win.Status = "0 object(s)"
+        RETURN
+    END IF
+    IF n > 0 THEN
+        FOR i = 0 TO cName.Count - 1
+            IF cSel[i] AND cKind[i] = "F" THEN total = total + cSize[i]
+        NEXT
+        s = Str(n) + " object(s) selected"
+    ELSE
+        FOR i = 0 TO cName.Count - 1
+            IF cKind[i] = "F" THEN total = total + cSize[i]
+        NEXT
+        s = Str(cName.Count) + " object(s)"
+    END IF
+    IF (NOT IsVirtual(cur) OR cur = "::RECYCLE" OR cur = "::FIND") AND (total > 0 OR n = 0) THEN s = s + "    " + Bytes(total)
+    IF IsRemote(cur) THEN s = s + "    \\" + HostOf(cur) + " (as " + LogonUserOr(HostOf(cur)) + ")"
+    win.Status = s
+END SUB
+
+FUNCTION LogonUserOr (host AS String) AS String
+    IF HaveLogon(host) THEN RETURN LogonUser(host)
+    RETURN "nobody"
+END FUNCTION
+
+' ================================================================ the mouse
+
+FUNCTION ItemAt (x AS Integer, y AS Integer) AS Integer
+    VAR i AS Integer
+    VAR cx AS Integer
+    VAR cy AS Integer
+    IF x < AreaX() OR x >= AreaX() + AreaW() OR y < AreaY() OR y >= AreaY() + AreaH() THEN RETURN -1
+    cx = x - AreaX() + listLeft
+    cy = y - AreaY() + listTop
+    FOR i = 0 TO cName.Count - 1
+        IF viewMode = "large" THEN
+            IF cx >= itX[i] + 14 AND cx < itX[i] + itW[i] - 14 AND cy >= itY[i] AND cy < itY[i] + itH[i] - 4 THEN RETURN i
+        ELSEIF viewMode = "details" THEN
+            IF cy >= itY[i] AND cy < itY[i] + ROWH AND cx < 22 + ShownName(i).Length * 8 + 6 THEN RETURN i
+        ELSE
+            IF cx >= itX[i] AND cx < itX[i] + 22 + ShownName(i).Length * 8 + 6 AND cy >= itY[i] AND cy < itY[i] + ROWH THEN RETURN i
+        END IF
+    NEXT
+    RETURN -1
+END FUNCTION
+
+FUNCTION NodeAt (x AS Integer, y AS Integer) AS Integer
+    VAR i AS Integer
+    IF NOT showTree OR x >= treeW - 2 OR y < HEADH + 2 THEN RETURN -1
+    i = Int((y - HEADH - 4 + treeTop) / ROWH)
+    IF i < 0 OR i >= tPath.Count THEN RETURN -1
+    RETURN i
+END FUNCTION
+
+FUNCTION OnBox (i AS Integer, x AS Integer) AS Bool
+    VAR bx AS Integer
+    bx = 6 + tDepth[i] * INDENT - 15
+    RETURN tKids[i] <> 0 AND tDepth[i] > 0 AND x >= bx - 2 AND x <= bx + 11
+END FUNCTION
+
+' The folder something dropped at (x, y) would go into, or ""
+FUNCTION DropAt (x AS Integer, y AS Integer) AS String
+    VAR i AS Integer
+    i = NodeAt(x, y)
+    IF i >= 0 THEN
+        IF tPath[i] = "::RECYCLE" OR NOT IsVirtual(tPath[i]) THEN RETURN tPath[i]
+        RETURN ""
+    END IF
+    IF x < ListLeftX() THEN RETURN ""
+    i = ItemAt(x, y)
+    IF i >= 0 THEN
+        IF cSel[i] THEN RETURN ""
+        IF cKind[i] = "D" OR cKind[i] = "DRIVE" OR cKind[i] = "NETDRIVE" OR cKind[i] = "MACHINE" OR cPath[i] = "::RECYCLE" THEN RETURN cPath[i]
+        RETURN ""
+    END IF
+    IF CanWriteHere() THEN RETURN cur
+    RETURN ""
+END FUNCTION
+
+SUB Cv_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
+    VAR i AS Integer
+    VAR right AS Integer
+    IF busy THEN RETURN
+    EndRename(TRUE)
+    keys.Focus()
+    downX = x
+    downY = y
+    downButton = button
+    mode = ""
+    ' the splitter
+    IF showTree AND x >= treeW AND x < treeW + SPLITW THEN
+        mode = "split"
+        RETURN
+    END IF
+    ' the tree
+    IF showTree AND x < treeW THEN
+        focusTree = TRUE
+        right = treeW - 2
+        IF TreeNeedsBar() AND x >= right - SBW AND y > HEADH THEN
+            ScrollBarClick("tree", y)
+            RETURN
+        END IF
+        i = NodeAt(x, y)
+        IF i < 0 THEN
+            DrawTree()
+            DrawList()
+            RETURN
+        END IF
+        IF OnBox(i, x) THEN
+            Act("!toggle " + Str(i))
+            RETURN
+        END IF
+        IF button = 2 THEN
+            NodeMenu(i, x, y)
+            RETURN
+        END IF
+        ' a second click on the same node: open or close it
+        IF clickNode = i AND SYS.Ticks - clickAt < 450 THEN
+            clickNode = -1
+            Act("!toggle " + Str(i))
+            RETURN
+        END IF
+        clickNode = i
+        clickAt = SYS.Ticks
+        IF tPath[i] <> cur THEN
+            Act("!go " + tPath[i])
+        ELSE
+            DrawTree()
+            DrawList()
+        END IF
+        RETURN
+    END IF
+    ' the files
+    IF focusTree THEN
+        focusTree = FALSE
+        DrawTree()
+    END IF
+    IF viewMode <> "list" AND extentH > AreaHFull() AND x >= AreaX() + AreaW() AND y >= AreaY() THEN
+        ScrollBarClick("list", y)
+        RETURN
+    END IF
+    IF viewMode = "list" AND extentW > cv.Width - ListLeftX() - 4 AND y >= AreaY() + AreaH() THEN
+        ScrollBarClick("hlist", x)
+        RETURN
+    END IF
+    IF viewMode = "details" AND y >= HEADH + 2 AND y < HEADH + 2 + ROWH THEN
+        ColumnClick(x)
+        RETURN
+    END IF
+    i = ItemAt(x, y)
+    IF i < 0 THEN
+        IF button = 2 THEN
+            SelectOnly(-1)
+            BackgroundMenu(x, y)
+            RETURN
+        END IF
+        SelectOnly(-1)
+        mode = "band"
+        bandX = x
+        bandY = y
+        RETURN
+    END IF
+    IF NOT cSel[i] THEN SelectOnly(i)
+    cFocus = i
+    cAnchor = i
+    IF button = 2 THEN
+        ItemMenu(x, y)
+        RETURN
+    END IF
+    IF clickItem = i AND SYS.Ticks - clickAt < 450 THEN
+        clickItem = -1
+        Act("Open")
+        RETURN
+    END IF
+    clickItem = i
+    clickAt = SYS.Ticks
+    mode = "press"
+    downItem = i
+END SUB
+
+SUB Cv_OnMouseMove (x AS Integer, y AS Integer)
+    VAR t AS String
+    VAR i AS Integer
+    IF busy OR mode = "" THEN RETURN
+    SELECT CASE mode
+        CASE "split"
+            treeW = MATH.Max(80, MATH.Min(cv.Width - 120, x))
+            IF SYS.Ticks - lastPaint > 60 THEN
+                LayoutList()
+                Redraw()
+            END IF
+        CASE "press"
+            IF MATH.Abs(x - downX) + MATH.Abs(y - downY) > 5 AND CanCopySel() THEN
+                mode = "drag"
+                win.Status = "Drag to a folder: a move on the same disk, a copy to another"
+            END IF
+        CASE "drag"
+            t = DropAt(x, y)
+            IF t <> dropTarget THEN
+                dropTarget = t
+                IF showTree THEN DrawTree()
+                DrawList()
+            END IF
+        CASE "band"
+            bandX = x
+            bandY = y
+            BandSelect()
+            RepaintSoon(FALSE)
+        CASE "tthumb", "lthumb", "hthumb"
+            DragThumb(x, y)
+    END SELECT
+END SUB
+
+SUB Cv_OnMouseUp (x AS Integer, y AS Integer, button AS Integer)
+    VAR was AS String
+    VAR t AS String
+    VAR i AS Integer
+    was = mode
+    mode = ""
+    IF busy THEN RETURN
+    SELECT CASE was
+        CASE "split"
+            LayoutList()
+            Redraw()
+            SaveSettings()
+        CASE "press"
+            ' a click on one of several picked: just that one
+            IF SelCount() > 1 AND downItem >= 0 THEN SelectOnly(downItem)
+        CASE "drag"
+            t = dropTarget
+            dropTarget = ""
+            Redraw()
+            ShowStatus()
+            IF t = "" THEN RETURN
+            IF downButton = 2 THEN
+                DropMenu(t, x, y)
+            ELSE
+                Act("!drop " + t)
+            END IF
+        CASE "band"
+            DrawList()
+            ShowStatus()
+            UpdateMenus()
+    END SELECT
+END SUB
+
+' Runs a command as the menus do (busy, errors shown), from the mouse or keys
+SUB Act (command AS String)
+    Menu_OnSelect(command)
+END SUB
+
+SUB SelectOnly (i AS Integer)
+    VAR k AS Integer
+    FOR k = 0 TO cSel.Count - 1
+        cSel[k] = k = i
+    NEXT
+    IF i >= 0 THEN
+        cFocus = i
+        cAnchor = i
+    END IF
+    DrawList()
+    ShowStatus()
+    UpdateMenus()
+END SUB
+
+SUB BandSelect ()
+    VAR x1 AS Integer
+    VAR y1 AS Integer
+    VAR x2 AS Integer
+    VAR y2 AS Integer
+    VAR i AS Integer
+    VAR ix AS Integer
+    VAR iy AS Integer
+    x1 = MATH.Min(downX, bandX) - AreaX() + listLeft
+    y1 = MATH.Min(downY, bandY) - AreaY() + listTop
+    x2 = MATH.Max(downX, bandX) - AreaX() + listLeft
+    y2 = MATH.Max(downY, bandY) - AreaY() + listTop
+    FOR i = 0 TO cName.Count - 1
+        ix = itX[i]
+        iy = itY[i]
+        IF viewMode = "large" THEN ix = itX[i] + 30
+        cSel[i] = ix < x2 AND ix + MATH.Min(itW[i], 22 + ShownName(i).Length * 8) > x1 AND iy < y2 AND iy + itH[i] > y1
+        IF viewMode = "large" THEN cSel[i] = itX[i] + 30 < x2 AND itX[i] + 70 > x1 AND iy < y2 AND iy + 40 > y1
+    NEXT
+END SUB
+
+SUB ScrollBarClick (which AS String, at AS Integer)
+    VAR top AS Integer
+    VAR span AS Integer
+    VAR thumb AS Integer
+    VAR thumbAt AS Integer
+    VAR total AS Integer
+    VAR seen AS Integer
+    VAR pos AS Integer
+    VAR stepSize AS Integer
+    IF which = "tree" THEN
+        top = HEADH + 2
+        span = TreeInnerH()
+        total = tPath.Count * ROWH + 4
+        seen = span
+        pos = treeTop
+        stepSize = ROWH
+    ELSEIF which = "list" THEN
+        top = AreaY()
+        span = AreaH()
+        total = extentH
+        seen = span
+        pos = listTop
+        stepSize = ROWH
+        IF viewMode = "large" THEN stepSize = 35
+    ELSE
+        top = AreaX()
+        span = AreaW()
+        total = extentW
+        seen = span
+        pos = listLeft
+        stepSize = 60
+    END IF
+    thumb = MATH.Max(8, Int((span - 2 * SBW) * seen / MATH.Max(1, total)))
+    thumbAt = top + SBW + Int((span - 2 * SBW - thumb) * pos / MATH.Max(1, total - seen))
+    IF at < top + SBW THEN
+        pos = pos - stepSize
+    ELSEIF at >= top + span - SBW THEN
+        pos = pos + stepSize
+    ELSEIF at < thumbAt THEN
+        pos = pos - seen + stepSize
+    ELSEIF at >= thumbAt + thumb THEN
+        pos = pos + seen - stepSize
+    ELSE
+        ' on the thumb: drag it
+        grabOffset = at - thumbAt
+        IF which = "tree" THEN mode = "tthumb"
+        IF which = "list" THEN mode = "lthumb"
+        IF which = "hlist" THEN mode = "hthumb"
+        RETURN
+    END IF
+    SetScroll(which, pos)
+END SUB
+
+SUB SetScroll (which AS String, pos AS Integer)
+    IF which = "tree" THEN
+        treeTop = pos
+        ClampScroll()
+        DrawTree()
+    ELSEIF which = "list" THEN
+        listTop = pos
+        ClampScroll()
+        DrawList()
+    ELSE
+        listLeft = pos
+        ClampScroll()
+        DrawList()
+    END IF
+END SUB
+
+SUB DragThumb (x AS Integer, y AS Integer)
+    VAR top AS Integer
+    VAR span AS Integer
+    VAR total AS Integer
+    VAR at AS Integer
+    VAR thumb AS Integer
+    VAR which AS String
+    IF SYS.Ticks - lastPaint < 40 THEN RETURN
+    IF mode = "tthumb" THEN
+        which = "tree"
+        top = HEADH + 2
+        span = TreeInnerH()
+        total = tPath.Count * ROWH + 4
+        at = y
+    ELSEIF mode = "lthumb" THEN
+        which = "list"
+        top = AreaY()
+        span = AreaH()
+        total = extentH
+        at = y
+    ELSE
+        which = "hlist"
+        top = AreaX()
+        span = AreaW()
+        total = extentW
+        at = x
+    END IF
+    thumb = MATH.Max(8, Int((span - 2 * SBW) * span / MATH.Max(1, total)))
+    SetScroll(which, Int((at - grabOffset - top - SBW) * (total - span) / MATH.Max(1, span - 2 * SBW - thumb)))
+    lastPaint = SYS.Ticks
+END SUB
+
+SUB ColumnClick (x AS Integer)
+    VAR k AS Integer
+    VAR cx AS Integer
+    cx = AreaX() - listLeft
+    FOR k = 0 TO colW.Count - 1
+        IF x >= cx AND x < cx + colW[k] THEN
+            IF k = 0 THEN Act("Arrange by Name")
+            IF k = 1 THEN Act("Arrange by Size")
+            IF k = 2 THEN Act("Arrange by Type")
+            RETURN
+        END IF
+        cx = cx + colW[k]
+    NEXT
+END SUB
+
+' Makes sure item i (or tree node i) can be seen
+SUB ScrollToItem (i AS Integer)
+    IF i < 0 OR i >= cName.Count THEN RETURN
+    IF viewMode = "list" THEN
+        IF itX[i] < listLeft THEN listLeft = itX[i]
+        IF itX[i] + itW[i] > listLeft + AreaW() THEN listLeft = itX[i] + itW[i] - AreaW()
+    ELSE
+        IF itY[i] < listTop THEN listTop = itY[i]
+        IF itY[i] + itH[i] > listTop + AreaH() THEN listTop = itY[i] + itH[i] - AreaH()
+    END IF
+    ClampScroll()
+END SUB
+
+SUB ScrollTreeTo (i AS Integer)
+    IF i < 0 OR IsNothing(cv) THEN RETURN
+    IF i * ROWH < treeTop THEN treeTop = i * ROWH
+    IF (i + 1) * ROWH + 4 > treeTop + TreeInnerH() THEN treeTop = (i + 1) * ROWH + 4 - TreeInnerH()
+    ClampScroll()
+END SUB
+
+' ================================================================ keys
+
+SUB Keys_OnKey (key AS String)
+    IF busy THEN RETURN
+    SELECT CASE key
+        CASE "Ctrl+C"
+            Act("Copy")
+        CASE "Ctrl+X"
+            Act("Cut")
+        CASE "Ctrl+V"
+            Act("Paste")
+        CASE "Ctrl+Z"
+            Act("Undo")
+        CASE "Ctrl+A"
+            Act("Select All")
+        CASE "Ctrl+G"
+            Act("Go to...")
+        CASE "F3", "Ctrl+F"
+            Act("Find...")
+        CASE "F5"
+            Act("Refresh")
+        CASE "Alt+ArrowLeft"
+            Act("Back")
+        CASE "Alt+ArrowRight"
+            Act("Forward")
+        CASE "Backspace"
+            Act("Up One Level")
+        CASE "Alt+Enter"
+            Act("Properties")
+        CASE "Tab", "Shift+Tab", "F6"
+            IF showTree THEN
+                focusTree = NOT focusTree
+                Redraw()
+            END IF
+        CASE "F4"
+            IF showAddress THEN addr.Focus()
+        CASE ELSE
+            IF focusTree THEN
+                TreeKey(key)
+            ELSE
+                ListKey(key)
+            END IF
+    END SELECT
+END SUB
+
+SUB TreeKey (key AS String)
+    VAR i AS Integer
+    i = tPath.IndexOf(cur)
+    SELECT CASE key
+        CASE "ArrowUp"
+            IF i > 0 THEN Act("!go " + tPath[i - 1])
+        CASE "ArrowDown"
+            IF i < tPath.Count - 1 THEN Act("!go " + tPath[i + 1])
+        CASE "ArrowRight", "+"
+            IF i >= 0 THEN
+                IF NOT tOpen[i] AND tKids[i] <> 0 THEN
+                    Act("!toggle " + Str(i))
+                ELSEIF i < tPath.Count - 1 AND tOpen[i] THEN
+                    Act("!go " + tPath[i + 1])
+                END IF
+            END IF
+        CASE "ArrowLeft", "-"
+            IF i >= 0 THEN
+                IF tOpen[i] THEN
+                    Act("!toggle " + Str(i))
+                ELSEIF ParentOf(cur) <> "" THEN
+                    Act("!go " + ParentOf(cur))
+                END IF
+            END IF
+        CASE "Enter"
+            IF i >= 0 THEN Act("!toggle " + Str(i))
+        CASE "Delete"
+            Act("!deletefolder")
+        CASE "F2"
+            Act("!renamefolder")
+    END SELECT
+END SUB
+
+SUB ListKey (key AS String)
+    VAR i AS Integer
+    VAR n AS Integer
+    VAR shift AS Bool
+    VAR k AS String
+    n = cName.Count
+    shift = key.StartsWith("Shift+")
+    k = key
+    IF shift THEN k = key.Substring(6, key.Length - 6)
+    SELECT CASE k
+        CASE "Enter"
+            Act("Open")
+            RETURN
+        CASE "Delete"
+            IF shift THEN
+                Act("!delete-for-good")
+            ELSE
+                Act("Delete")
+            END IF
+            RETURN
+        CASE "F2"
+            Act("Rename")
+            RETURN
+        CASE "Home"
+            i = 0
+        CASE "End"
+            i = n - 1
+        CASE "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown"
+            i = Neighbour(cFocus, k)
+        CASE ELSE
+            ' a letter: the next item starting with it
+            IF key.Length = 1 THEN
+                i = NextStarting(key.Upper())
+            ELSE
+                RETURN
+            END IF
+    END SELECT
+    IF n = 0 OR i < 0 THEN RETURN
+    i = MATH.Max(0, MATH.Min(n - 1, i))
+    IF shift AND cAnchor >= 0 THEN
+        SelectRange(cAnchor, i)
+        cFocus = i
+    ELSE
+        cFocus = i
+        cAnchor = i
+        FOR n = 0 TO cSel.Count - 1
+            cSel[n] = n = i
+        NEXT
+    END IF
+    ScrollToItem(i)
+    DrawList()
+    ShowStatus()
+    UpdateMenus()
+END SUB
+
+SUB SelectRange (a AS Integer, b AS Integer)
+    VAR k AS Integer
+    FOR k = 0 TO cSel.Count - 1
+        cSel[k] = k >= MATH.Min(a, b) AND k <= MATH.Max(a, b)
+    NEXT
+END SUB
+
+' The item next to i, the way a key goes in this view
+FUNCTION Neighbour (i AS Integer, k AS String) AS Integer
+    VAR best AS Integer
+    VAR bestD AS Integer
+    VAR j AS Integer
+    VAR dx AS Integer
+    VAR dy AS Integer
+    VAR d AS Integer
+    VAR pageRows AS Integer
+    IF i < 0 THEN RETURN 0
+    pageRows = MATH.Max(1, Int(AreaH() / ROWH) - 1)
+    IF k = "PageUp" OR k = "PageDown" THEN
+        IF viewMode = "details" OR viewMode = "list" THEN
+            IF k = "PageUp" THEN RETURN i - pageRows
+            RETURN i + pageRows
+        END IF
+        IF k = "PageUp" THEN k = "ArrowUp"
+        IF k = "PageDown" THEN k = "ArrowDown"
+    END IF
+    best = i
+    bestD = 999999
+    FOR j = 0 TO cName.Count - 1
+        IF j = i THEN CONTINUE
+        dx = itX[j] - itX[i]
+        dy = itY[j] - itY[i]
+        d = -1
+        SELECT CASE k
+            CASE "ArrowUp"
+                IF dy < 0 THEN d = -dy * 4 + MATH.Abs(dx)
+            CASE "ArrowDown"
+                IF dy > 0 THEN d = dy * 4 + MATH.Abs(dx)
+            CASE "ArrowLeft"
+                IF dx < 0 THEN d = -dx * 4 + MATH.Abs(dy)
+                IF dx = 0 AND dy < 0 AND viewMode = "details" THEN d = -dy
+            CASE "ArrowRight"
+                IF dx > 0 THEN d = dx * 4 + MATH.Abs(dy)
+                IF dx = 0 AND dy > 0 AND viewMode = "details" THEN d = dy
+        END SELECT
+        IF d >= 0 AND d < bestD THEN
+            bestD = d
+            best = j
+        END IF
+    NEXT
+    RETURN best
+END FUNCTION
+
+FUNCTION NextStarting (ch AS String) AS Integer
+    VAR k AS Integer
+    VAR j AS Integer
+    FOR k = 1 TO cName.Count
+        j = (MATH.Max(cFocus, -1) + k) MOD MATH.Max(1, cName.Count)
+        IF j >= 0 AND j < cName.Count THEN
+            IF ShownName(j).Upper().StartsWith(ch) THEN RETURN j
+        END IF
+    NEXT
+    RETURN -1
+END FUNCTION
+
+' ================================================================ typing a new name
+
+SUB StartRename (i AS Integer)
+    VAR x AS Integer
+    VAR y AS Integer
+    IF i < 0 OR i >= cName.Count THEN RETURN
+    ScrollToItem(i)
+    DrawList()
+    x = AreaX() + itX[i] - listLeft
+    y = AreaY() + itY[i] - listTop
+    IF viewMode = "large" THEN
+        x = x + 2
+        y = y + 34
+        ren.SetBounds(cv.X + x, cv.Y + y, itW[i] - 4, 21)
+    ELSE
+        ren.SetBounds(cv.X + x + 20, cv.Y + y - 1, MATH.Max(110, MATH.Min(itW[i], 140)), 21)
+    END IF
+    ren.Tag = cPath[i]
+    ren.Text = cName[i]
+    ren.Visible = TRUE
+    ren.Focus()
+    ren.SelectAll()
+END SUB
+
+SUB Ren_OnEnter ()
+    EndRename(TRUE)
+    keys.Focus()
+END SUB
+
+SUB Ren_OnKey (key AS String)
+    IF key = "Escape" THEN
+        EndRename(FALSE)
+        keys.Focus()
+    END IF
+END SUB
+
+' Takes the name typed (or not), and puts the box away.
+SUB EndRename (keep AS Bool)
+    VAR from AS String
+    VAR name AS String
+    IF IsNothing(ren) THEN RETURN
+    IF NOT ren.Visible THEN RETURN
+    ren.Visible = FALSE
+    from = ren.Tag
+    name = ren.Text.Trim().Upper()
+    IF NOT keep OR name = "" OR name = BaseName(from) THEN RETURN
+    Act("!rename " + from + "|" + name)
+END SUB

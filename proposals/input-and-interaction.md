@@ -208,3 +208,13 @@ turn of the mouse wheel, the guessed position was 216px out.
 The same test found a second gap. A Canvas can't take the keyboard, so the
 form designer has to focus a 1-pixel button hidden under it to get the
 Delete and arrow keys (3).
+
+Explorer (`explorer/`), a Windows 95 file manager drawn on a Canvas, needed
+the same workarounds, and more:
+* the hidden button for keys (3);
+* double clicks timed by hand (2);
+* no mouse wheel (2);
+* drags that stop at the Canvas's edge (2, capture);
+* scroll bars drawn by hand (4);
+* labels measured by assuming 8-pixel characters (7);
+* a rename box laid over the Canvas by guessing where the name is (7).

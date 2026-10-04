@@ -1,0 +1,1474 @@
+' ================================================================ commands
+'
+' Every menu item, toolbar button, key and click comes here, as the menu
+' item's text, or as one of Explorer's own: "!go path", "!toggle n",
+' "!rename path|NEWNAME", "!drop folder", "!copyto folder", "!moveto folder",
+' "!deletefolder", "!renamefolder", "!delete-for-good", "!disconnect Z".
+' Menu_OnSelect runs it busy, and shows any error.
+
+SUB DoCommand (item AS String)
+    VAR i AS Integer
+    VAR one AS Integer
+    one = FirstSel()
+    IF item.StartsWith("!go ") THEN
+        Go(item.Substring(4, item.Length - 4))
+        RETURN
+    END IF
+    IF item.StartsWith("!toggle ") THEN
+        ToggleNode(Int(Val(item.Substring(8, item.Length - 8))))
+        RETURN
+    END IF
+    IF item.StartsWith("!rename ") THEN
+        RenameTo(item.Substring(8, item.IndexOf("|") - 8), item.Substring(item.IndexOf("|") + 1, item.Length - item.IndexOf("|") - 1))
+        RETURN
+    END IF
+    IF item.StartsWith("!drop ") THEN
+        DropOn(item.Substring(6, item.Length - 6), "")
+        RETURN
+    END IF
+    IF item.StartsWith("!copyto ") THEN
+        DropOn(item.Substring(8, item.Length - 8), "copy")
+        RETURN
+    END IF
+    IF item.StartsWith("!moveto ") THEN
+        DropOn(item.Substring(8, item.Length - 8), "move")
+        RETURN
+    END IF
+    IF item.StartsWith("!disconnect ") THEN
+        Disconnect(item.Substring(12, 1))
+        RETURN
+    END IF
+    IF item.StartsWith("!map ") THEN
+        MapDrive(item.Substring(5, item.Length - 5))
+        RETURN
+    END IF
+    SELECT CASE item
+        CASE "Paste Into Folder"
+            IF one >= 0 THEN PasteInto(cPath[one])
+        CASE "Disconnect"
+            IF one >= 0 AND KindOf(one) = "NETDRIVE" THEN
+                Disconnect(cPath[one].Substring(0, 1))
+            ELSEIF IsMapped(cur) THEN
+                Disconnect(cur.Substring(0, 1))
+            END IF
+        CASE "Expand", "Collapse"
+            ToggleNode(tPath.IndexOf(cur))
+        CASE "Open in New Window"
+            SYS.Start(ME, "/e " + cur)
+        CASE "Delete Folder"
+            DoCommand("!deletefolder")
+        CASE "Rename Folder"
+            DoCommand("!renamefolder")
+        CASE "Move Here"
+            DropOn(ctx.Tag, "move")
+        CASE "Copy Here"
+            DropOn(ctx.Tag, "copy")
+        CASE "Open"
+            IF one < 0 THEN RETURN
+            IF IsFolderish(one) THEN
+                Go(cPath[one])
+            ELSEIF cKind[one] = "APP" THEN
+                SYS.Start(cPath[one], "")
+            ELSEIF cur = "::RECYCLE" THEN
+                Properties()
+            ELSE
+                FOR i = 0 TO cName.Count - 1
+                    IF cSel[i] AND cKind[i] = "F" THEN OpenFile(cPath[i], FALSE)
+                NEXT
+            END IF
+        CASE "Explore"
+            IF one >= 0 THEN
+                IF IsFolderish(one) THEN SYS.Start(ME, "/e " + cPath[one])
+            ELSE
+                SYS.Start(ME, "/e " + cur)
+            END IF
+        CASE "Edit"
+            IF one >= 0 THEN OpenFile(cPath[one], TRUE)
+        CASE "New Folder"
+            NewThing(TRUE)
+        CASE "New Text Document"
+            NewThing(FALSE)
+        CASE "Delete"
+            IF AllKind("NETDRIVE") THEN
+                FOR i = 0 TO cName.Count - 1
+                    IF cSel[i] THEN Disconnect(cPath[i].Substring(0, 1))
+                NEXT
+            ELSE
+                DeleteSelected(cur = "::RECYCLE")
+            END IF
+        CASE "!delete-for-good"
+            DeleteSelected(TRUE)
+        CASE "Rename"
+            IF one >= 0 AND (cKind[one] = "F" OR cKind[one] = "D") THEN StartRename(one)
+        CASE "!renamefolder"
+            IF NOT IsVirtual(cur) AND NOT IsRoot(cur) THEN
+                IF Prompt("Rename", "New name for " + PlaceLabel(cur) + ":", BaseName(cur)) THEN RenameTo(cur, promptAnswer.Trim().Upper())
+            END IF
+        CASE "!deletefolder"
+            IF NOT IsVirtual(cur) AND NOT IsRoot(cur) THEN DeletePaths(StrList(cur), FALSE)
+        CASE "Properties"
+            Properties()
+        CASE "Restore"
+            Restore()
+        CASE "Empty Recycle Bin"
+            EmptyBin()
+        CASE "Close"
+            win.Close()
+        CASE "Undo"
+            Undo()
+        CASE "Cut"
+            ToClipboard("cut")
+        CASE "Copy"
+            ToClipboard("copy")
+        CASE "Paste"
+            Paste()
+        CASE "Select All"
+            FOR i = 0 TO cSel.Count - 1
+                cSel[i] = TRUE
+            NEXT
+            DrawList()
+            ShowStatus()
+        CASE "Invert Selection"
+            FOR i = 0 TO cSel.Count - 1
+                cSel[i] = NOT cSel[i]
+            NEXT
+            DrawList()
+            ShowStatus()
+        CASE "Toolbar"
+            showToolbar = NOT showToolbar
+            ChangedView()
+        CASE "Address Bar"
+            showAddress = NOT showAddress
+            ChangedView()
+        CASE "Status Bar"
+            statusOn = NOT statusOn
+            ChangedView()
+        CASE "Folders"
+            showTree = NOT showTree
+            ChangedView()
+        CASE "Large Icons"
+            SetView("large")
+        CASE "Small Icons"
+            SetView("small")
+        CASE "List"
+            SetView("list")
+        CASE "Details"
+            SetView("details")
+        CASE "Arrange by Name"
+            sortBy = "name"
+            Refresh(TRUE)
+            SaveSettings()
+        CASE "Arrange by Type"
+            sortBy = "type"
+            Refresh(TRUE)
+            SaveSettings()
+        CASE "Arrange by Size"
+            sortBy = "size"
+            Refresh(TRUE)
+            SaveSettings()
+        CASE "Refresh"
+            IF cur = "::NETWORK" OR expanded.Contains("|::NETWORK|") THEN Machines(TRUE)
+            noKids = ""
+            Refresh(TRUE)
+        CASE "Options..."
+            Options()
+        CASE "Back"
+            Travel(hi - 1)
+        CASE "Forward"
+            Travel(hi + 1)
+        CASE "Up One Level"
+            IF ParentOf(cur) <> "" THEN Go(ParentOf(cur))
+        CASE "My Computer"
+            Go("::COMPUTER")
+        CASE "My Files"
+            Go("C:\MYFILES")
+        CASE "Network Neighborhood"
+            Go("::NETWORK")
+        CASE "Recycle Bin"
+            Go("::RECYCLE")
+        CASE "Find..."
+            Find()
+        CASE "Map Network Drive..."
+            MapDrive("")
+        CASE "Disconnect Network Drive..."
+            DisconnectDialog()
+        CASE "Go to..."
+            IF Prompt("Go To Folder", "Type the name of a folder, a drive (Z:) or a machine (\\BRAVO):", AddressFor(cur)) THEN Go(promptAnswer)
+        CASE "About Explorer"
+            Say("Explorer" + Chr(10) + Chr(10) + "The folders in a tree, your files beside them, and every machine on the network in the same window. Map a machine's disk as a drive letter with Tools > Map Network Drive." + Chr(10) + Chr(10) + "Written in SPARK: C:\PROGRAMS\EXPLORER.SPK", "info")
+    END SELECT
+END SUB
+
+FUNCTION StrList (s AS String) AS Array OF String
+    VAR out AS Array OF String
+    out.Add(s)
+    RETURN out
+END FUNCTION
+
+SUB SetView (v AS String)
+    viewMode = v
+    listTop = 0
+    listLeft = 0
+    LayoutList()
+    DrawList()
+    SaveSettings()
+END SUB
+
+SUB ChangedView ()
+    Layout()
+    LayoutList()
+    Refresh(TRUE)
+    DrawToolbar()
+    SaveSettings()
+END SUB
+
+' ================================================================ opening files
+
+' A file, by its kind: programs run, pictures open in Sketch, pages in
+' Voyager, JavaScript in Node, the rest in Notes. edit: in an editor instead.
+' A file on another machine is copied here first (C:\SYSTEM\TEMP), and the
+' clock sends it back whenever it's saved.
+SUB OpenFile (p AS String, edit AS Bool)
+    VAR local AS String
+    VAR ext AS String
+    VAR text AS String
+    VAR k AS Integer
+    local = p
+    IF IsRemote(p) THEN
+        text = VRead(p)
+        local = TEMPDIR + "\" + BaseName(p)
+        FS.Write(local, text)
+        k = wLocal.IndexOf(local)
+        IF k < 0 THEN
+            wLocal.Add(local)
+            wRemote.Add(p)
+            wText.Add(text)
+        ELSE
+            wRemote[k] = p
+            wText[k] = text
+        END IF
+        win.Status = "Opened a copy of " + BaseName(p) + " from \\" + HostOf(p) + ": what you save goes back there."
+    END IF
+    ext = ExtOf(local)
+    IF edit THEN
+        IF ext = "SPK" THEN
+            SYS.Start("C:\SYSTEM\SPARK.EXE", local)
+        ELSE
+            SYS.Start("C:\PROGRAMS\NOTES.SPK", local)
+        END IF
+        RETURN
+    END IF
+    SELECT CASE ext
+        CASE "SPK", "EXE"
+            SYS.Run(local)
+        CASE "PIC"
+            SYS.Start("C:\PROGRAMS\SKETCH.SPK", local)
+        CASE "HTM", "HTML"
+            SYS.Start("C:\SYSTEM\VOYAGER.EXE", "file:" + local)
+        CASE "JS"
+            IF FS.Exists("C:\PROGRAMS\NODE.SPK") THEN
+                SYS.Start("C:\PROGRAMS\NODE.SPK", "--cwd=" + ParentOf(local) + " " + local)
+            ELSE
+                SYS.Start("C:\PROGRAMS\NOTES.SPK", local)
+            END IF
+        CASE "SH"
+            IF FS.Exists("C:\PROGRAMS\SIMSH.SPK") THEN
+                SYS.Start("C:\PROGRAMS\SIMSH.SPK", local)
+            ELSE
+                SYS.Start("C:\PROGRAMS\NOTES.SPK", local)
+            END IF
+        CASE "RUN"
+            SYS.Start("C:\PROGRAMS\NOTES.SPK", local)
+        CASE ELSE
+            SYS.Start("C:\PROGRAMS\NOTES.SPK", local)
+    END SELECT
+END SUB
+
+' Every 2 seconds: copies of other machines' files that were saved go home.
+SUB Clock_OnTick ()
+    VAR k AS Integer
+    VAR text AS String
+    IF busy THEN RETURN
+    ' (once: the first paint can come before SIM95's font has loaded)
+    IF NOT repainted THEN
+        repainted = TRUE
+        Redraw()
+        DrawToolbar()
+    END IF
+    FOR k = 0 TO wLocal.Count - 1
+        IF NOT FS.Exists(wLocal[k]) THEN CONTINUE
+        text = FS.Read(wLocal[k])
+        IF text = wText[k] THEN CONTINUE
+        busy = TRUE
+        TRY
+            VWrite(wRemote[k], text)
+            wText[k] = text
+            IF ParentOf(wRemote[k]) = cur THEN Refresh(TRUE)
+            win.Status = "Saved " + BaseName(wRemote[k]) + " back to \\" + HostOf(wRemote[k])
+        CATCH err
+            IF NOT err.StartsWith("!cancel") THEN win.Status = "Could not save " + BaseName(wRemote[k]) + " back to \\" + HostOf(wRemote[k]) + ": " + err.Replace(Chr(10), " ")
+            wText[k] = text
+        END TRY
+        busy = FALSE
+    NEXT
+END SUB
+
+' ================================================================ new, rename
+
+' A name like NAME in dir that isn't taken: NOTES.TXT, NOTES~1.TXT, NOTES~2.TXT...
+FUNCTION FreeName (dir AS String, name AS String) AS String
+    VAR base AS String
+    VAR ext AS String
+    VAR n AS Integer
+    VAR cand AS String
+    VAR taken AS String
+    VAR e AS String
+    taken = "|"
+    FOR EACH e IN VList(dir)
+        taken = taken + e.Split("|")[0].Upper() + "|"
+    NEXT
+    IF NOT taken.Contains("|" + name + "|") THEN RETURN name
+    base = name
+    ext = ""
+    IF name.Contains(".") THEN
+        base = name.Substring(0, name.IndexOf("."))
+        ext = name.Substring(name.IndexOf("."), name.Length - name.IndexOf("."))
+    END IF
+    FOR n = 1 TO 999
+        cand = base.Substring(0, MATH.Min(base.Length, 7 - Str(n).Length)) + "~" + Str(n) + ext
+        IF NOT taken.Contains("|" + cand + "|") THEN RETURN cand
+    NEXT
+    THROW "There are too many files called " + name + " here."
+    RETURN ""
+END FUNCTION
+
+SUB NewThing (folder AS Bool)
+    VAR name AS String
+    VAR p AS String
+    VAR i AS Integer
+    IF NOT CanWriteHere() THEN THROW "You can't make anything here."
+    IF folder THEN
+        name = FreeName(cur, "NEWFOLDR")
+        p = JoinPath(cur, name)
+        VMakeDir(p)
+    ELSE
+        name = FreeName(cur, "NEWTEXT.TXT")
+        p = JoinPath(cur, name)
+        VWrite(p, "")
+    END IF
+    SetUndo("new", StrList(p))
+    noKids = noKids.Replace("|" + cur + "|", "|")
+    Refresh(FALSE)
+    i = cPath.IndexOf(p)
+    IF i >= 0 THEN
+        SelectOnly(i)
+        StartRename(i)
+    END IF
+END SUB
+
+SUB RenameTo (from AS String, name AS String)
+    VAR target AS String
+    IF NOT Valid83(name) THEN THROW "A file name is 8.3: up to 8 letters, digits, - or _, then perhaps a dot and up to 3 more (NOTES.TXT)."
+    target = JoinPath(ParentOf(from), name)
+    IF target = from THEN RETURN
+    IF VStat(target) <> "" THEN THROW "Cannot rename " + BaseName(from) + ": a file with the name you specified already exists. Specify a different filename."
+    VRename(from, target)
+    SetUndo("move", StrList(from + "|" + target))
+    IF cur = from OR cur.StartsWith(from + "\") THEN
+        cur = target + cur.Substring(from.Length, cur.Length - from.Length)
+        expanded = expanded.Replace("|" + from + "|", "|" + target + "|")
+    END IF
+    Refresh(FALSE)
+    SelectPath(target)
+END SUB
+
+SUB SelectPath (p AS String)
+    VAR i AS Integer
+    i = cPath.IndexOf(p)
+    IF i >= 0 THEN
+        SelectOnly(i)
+        ScrollToItem(i)
+        DrawList()
+    END IF
+END SUB
+
+' ================================================================ copy, cut, paste, drop
+
+FUNCTION Picked () AS Array OF String
+    VAR out AS Array OF String
+    VAR i AS Integer
+    FOR i = 0 TO cName.Count - 1
+        IF cSel[i] THEN out.Add(cPath[i])
+    NEXT
+    RETURN out
+END FUNCTION
+
+' The clipboard holds where things are, not the things: "copy" or "cut",
+' then a path a line (mapped drives as \\MACHINE\..., so any window knows them).
+SUB ToClipboard (how AS String)
+    VAR out AS Array OF String
+    VAR p AS String
+    IF NOT CanCopySel() OR SelCount() = 0 THEN RETURN
+    out.Add(how)
+    FOR EACH p IN Picked()
+        out.Add(ToUnc(p))
+    NEXT
+    FS.Write(CLIPFILE, out.Join(Chr(10)))
+    IF how = "cut" THEN
+        ReadCutSet()
+        win.Status = Str(out.Count - 1) + " object(s) cut: Paste them into a folder to move them there"
+    ELSE
+        cutSet = "|"
+        win.Status = Str(out.Count - 1) + " object(s) copied: Paste them into a folder, in any Explorer window"
+    END IF
+    DrawList()
+END SUB
+
+SUB Paste ()
+    IF NOT CanWriteHere() THEN THROW "You can't paste here."
+    PasteInto(cur)
+END SUB
+
+SUB PasteInto (dst AS String)
+    VAR lines AS Array OF String
+    VAR srcs AS Array OF String
+    VAR k AS Integer
+    IF NOT FS.Exists(CLIPFILE) THEN RETURN
+    lines = FS.Read(CLIPFILE).Lines()
+    IF lines.Count < 2 THEN RETURN
+    FOR k = 1 TO lines.Count - 1
+        IF lines[k] <> "" THEN srcs.Add(FromUnc(lines[k]))
+    NEXT
+    Transfer(srcs, dst, lines[0] = "cut")
+    IF lines[0] = "cut" THEN FS.Delete(CLIPFILE)
+END SUB
+
+' Dropped on a folder: moved on the same disk, copied to another, as Windows
+' does it ("move" or "copy" when chosen from the right-button menu). Onto the
+' Recycle Bin: deleted.
+SUB DropOn (target AS String, how AS String)
+    VAR srcs AS Array OF String
+    VAR move AS Bool
+    srcs = Picked()
+    IF srcs.Count = 0 THEN RETURN
+    IF target = "::RECYCLE" THEN
+        DeleteSelected(FALSE)
+        RETURN
+    END IF
+    target = FolderFor(target)
+    IF how = "" THEN
+        move = SameDisk(srcs[0], target)
+    ELSE
+        move = how = "move"
+    END IF
+    Transfer(srcs, target, move)
+END SUB
+
+' A machine dropped on is its C:\ (\\BRAVO\); anything else as it is
+FUNCTION FolderFor (p AS String) AS String
+    RETURN p
+END FUNCTION
+
+' Copies (or moves) each of srcs into the folder dst.
+SUB Transfer (srcs AS Array OF String, dst AS String, move AS Bool)
+    VAR src AS String
+    VAR kind AS String
+    VAR name AS String
+    VAR target AS String
+    VAR made AS Array OF String
+    VAR moved AS Array OF String
+    VAR word AS String
+    IF IsVirtual(dst) THEN THROW "You can't put files there."
+    word = "copy"
+    IF move THEN word = "move"
+    StartProgress()
+    TRY
+        FOR EACH src IN srcs
+            IF Cancelled() THEN BREAK
+            kind = VStat(src)
+            IF kind = "" THEN CONTINUE
+            IF kind = "D" AND (dst = src OR dst.StartsWith(src + "\") OR ToUnc(dst).StartsWith(ToUnc(src) + "\")) THEN THROW "Cannot " + word + " " + BaseName(src) + ": the destination folder is inside the source folder."
+            name = BaseName(src)
+            target = JoinPath(dst, name)
+            IF ToUnc(target) = ToUnc(src) THEN
+                IF move THEN CONTINUE
+                ' a copy in its own folder: Copy of..., as NAME~1
+                target = JoinPath(dst, FreeName(dst, name))
+            ELSEIF VStat(target) <> "" THEN
+                IF NOT Ask2("This folder already contains a " + KindWord(VStat(target)) + " named '" + name + "'." + Chr(10) + Chr(10) + "Would you like to replace it?", "Confirm File Replace") THEN CONTINUE
+                VRemoveTree(target, VStat(target))
+            END IF
+            IF move AND SameDisk(src, dst) THEN
+                Progress("Moving", src, dst)
+                VRename(src, target)
+                moved.Add(src + "|" + target)
+            ELSE
+                VCopyTree(src, kind, target)
+                IF move THEN
+                    VRemoveTree(src, kind)
+                    moved.Add(src + "|" + target)
+                ELSE
+                    made.Add(target)
+                END IF
+            END IF
+        NEXT
+    CATCH err
+        CloseProgress()
+        AfterChange(made, moved)
+        THROW err
+    END TRY
+    CloseProgress()
+    AfterChange(made, moved)
+END SUB
+
+SUB AfterChange (made AS Array OF String, moved AS Array OF String)
+    VAR p AS String
+    IF moved.Count > 0 THEN
+        SetUndo("move", moved)
+    ELSEIF made.Count > 0 THEN
+        SetUndo("copy", made)
+    END IF
+    noKids = ""
+    Refresh(FALSE)
+    FOR EACH p IN made
+        IF cPath.IndexOf(p) >= 0 THEN cSel[cPath.IndexOf(p)] = TRUE
+    NEXT
+    FOR EACH p IN moved
+        IF cPath.IndexOf(p.Split("|")[1]) >= 0 THEN cSel[cPath.IndexOf(p.Split("|")[1])] = TRUE
+    NEXT
+    DrawList()
+    ShowStatus()
+END SUB
+
+FUNCTION KindWord (k AS String) AS String
+    IF k = "D" THEN RETURN "folder"
+    RETURN "file"
+END FUNCTION
+
+' ================================================================ delete, the Recycle Bin
+
+SUB DeleteSelected (forGood AS Bool)
+    VAR p AS Array OF String
+    p = Picked()
+    IF p.Count = 0 THEN RETURN
+    DeletePaths(p, forGood)
+END SUB
+
+SUB DeletePaths (paths AS Array OF String, forGood AS Bool)
+    VAR p AS String
+    VAR kind AS String
+    VAR toBin AS Bool
+    VAR question AS String
+    VAR binned AS Array OF String
+    VAR name AS String
+    VAR i AS Integer
+    IF cur = "::RECYCLE" THEN
+        forGood = TRUE
+        toBin = FALSE
+    ELSE
+        toBin = NOT forGood AND NOT IsRemote(paths[0])
+    END IF
+    name = PlaceLabel(paths[0])
+    i = cPath.IndexOf(paths[0])
+    IF i >= 0 THEN name = ShownName(i)
+    IF toBin THEN
+        question = "Are you sure you want to send '" + name + "' to the Recycle Bin?"
+        IF paths.Count > 1 THEN question = "Are you sure you want to send these " + Str(paths.Count) + " items to the Recycle Bin?"
+    ELSE
+        question = "Are you sure you want to delete '" + name + "'?"
+        IF paths.Count > 1 THEN question = "Are you sure you want to delete these " + Str(paths.Count) + " items?"
+        IF IsRemote(paths[0]) THEN question = question + Chr(10) + Chr(10) + "It is on another machine's disk: it can't be brought back."
+    END IF
+    IF NOT Ask2(question, "Confirm File Delete") THEN RETURN
+    StartProgress()
+    TRY
+        FOR EACH p IN paths
+            IF Cancelled() THEN BREAK
+            IF cur = "::RECYCLE" THEN
+                kind = "F"
+                IF FS.IsDir(p) THEN kind = "D"
+                VRemoveTree(p, kind)
+                RemoveFromBin(BaseName(p))
+                CONTINUE
+            END IF
+            kind = VStat(p)
+            IF kind = "" THEN CONTINUE
+            IF toBin THEN
+                Progress("Deleting", p, "")
+                binned.Add(Recycle(p, kind, SizeOf(p)))
+            ELSE
+                VRemoveTree(p, kind)
+            END IF
+        NEXT
+    CATCH err
+        CloseProgress()
+        IF binned.Count > 0 THEN SetUndo("delete", binned)
+        Refresh(FALSE)
+        THROW err
+    END TRY
+    CloseProgress()
+    IF binned.Count > 0 THEN SetUndo("delete", binned)
+    IF paths.Count = 1 AND paths[0] = cur THEN
+        cur = ParentOf(cur)
+    END IF
+    noKids = ""
+    Refresh(FALSE)
+END SUB
+
+FUNCTION SizeOf (p AS String) AS Integer
+    VAR i AS Integer
+    i = cPath.IndexOf(p)
+    IF i >= 0 THEN RETURN cSize[i]
+    RETURN 0
+END FUNCTION
+
+SUB RemoveFromBin (name AS String)
+    VAR keep AS Array OF String
+    VAR line AS String
+    FOR EACH line IN BinLines()
+        IF line.Split("|")[0] <> name THEN keep.Add(line)
+    NEXT
+    SaveBin(keep)
+END SUB
+
+SUB Restore ()
+    VAR p AS String
+    VAR back AS Array OF String
+    IF cur <> "::RECYCLE" THEN RETURN
+    FOR EACH p IN Picked()
+        back.Add(Unrecycle(BaseName(p)))
+    NEXT
+    Refresh(FALSE)
+    win.Status = Str(back.Count) + " object(s) restored"
+END SUB
+
+SUB EmptyBin ()
+    VAR line AS String
+    VAR lines AS Array OF String
+    VAR p AS String
+    lines = BinLines()
+    IF lines.Count = 0 THEN RETURN
+    IF NOT Ask2("Are you sure you want to delete all of the " + Str(lines.Count) + " items in the Recycle Bin?", "Confirm Multiple File Delete") THEN RETURN
+    StartProgress()
+    FOR EACH line IN lines
+        p = BINDIR + "\" + line.Split("|")[0]
+        VRemoveTree(p, line.Split("|")[4])
+    NEXT
+    CloseProgress()
+    SaveBin(StrList(""))
+    FS.Write(BINDIR + "\INFO.TXT", "")
+    IF undoKind = "delete" THEN SetUndo("", StrList(""))
+    Refresh(FALSE)
+END SUB
+
+' ================================================================ undo
+
+SUB SetUndo (kind AS String, data AS Array OF String)
+    undoKind = kind
+    undoData = data
+END SUB
+
+SUB Undo ()
+    VAR d AS String
+    VAR k AS Integer
+    VAR kind AS String
+    IF undoKind = "" THEN RETURN
+    kind = undoKind
+    undoKind = ""
+    SELECT CASE kind
+        CASE "move"
+            ' each back where it was, last first
+            FOR k = undoData.Count - 1 TO 0 STEP -1
+                d = undoData[k]
+                IF SameDisk(d.Split("|")[1], d.Split("|")[0]) THEN
+                    VRename(d.Split("|")[1], d.Split("|")[0])
+                ELSE
+                    VCopyTree(d.Split("|")[1], VStat(d.Split("|")[1]), d.Split("|")[0])
+                    VRemoveTree(d.Split("|")[1], VStat(d.Split("|")[1]))
+                END IF
+            NEXT
+            win.Status = "Undid the move"
+        CASE "copy", "new"
+            IF NOT Ask2("Undo " + kind + ": delete the " + Str(undoData.Count) + " item(s) it made?", "Undo") THEN RETURN
+            FOR EACH d IN undoData
+                IF VStat(d) <> "" THEN VRemoveTree(d, VStat(d))
+            NEXT
+        CASE "delete"
+            FOR EACH d IN undoData
+                Unrecycle(d)
+            NEXT
+            win.Status = "Restored from the Recycle Bin"
+    END SELECT
+    noKids = ""
+    IF NOT IsVirtual(cur) THEN
+        IF VStat(cur) = "" THEN cur = "::COMPUTER"
+    END IF
+    Refresh(FALSE)
+END SUB
+
+' ================================================================ context menus
+
+SUB PopupAt (x AS Integer, y AS Integer)
+    ctx.Popup(cv.X + x, cv.Y + y)
+END SUB
+
+SUB ItemMenu (x AS Integer, y AS Integer)
+    VAR one AS Integer
+    one = FirstSel()
+    ctx.Clear()
+    ctx.AddMenu("Item")
+    IF cur = "::RECYCLE" THEN
+        ctx.AddItem("Item", "Restore")
+        ctx.AddSeparator("Item")
+        ctx.AddItem("Item", "Delete")
+        ctx.AddSeparator("Item")
+        ctx.AddItem("Item", "Properties")
+        PopupAt(x, y)
+        RETURN
+    END IF
+    ctx.AddItem("Item", "Open")
+    IF IsFolderish(one) THEN ctx.AddItem("Item", "Explore")
+    IF KindOf(one) = "F" THEN ctx.AddItem("Item", "Edit")
+    IF KindOf(one) = "MACHINE" THEN
+        ctx.AddSeparator("Item")
+        ctx.AddItem("Item", "Map Network Drive...")
+    END IF
+    IF KindOf(one) = "NETDRIVE" THEN
+        ctx.AddSeparator("Item")
+        ctx.AddItem("Item", "Disconnect")
+    END IF
+    IF CanCopySel() THEN
+        ctx.AddSeparator("Item")
+        ctx.AddItem("Item", "Cut")
+        ctx.AddItem("Item", "Copy")
+        IF IsFolderish(one) AND FS.Exists(CLIPFILE) THEN ctx.AddItem("Item", "Paste Into Folder")
+        ctx.AddSeparator("Item")
+        ctx.AddItem("Item", "Delete")
+        ctx.AddItem("Item", "Rename")
+    END IF
+    ctx.AddSeparator("Item")
+    ctx.AddItem("Item", "Properties")
+    PopupAt(x, y)
+END SUB
+
+SUB BackgroundMenu (x AS Integer, y AS Integer)
+    ctx.Clear()
+    ctx.AddMenu("Here")
+    ctx.AddItem("Here", "Large Icons")
+    ctx.AddItem("Here", "Small Icons")
+    ctx.AddItem("Here", "List")
+    ctx.AddItem("Here", "Details")
+    ctx.AddSeparator("Here")
+    ctx.AddItem("Here", "Arrange by Name")
+    ctx.AddItem("Here", "Arrange by Type")
+    ctx.AddItem("Here", "Arrange by Size")
+    ctx.AddSeparator("Here")
+    ctx.AddItem("Here", "Refresh")
+    IF CanWriteHere() THEN
+        ctx.AddItem("Here", "Paste")
+        ctx.SetEnabled("Paste", FS.Exists(CLIPFILE))
+        ctx.AddSeparator("Here")
+        ctx.AddItem("Here", "New Folder")
+        ctx.AddItem("Here", "New Text Document")
+    END IF
+    IF cur = "::RECYCLE" THEN
+        ctx.AddSeparator("Here")
+        ctx.AddItem("Here", "Empty Recycle Bin")
+    END IF
+    ctx.AddSeparator("Here")
+    ctx.AddItem("Here", "Properties")
+    PopupAt(x, y)
+END SUB
+
+SUB NodeMenu (i AS Integer, x AS Integer, y AS Integer)
+    VAR p AS String
+    p = tPath[i]
+    ' the tree's own folder is picked for what the menu does
+    IF p <> cur THEN Act("!go " + p)
+    ctx.Clear()
+    ctx.AddMenu("Node")
+    IF tOpen[i] THEN
+        ctx.AddItem("Node", "Collapse")
+    ELSE
+        ctx.AddItem("Node", "Expand")
+    END IF
+    ctx.AddItem("Node", "Open in New Window")
+    IF p = "::RECYCLE" THEN ctx.AddItem("Node", "Empty Recycle Bin")
+    IF IsUnc(p) AND IsRoot(p) THEN ctx.AddItem("Node", "Map Network Drive...")
+    IF IsMapped(p) AND IsRoot(p) THEN ctx.AddItem("Node", "Disconnect")
+    IF NOT IsVirtual(p) AND NOT IsRoot(p) THEN
+        ctx.AddSeparator("Node")
+        ctx.AddItem("Node", "Paste")
+        ctx.SetEnabled("Paste", FS.Exists(CLIPFILE))
+        ctx.AddItem("Node", "Delete Folder")
+        ctx.AddItem("Node", "Rename Folder")
+    END IF
+    ctx.AddSeparator("Node")
+    ctx.AddItem("Node", "Properties")
+    ctx.Tag = Str(i)
+    PopupAt(x, y)
+END SUB
+
+SUB DropMenu (target AS String, x AS Integer, y AS Integer)
+    ctx.Clear()
+    ctx.AddMenu("Drop")
+    ctx.AddItem("Drop", "Move Here")
+    ctx.AddItem("Drop", "Copy Here")
+    ctx.AddSeparator("Drop")
+    ctx.AddItem("Drop", "Cancel")
+    ctx.Tag = target
+    PopupAt(x, y)
+END SUB
+
+' ================================================================ dialogs
+
+' A window of the program's own that the caller waits on: TRUE for OK.
+FUNCTION RunDialog (focusBox AS Bool) AS Bool
+    dlgDone = FALSE
+    dlgOk = FALSE
+    dlg.Modal = TRUE
+    dlg.Resizable = FALSE
+    dlg.onClose = Dlg_OnClose
+    dlg.Show()
+    IF focusBox THEN
+        dBox1.Focus()
+        dBox1.SelectAll()
+    END IF
+    WHILE NOT dlgDone
+        SYS.Sleep(30)
+    END WHILE
+    RETURN dlgOk
+END FUNCTION
+
+SUB Dlg_OnOk ()
+    dlgOk = TRUE
+    dlgDone = TRUE
+END SUB
+
+SUB Dlg_OnCancel ()
+    dlgDone = TRUE
+END SUB
+
+SUB Dlg_OnClose ()
+    dlgDone = TRUE
+END SUB
+
+SUB EndDialog ()
+    TRY
+        IF NOT IsNothing(dlg) THEN dlg.Close()
+    CATCH err
+    END TRY
+END SUB
+
+FUNCTION AddLabel (w AS GUI_Window, text AS String, x AS Integer, y AS Integer, width AS Integer) AS GUI_Label
+    VAR l AS GUI_Label
+    l = GUI_Label.New(w)
+    l.Text = text
+    l.SetBounds(x, y, width, 14)
+    RETURN l
+END FUNCTION
+
+SUB OkCancel (w AS GUI_Window, y AS Integer, okText AS String)
+    VAR ok AS GUI_Button
+    VAR cancel AS GUI_Button
+    ok = GUI_Button.New(w)
+    ok.Text = okText
+    ok.Default = TRUE
+    ok.SetBounds(w.Width - 164, y, 75, 23)
+    ok.onClick = Dlg_OnOk
+    cancel = GUI_Button.New(w)
+    cancel.Text = "Cancel"
+    cancel.Cancel = TRUE
+    cancel.SetBounds(w.Width - 83, y, 75, 23)
+    cancel.onClick = Dlg_OnCancel
+END SUB
+
+' One line asked for; the answer is in dBox1.Text (until the next dialog).
+FUNCTION Prompt (title AS String, label AS String, initial AS String) AS Bool
+    VAR ok AS Bool
+    dlg = GUI_Window.New(title, 340, 96)
+    dlg.Icon = "folder"
+    AddLabel(dlg, label, 8, 8, 324)
+    dBox1 = GUI_TextBox.New(dlg)
+    dBox1.Text = initial
+    dBox1.SetBounds(8, 30, 324, 21)
+    dBox1.onEnter = Dlg_OnOk
+    OkCancel(dlg, 62, "OK")
+    ok = RunDialog(TRUE)
+    promptAnswer = ""
+    IF ok THEN promptAnswer = dBox1.Text
+    EndDialog()
+    RETURN ok AND promptAnswer.Trim() <> ""
+END FUNCTION
+
+SUB Say (text AS String, kind AS String)
+    VAR box AS GUI_MessageBox
+    box = GUI_MessageBox.New(win)
+    box.Title = "Explorer"
+    box.Kind = kind
+    box.Text = text
+    box.Show()
+    box.Destroy()
+END SUB
+
+SUB ShowError (text AS String)
+    Say(text, "error")
+END SUB
+
+FUNCTION Ask2 (text AS String, title AS String) AS Bool
+    VAR box AS GUI_MessageBox
+    VAR yes AS Bool
+    box = GUI_MessageBox.New(win)
+    box.Title = title
+    box.Kind = "question"
+    box.Buttons = "yesno"
+    box.Text = text
+    yes = box.Show()
+    box.Destroy()
+    RETURN yes
+END FUNCTION
+
+' "Enter Network Password", as Windows 95 asks it. TRUE when a logon was given.
+FUNCTION AskLogon (host AS String, again AS Bool) AS Bool
+    VAR ok AS GUI_Button
+    VAR cancel AS GUI_Button
+    VAR me AS String
+    VAR line AS String
+    VAR user AS String
+    VAR pass AS String
+    VAR save AS Bool
+    me = ""
+    TRY
+        FOR EACH line IN FS.Read("C:\SYSTEM\USERS.INI").Lines()
+            IF line.Trim().Lower().StartsWith("name=") THEN me = line.Trim().Substring(5, line.Trim().Length - 5)
+        NEXT
+    CATCH err
+    END TRY
+    ' (asked again: the name typed last time)
+    IF again AND triedHost = host AND triedUser <> "" THEN me = triedUser
+    CloseProgress()
+    lgWin = GUI_Window.New("Enter Network Password", 340, 170)
+    lgWin.Icon = "network"
+    lgWin.Modal = TRUE
+    lgWin.Resizable = FALSE
+    lgWin.onClose = Lg_OnCancel
+    IF again THEN
+        AddLabel(lgWin, "The password is incorrect. Try again:", 8, 8, 324)
+    ELSE
+        AddLabel(lgWin, "You must supply a password to make this connection:", 8, 8, 324)
+    END IF
+    AddLabel(lgWin, "Resource:", 8, 32, 80)
+    AddLabel(lgWin, "\\" + host, 96, 32, 236)
+    AddLabel(lgWin, "&User name:", 8, 58, 80)
+    lgUser = GUI_TextBox.New(lgWin)
+    lgUser.SetBounds(96, 54, 236, 21)
+    lgUser.Text = me
+    lgUser.onEnter = Lg_OnUserEnter
+    AddLabel(lgWin, "&Password:", 8, 86, 80)
+    lgPass = GUI_TextBox.New(lgWin)
+    lgPass.Password = TRUE
+    lgPass.SetBounds(96, 82, 236, 21)
+    lgPass.onEnter = Lg_OnOk
+    lgSave = GUI_CheckBox.New(lgWin)
+    lgSave.Text = "&Save this password in your password list"
+    lgSave.Checked = TRUE
+    lgSave.SetBounds(8, 110, 324, 18)
+    ok = GUI_Button.New(lgWin)
+    ok.Text = "OK"
+    ok.Default = TRUE
+    ok.SetBounds(176, 138, 75, 23)
+    ok.onClick = Lg_OnOk
+    cancel = GUI_Button.New(lgWin)
+    cancel.Text = "Cancel"
+    cancel.Cancel = TRUE
+    cancel.SetBounds(257, 138, 75, 23)
+    cancel.onClick = Lg_OnCancel
+    lgDone = FALSE
+    lgOk = FALSE
+    lgWin.Show()
+    IF me = "" THEN
+        lgUser.Focus()
+    ELSE
+        lgPass.Focus()
+    END IF
+    WHILE NOT lgDone
+        SYS.Sleep(30)
+    END WHILE
+    IF lgOk THEN
+        user = lgUser.Text.Trim()
+        pass = lgPass.Text
+        save = lgSave.Checked
+    END IF
+    TRY
+        lgWin.Close()
+    CATCH err
+    END TRY
+    IF NOT lgOk THEN RETURN FALSE
+    RememberLogon(host, user, pass, save)
+    RETURN TRUE
+END FUNCTION
+
+SUB Lg_OnUserEnter ()
+    lgPass.Focus()
+END SUB
+
+SUB Lg_OnOk ()
+    lgOk = TRUE
+    lgDone = TRUE
+END SUB
+
+SUB Lg_OnCancel ()
+    lgDone = TRUE
+END SUB
+
+' Tools > Map Network Drive: a free letter, and a machine's folder for it.
+SUB MapDrive (suggest AS String)
+    VAR letters AS Array OF String
+    VAR c AS Integer
+    VAR letter AS String
+    VAR path AS String
+    VAR keep AS Bool
+    VAR ok AS Bool
+    VAR m AS String
+    VAR p AS String
+    FOR c = 90 TO 68 STEP -1
+        IF DriveIndex(Chr(c)) < 0 THEN letters.Add(Chr(c) + ":")
+    NEXT
+    IF letters.Count = 0 THEN THROW "Every drive letter from D: to Z: is in use. Disconnect one first."
+    IF suggest = "" AND IsUnc(cur) THEN suggest = RootOf(cur)
+    IF suggest = "" AND FirstSel() >= 0 THEN
+        IF cKind[FirstSel()] = "MACHINE" THEN suggest = cPath[FirstSel()]
+    END IF
+    dlg = GUI_Window.New("Map Network Drive", 380, 168)
+    dlg.Icon = "network"
+    AddLabel(dlg, "&Drive:", 8, 12, 50)
+    dDrop = GUI_DropDown.New(dlg)
+    dDrop.Items = letters
+    dDrop.Selected = 0
+    dDrop.SetBounds(64, 8, 80, 22)
+    AddLabel(dlg, "&Path:", 8, 42, 50)
+    dBox1 = GUI_TextBox.New(dlg)
+    dBox1.Text = suggest
+    dBox1.SetBounds(64, 38, 308, 21)
+    dBox1.onEnter = Dlg_OnOk
+    AddLabel(dlg, "For example: \\BRAVO\MYFILES (or \\BRAVO\ for all of it)", 64, 64, 308)
+    dCheck1 = GUI_CheckBox.New(dlg)
+    dCheck1.Text = "&Reconnect at logon"
+    dCheck1.Checked = TRUE
+    dCheck1.SetBounds(64, 92, 200, 18)
+    OkCancel(dlg, 134, "OK")
+    ok = RunDialog(TRUE)
+    IF ok THEN
+        letter = dDrop.Get(MATH.Max(0, dDrop.Selected)).Substring(0, 1)
+        path = dBox1.Text.Trim()
+        keep = dCheck1.Checked
+    END IF
+    EndDialog()
+    IF NOT ok OR path = "" THEN RETURN
+    IF NOT path.StartsWith("\\") THEN path = "\\" + path
+    p = Normalize(path, "C:\")
+    IF NOT IsUnc(p) THEN THROW "'" + path + "' is not a network path. Type it as \\MACHINE\FOLDER."
+    ' it has to be there (and this asks for a password if one's needed)
+    IF VStat(p) <> "D" THEN THROW "The network path " + p + " could not be found."
+    LoadDrives()
+    IF DriveIndex(letter) >= 0 THEN THROW letter + ": is already in use."
+    dLetter.Add(letter)
+    dTarget.Add(p)
+    dKeep.Add(keep)
+    dDown.Add(FALSE)
+    SaveDrives(TRUE)
+    expanded = expanded.Replace("|::COMPUTER|", "|") + "::COMPUTER|"
+    Go(letter + ":\")
+    win.Status = letter + ": is " + p
+END SUB
+
+SUB DisconnectDialog ()
+    VAR items AS Array OF String
+    VAR k AS Integer
+    VAR ok AS Bool
+    VAR pick AS Integer
+    LoadDrives()
+    IF dLetter.Count = 0 THEN THROW "There are no network drives to disconnect."
+    FOR k = 0 TO dLetter.Count - 1
+        items.Add(dLetter[k] + ":   " + dTarget[k])
+    NEXT
+    dlg = GUI_Window.New("Disconnect Network Drive", 340, 190)
+    dlg.Icon = "network"
+    AddLabel(dlg, "&Drive:", 8, 8, 200)
+    dList = GUI_ListBox.New(dlg)
+    dList.Items = items
+    dList.Selected = 0
+    dList.Mono = TRUE
+    dList.SetBounds(8, 26, 324, 120)
+    dList.onDblClick = Dlg_OnOk
+    OkCancel(dlg, 158, "OK")
+    ok = RunDialog(FALSE)
+    pick = dList.Selected
+    EndDialog()
+    IF NOT ok OR pick < 0 OR pick >= dLetter.Count THEN RETURN
+    Disconnect(dLetter[pick])
+END SUB
+
+SUB Disconnect (letter AS String)
+    VAR i AS Integer
+    VAR host AS String
+    VAR k AS Integer
+    VAR still AS Bool
+    LoadDrives()
+    i = DriveIndex(letter)
+    IF i < 0 THEN RETURN
+    host = HostOf(dTarget[i])
+    dLetter.RemoveAt(i)
+    dTarget.RemoveAt(i)
+    dKeep.RemoveAt(i)
+    dDown.RemoveAt(i)
+    SaveDrives(TRUE)
+    FOR k = 0 TO dTarget.Count - 1
+        IF HostOf(dTarget[k]) = host THEN still = TRUE
+    NEXT
+    IF NOT still THEN Hangup(host)
+    IF cur.StartsWith(letter + ":") THEN
+        cur = "::COMPUTER"
+        Go("::COMPUTER")
+    ELSE
+        Refresh(TRUE)
+    END IF
+    win.Status = letter + ": is disconnected"
+END SUB
+
+' File > Properties: of what's picked, or of the folder.
+SUB Properties ()
+    VAR one AS Integer
+    VAR p AS String
+    VAR kind AS String
+    VAR name AS String
+    VAR icn AS String
+    VAR typ AS String
+    VAR where AS String
+    VAR size AS String
+    VAR contains AS String
+    VAR n AS Integer
+    VAR c AS GUI_Canvas
+    VAR ok AS GUI_Button
+    VAR y AS Integer
+    VAR i AS Integer
+    n = SelCount()
+    one = FirstSel()
+    mFiles = 0
+    mFolders = 0
+    mBytes = 0
+    IF n > 1 THEN
+        name = Str(n) + " items"
+        icn = "file"
+        typ = "Several kinds"
+        FOR i = 0 TO cName.Count - 1
+            IF cSel[i] THEN
+                IF cKind[i] = "F" THEN
+                    mFiles = mFiles + 1
+                    mBytes = mBytes + cSize[i]
+                ELSEIF cKind[i] = "D" THEN
+                    mFolders = mFolders + 1
+                    VMeasure(cPath[i], "D")
+                END IF
+            END IF
+        NEXT
+        where = PlaceLabel(cur)
+        IF NOT IsVirtual(cur) THEN where = cur
+        size = Bytes(mBytes) + " (" + Str(mBytes) + " bytes)"
+        contains = Str(mFiles) + " Files, " + Str(mFolders) + " Folders"
+    ELSE
+        IF one >= 0 THEN
+            p = cPath[one]
+            kind = cKind[one]
+            name = ShownName(one)
+            icn = cIcon[one]
+            typ = cType[one]
+        ELSE
+            p = cur
+            kind = "D"
+            IF IsVirtual(cur) THEN kind = "PLACE"
+            IF IsRoot(cur) THEN kind = "DRIVE"
+            IF IsRoot(cur) AND IsRemote(cur) THEN kind = "NETDRIVE"
+            name = PlaceLabel(cur)
+            icn = IconFor("", kind, cur)
+            typ = TypeName("", kind)
+        END IF
+        where = ParentOf(p)
+        IF cur = "::RECYCLE" AND one >= 0 THEN where = cExtra[one] + " (now in the Recycle Bin)"
+        IF IsVirtual(where) THEN where = PlaceLabel(where)
+        IF kind = "F" THEN
+            i = cPath.IndexOf(p)
+            IF i >= 0 THEN mBytes = cSize[i]
+            size = Bytes(mBytes) + " (" + Str(mBytes) + " bytes)"
+        ELSEIF kind = "D" OR kind = "DRIVE" OR kind = "NETDRIVE" OR kind = "MACHINE" THEN
+            IF NOT IsVirtual(p) THEN
+                VMeasure(p, "D")
+                size = Bytes(mBytes) + " (" + Str(mBytes) + " bytes)"
+                contains = Str(mFiles) + " Files, " + Str(mFolders) + " Folders"
+            END IF
+        END IF
+        IF kind = "NETDRIVE" AND IsMapped(p) THEN typ = "Network Drive: " + ToUnc(p)
+        IF kind = "MACHINE" OR (IsUnc(p) AND IsRoot(p)) THEN typ = "Computer on the network"
+    END IF
+    dlg = GUI_Window.New(name + " Properties", 340, 250)
+    dlg.Icon = "info"
+    c = GUI_Canvas.New(dlg)
+    c.Background = 7
+    c.SetBounds(12, 12, 32, 32)
+    c.Picture(0, 0, IconOn(icn, 7))
+    AddLabel(dlg, name, 60, 20, 270)
+    y = 58
+    AddLabel(dlg, "Type:", 12, y, 80)
+    AddLabel(dlg, typ, 96, y, 236)
+    y = y + 22
+    IF where <> "" THEN
+        AddLabel(dlg, "Location:", 12, y, 80)
+        AddLabel(dlg, where, 96, y, 236)
+        y = y + 22
+    END IF
+    IF size <> "" THEN
+        AddLabel(dlg, "Size:", 12, y, 80)
+        AddLabel(dlg, size, 96, y, 236)
+        y = y + 22
+    END IF
+    IF contains <> "" THEN
+        AddLabel(dlg, "Contains:", 12, y, 80)
+        AddLabel(dlg, contains, 96, y, 236)
+        y = y + 22
+    END IF
+    IF kind = "F" OR kind = "D" THEN
+        AddLabel(dlg, "MS-DOS name:", 12, y, 84)
+        AddLabel(dlg, BaseName(p), 96, y, 236)
+        y = y + 22
+    END IF
+    ok = GUI_Button.New(dlg)
+    ok.Text = "OK"
+    ok.Default = TRUE
+    ok.Cancel = TRUE
+    ok.SetBounds(257, 218, 75, 23)
+    ok.onClick = Dlg_OnOk
+    RunDialog(FALSE)
+    EndDialog()
+END SUB
+
+SUB Options ()
+    VAR ok AS Bool
+    dlg = GUI_Window.New("Options", 340, 130)
+    dlg.Icon = "settings"
+    AddLabel(dlg, "View", 8, 8, 200)
+    dCheck1 = GUI_CheckBox.New(dlg)
+    dCheck1.Text = "Hide file e&xtensions for known file types"
+    dCheck1.Checked = hideExt
+    dCheck1.SetBounds(16, 30, 316, 18)
+    dCheck2 = GUI_CheckBox.New(dlg)
+    dCheck2.Text = "Show names in &capitals, as they are stored"
+    dCheck2.Checked = showCaps
+    dCheck2.SetBounds(16, 54, 316, 18)
+    OkCancel(dlg, 98, "OK")
+    ok = RunDialog(FALSE)
+    IF ok THEN
+        hideExt = dCheck1.Checked
+        showCaps = dCheck2.Checked
+    END IF
+    EndDialog()
+    IF ok THEN
+        SaveSettings()
+        Refresh(TRUE)
+    END IF
+END SUB
+
+' Tools > Find: files whose names match (* and ?), perhaps holding some
+' text, in a folder and the folders in it. They show as Search Results.
+SUB Find ()
+    VAR ok AS Bool
+    VAR where AS String
+    IF findWhere = "" THEN
+        findWhere = cur
+        IF IsVirtual(cur) THEN findWhere = "C:\"
+    END IF
+    dlg = GUI_Window.New("Find: All Files", 380, 160)
+    dlg.Icon = "question"
+    AddLabel(dlg, "&Named:", 8, 12, 80)
+    dBox1 = GUI_TextBox.New(dlg)
+    dBox1.Text = findName
+    dBox1.SetBounds(96, 8, 276, 21)
+    dBox1.onEnter = Dlg_OnOk
+    AddLabel(dlg, "Containing &text:", 8, 40, 88)
+    dBox2 = GUI_TextBox.New(dlg)
+    dBox2.Text = findText
+    dBox2.SetBounds(96, 36, 276, 21)
+    dBox2.onEnter = Dlg_OnOk
+    AddLabel(dlg, "&Look in:", 8, 68, 80)
+    dDrop = GUI_DropDown.New(dlg)
+    dDrop.Items = [findWhere, "C:\", "C:\MYFILES"]
+    dDrop.Selected = 0
+    dDrop.SetBounds(96, 64, 276, 22)
+    dCheck1 = GUI_CheckBox.New(dlg)
+    dCheck1.Text = "Include &subfolders"
+    dCheck1.Checked = TRUE
+    dCheck1.SetBounds(96, 94, 200, 18)
+    OkCancel(dlg, 128, "Find Now")
+    ok = RunDialog(TRUE)
+    IF ok THEN
+        findName = dBox1.Text.Trim().Upper()
+        findText = dBox2.Text
+        where = dDrop.Get(MATH.Max(0, dDrop.Selected))
+    END IF
+    EndDialog()
+    IF NOT ok THEN RETURN
+    IF findName = "" THEN findName = "*"
+    findWhere = Normalize(where, "C:\")
+    findPaths.Clear()
+    StartProgress()
+    TRY
+        Search(findWhere, dCheck1.Checked)
+    CATCH err
+        IF NOT err.StartsWith("!cancel") THEN
+            CloseProgress()
+            THROW err
+        END IF
+    END TRY
+    CloseProgress()
+    Go("::FIND")
+    win.Status = Str(findPaths.Count) + " file(s) found in " + findWhere
+END SUB
+
+SUB Search (dir AS String, deep AS Bool)
+    VAR e AS String
+    VAR parts AS Array OF String
+    VAR p AS String
+    IF Cancelled() THEN THROW "!cancel"
+    Progress("Searching", dir, "")
+    FOR EACH e IN VList(dir)
+        parts = e.Split("|")
+        p = JoinPath(dir, parts[0])
+        IF Matches(parts[0], findName) THEN
+            IF findText = "" THEN
+                findPaths.Add(p + "|" + parts[1] + "|" + parts[2])
+            ELSEIF parts[1] = "F" THEN
+                IF VRead(p).Lower().Contains(findText.Lower()) THEN findPaths.Add(p + "|F|" + parts[2])
+            END IF
+        END IF
+        IF parts[1] = "D" AND deep THEN Search(p, TRUE)
+    NEXT
+END SUB
+
+' NAME against a pattern with * and ? (and a pattern without either: anywhere in the name)
+FUNCTION Matches (name AS String, pat AS String) AS Bool
+    IF NOT pat.Contains("*") AND NOT pat.Contains("?") THEN RETURN name.Contains(pat)
+    RETURN Wild(name, 0, pat, 0)
+END FUNCTION
+
+FUNCTION Wild (s AS String, i AS Integer, p AS String, j AS Integer) AS Bool
+    VAR k AS Integer
+    IF j = p.Length THEN RETURN i = s.Length
+    IF p.CharAt(j) = "*" THEN
+        FOR k = i TO s.Length
+            IF Wild(s, k, p, j + 1) THEN RETURN TRUE
+        NEXT
+        RETURN FALSE
+    END IF
+    IF i = s.Length THEN RETURN FALSE
+    IF p.CharAt(j) = "?" OR p.CharAt(j) = s.CharAt(i) THEN RETURN Wild(s, i + 1, p, j + 1)
+    RETURN FALSE
+END FUNCTION
+
+' ================================================================ the progress box
+'
+' "Copying...", shown once a job has taken a moment, with Cancel.
+
+SUB StartProgress ()
+    opStart = SYS.Ticks
+    cancelFlag = FALSE
+    progShown = FALSE
+    progCount = 0
+END SUB
+
+SUB Progress (what AS String, src AS String, dst AS String)
+    VAR c AS GUI_Button
+    progCount = progCount + 1
+    IF NOT progShown AND SYS.Ticks - opStart > 700 THEN
+        progShown = TRUE
+        progWin = GUI_Window.New(what + "...", 340, 120)
+        progWin.Icon = "file"
+        progWin.Resizable = FALSE
+        progWin.onClose = Prog_OnCancel
+        progWhat = AddLabel(progWin, "", 12, 12, 316)
+        progFrom = AddLabel(progWin, "", 12, 32, 316)
+        progBar = GUI_ProgressBar.New(progWin)
+        progBar.SetBounds(12, 56, 316, 16)
+        progBar.Max = 20
+        c = GUI_Button.New(progWin)
+        c.Text = "Cancel"
+        c.Cancel = TRUE
+        c.SetBounds(253, 86, 75, 23)
+        c.onClick = Prog_OnCancel
+        progWin.Show()
+    END IF
+    IF progShown THEN
+        progWin.Title = what + "..."
+        progWhat.Text = PlaceLabel(src)
+        IF dst <> "" THEN
+            progFrom.Text = "From '" + PlaceLabel(ParentOf(src)) + "' to '" + PlaceLabel(dst) + "'"
+        ELSE
+            progFrom.Text = "In '" + PlaceLabel(ParentOf(src)) + "'"
+        END IF
+        progBar.Value = progCount MOD 21
+        ' (a moment for the box to show, and for Cancel)
+        SYS.Sleep(1)
+    END IF
+END SUB
+
+FUNCTION Cancelled () AS Bool
+    RETURN cancelFlag
+END FUNCTION
+
+SUB Prog_OnCancel ()
+    cancelFlag = TRUE
+END SUB
+
+SUB CloseProgress ()
+    IF progShown THEN
+        TRY
+            progWin.Close()
+        CATCH err
+        END TRY
+    END IF
+    progShown = FALSE
+END SUB
+
+' ================================================================ icons
+
+FUNCTION IconAt (name AS String) AS Integer
+    VAR i AS Integer
+    i = icName.IndexOf(name)
+    IF i < 0 THEN i = icName.IndexOf("file")
+    RETURN i
+END FUNCTION
+
+' name at 16 or 32, n(ormal), s(elected) or g(host, for cut or a drop target), on white
+FUNCTION Icon (name AS String, size AS Integer, state AS String) AS String
+    VAR i AS Integer
+    i = IconAt(name)
+    IF size = 32 THEN
+        IF state = "s" THEN RETURN ic32s[i]
+        IF state = "g" THEN RETURN ic32g[i]
+        RETURN ic32[i]
+    END IF
+    IF state = "s" THEN RETURN ic16s[i]
+    IF state = "g" THEN RETURN ic16g[i]
+    RETURN ic16[i]
+END FUNCTION
+
+' A 32 one on another background colour (the Properties box is silver)
+FUNCTION IconOn (name AS String, colour AS Integer) AS String
+    RETURN ic32[IconAt(name)]
+END FUNCTION
+
+FUNCTION ToolIcon (id AS String, on AS Bool) AS String
+    VAR i AS Integer
+    i = icName.IndexOf("t_" + id)
+    IF i < 0 THEN RETURN icTool[IconAt("file")]
+    IF on THEN RETURN icTool[i]
+    RETURN icToolOff[i]
+END FUNCTION

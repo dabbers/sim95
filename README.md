@@ -64,6 +64,11 @@ A series of programs for the sim95 playground
   `events`, `readline` and the rest, on Simxplorer's JavaScript engine (now
   with classes, `let`/`const`, template strings, destructuring, spread and
   Promises). With npm: `npm install express`, `npm publish`.
+* [`explorer/`](explorer/) – Explorer: the file manager as Windows 95 has it,
+  with the folder tree, icons, list and details, and the network in the same
+  window. Map another machine's disk as Z: and it's there every time; drag
+  and drop, Cut, Copy and Paste between machines; a Recycle Bin, Find and
+  Undo. It can take Files' place on the desktop.
 * [`npmreg/`](npmreg/) – the npm registry, on STARTHERE: JavaScript packages
   for Node, to search in a browser and install with npm. Publishing sends a
   package in parts, as Vapor sends installers. Starts with express, lodash,
@@ -111,5 +116,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix, node, npm). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix, node, npm, explorer). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

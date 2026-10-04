@@ -274,3 +274,19 @@ Found while building npm:
   index of its own (a string of names and slots, searched with `IndexOf`),
   freed slots are used again, and `push` and `pop` touch only the end. The
   same array takes under 2 seconds, and pages in Simxplorer are faster too.
+
+Found while building Explorer:
+* **The desktop's icons are fixed.** My Computer runs `FILES.SPK C:\`, My
+  Files runs `FILES.SPK C:\MYFILES`, and Start > Find > Files and a folder
+  typed into Run use `FILES.SPK` too. `C:\SYSTEM\DESKTOP.INI` only keeps
+  where the icons are. So a new file manager takes over by becoming
+  `FILES.SPK`, as Explorer's launcher does.
+* **A Canvas can draw before SIM95's font has loaded,** with a wider stand-in.
+  Explorer paints once more after a moment.
+* **`try` and `who` are reserved or built-in names**, and so are `len` and
+  `icon`. Names clash without regard to case: `cX` (an array) and `cx` (a
+  local) are one name.
+* **The interpreter pauses every 512 statements** even in a handler that never
+  waits. Nothing else of the program runs in those pauses, but a test (or the
+  page) can look in between: a window's title can change before its status
+  bar does.

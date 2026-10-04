@@ -1,0 +1,743 @@
+' ================================================================ places
+'
+' Every place Explorer shows has a path:
+'   C:\MYFILES\NOTES.TXT      this machine
+'   \\BRAVO\DOCS              another machine's disk, through its Files service
+'                             (port 139): \\BRAVO\ is BRAVO's C:\
+'   Z:\DOCS                   a mapped network drive: Z: is \\BRAVO\MYFILES,
+'                             say, so this is BRAVO's C:\MYFILES\DOCS
+'   ::DESKTOP ::COMPUTER ::NETWORK ::RECYCLE ::FIND   the folders that aren't
+'                             on any disk
+' The V... functions work on any of them, and THROW a message when they fail.
+
+FUNCTION IsVirtual (p AS String) AS Bool
+    RETURN p.StartsWith("::")
+END FUNCTION
+
+FUNCTION IsUnc (p AS String) AS Bool
+    RETURN p.StartsWith("\\")
+END FUNCTION
+
+' D: to Z:, but not C:
+FUNCTION IsMapped (p AS String) AS Bool
+    IF p.Length < 2 THEN RETURN FALSE
+    RETURN p.CharAt(1) = ":" AND p.CharAt(0) <> "C" AND "DEFGHIJKLMNOPQRSTUVWXYZ".Contains(p.CharAt(0))
+END FUNCTION
+
+FUNCTION IsRemote (p AS String) AS Bool
+    RETURN IsUnc(p) OR IsMapped(p)
+END FUNCTION
+
+FUNCTION LastSlash (p AS String) AS Integer
+    VAR i AS Integer
+    FOR i = p.Length - 1 TO 0 STEP -1
+        IF p.CharAt(i) = "\" THEN RETURN i
+    NEXT
+    RETURN -1
+END FUNCTION
+
+' The top of the disk a path is on: C:\, Z:\ or \\BRAVO\
+FUNCTION RootOf (p AS String) AS String
+    VAR rest AS String
+    IF IsVirtual(p) THEN RETURN p
+    IF IsUnc(p) THEN
+        rest = p.Substring(2, p.Length - 2)
+        IF rest.Contains("\") THEN rest = rest.Substring(0, rest.IndexOf("\"))
+        RETURN "\\" + rest + "\"
+    END IF
+    RETURN p.Substring(0, 2) + "\"
+END FUNCTION
+
+FUNCTION IsRoot (p AS String) AS Bool
+    RETURN NOT IsVirtual(p) AND RootOf(p) = p
+END FUNCTION
+
+FUNCTION JoinPath (dir AS String, name AS String) AS String
+    IF dir.EndsWith("\") THEN RETURN dir + name
+    RETURN dir + "\" + name
+END FUNCTION
+
+' The last part of a path ("" for a root)
+FUNCTION BaseName (p AS String) AS String
+    IF IsVirtual(p) OR IsRoot(p) THEN RETURN ""
+    RETURN p.Substring(LastSlash(p) + 1, p.Length - LastSlash(p) - 1)
+END FUNCTION
+
+' The folder a path is in. A drive is in My Computer; a machine is in
+' Network Neighborhood; those two are on the Desktop.
+FUNCTION ParentOf (p AS String) AS String
+    VAR i AS Integer
+    IF p = "::DESKTOP" THEN RETURN ""
+    IF IsVirtual(p) THEN RETURN "::DESKTOP"
+    IF IsRoot(p) THEN
+        IF IsUnc(p) THEN RETURN "::NETWORK"
+        RETURN "::COMPUTER"
+    END IF
+    i = LastSlash(p)
+    IF i < RootOf(p).Length THEN RETURN RootOf(p)
+    RETURN p.Substring(0, i)
+END FUNCTION
+
+' What was typed (in the address bar, or given to the program), as a path;
+' "" when it isn't one.
+FUNCTION Normalize (s AS String, here AS String) AS String
+    VAR p AS String
+    VAR l AS String
+    VAR at AS Integer
+    VAR root AS String
+    VAR rest AS String
+    p = s.Trim()
+    l = p.Lower()
+    IF l = "desktop" THEN RETURN "::DESKTOP"
+    IF l = "my computer" THEN RETURN "::COMPUTER"
+    IF l = "network neighborhood" OR l = "network" THEN RETURN "::NETWORK"
+    IF l = "recycle bin" THEN RETURN "::RECYCLE"
+    IF p.StartsWith("::") THEN RETURN p.Upper()
+    p = p.Upper().Replace("/", "\")
+    IF p = "" THEN RETURN here
+    IF IsUnc(p) THEN
+        IF p = "\\" THEN RETURN "::NETWORK"
+        IF NOT p.Substring(2, p.Length - 2).Contains("\") THEN p = p + "\"
+    ELSEIF p.Length >= 2 AND p.CharAt(1) = ":" THEN
+        IF p.Length = 2 THEN p = p + "\"
+    ELSEIF p.StartsWith("\") THEN
+        p = RootOf(here) + p.Substring(1, p.Length - 1)
+    ELSEIF IsVirtual(here) THEN
+        RETURN ""
+    ELSE
+        p = JoinPath(here, p)
+    END IF
+    ' "..": up
+    WHILE p.Contains("\..")
+        at = p.IndexOf("\..")
+        p = ParentOf(p.Substring(0, at)) + p.Substring(at + 3, p.Length - at - 3)
+    END WHILE
+    ' (doubled backslashes after the root, as one)
+    root = RootOf(p)
+    rest = p.Substring(root.Length, p.Length - root.Length)
+    WHILE rest.Contains("\\")
+        rest = rest.Replace("\\", "\")
+    END WHILE
+    IF rest.StartsWith("\") THEN rest = rest.Substring(1, rest.Length - 1)
+    p = root + rest
+    IF p.EndsWith("\") AND NOT IsRoot(p) THEN p = p.Substring(0, p.Length - 1)
+    RETURN p
+END FUNCTION
+
+' A name a file may have: 8.3, letters, digits, - and _
+FUNCTION Valid83 (name AS String) AS Bool
+    VAR parts AS Array OF String
+    parts = name.Split(".")
+    IF parts.Count > 2 OR parts[0].Length < 1 OR parts[0].Length > 8 THEN RETURN FALSE
+    IF parts.Count = 2 AND (parts[1].Length < 1 OR parts[1].Length > 3) THEN RETURN FALSE
+    RETURN OnlyOf(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+END FUNCTION
+
+FUNCTION OnlyOf (s AS String, allowed AS String) AS Bool
+    VAR i AS Integer
+    FOR i = 0 TO s.Length - 1
+        IF NOT allowed.Contains(s.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+FUNCTION ExtOf (name AS String) AS String
+    IF NOT name.Contains(".") THEN RETURN ""
+    RETURN name.Substring(name.IndexOf(".") + 1, name.Length - name.IndexOf(".") - 1).Upper()
+END FUNCTION
+
+' ================================================================ mapped drives
+'
+' C:\SYSTEM\DRIVES.INI, one line a drive: Z=\\BRAVO\MYFILES|1 (the 1: connect
+' again when Explorer starts; 0: this session only, and gone when it ends).
+
+SUB LoadDrives ()
+    VAR line AS String
+    VAR eq AS Integer
+    VAR rest AS String
+    dLetter.Clear()
+    dTarget.Clear()
+    dKeep.Clear()
+    dDown.Clear()
+    IF NOT FS.Exists(DRIVESFILE) THEN RETURN
+    FOR EACH line IN FS.Read(DRIVESFILE).Lines()
+        eq = line.IndexOf("=")
+        IF eq <> 1 THEN CONTINUE
+        rest = line.Substring(2, line.Length - 2)
+        IF NOT rest.StartsWith("\\") THEN CONTINUE
+        dLetter.Add(line.Substring(0, 1).Upper())
+        IF rest.Contains("|") THEN
+            dTarget.Add(Normalize(rest.Substring(0, rest.IndexOf("|")), "C:\"))
+            dKeep.Add(rest.EndsWith("|1"))
+        ELSE
+            dTarget.Add(Normalize(rest, "C:\"))
+            dKeep.Add(TRUE)
+        END IF
+        dDown.Add(FALSE)
+    NEXT
+END SUB
+
+' Only the drives to keep; this session's go when the last window closes
+' (the file is read again by every window, so each sees the others' drives).
+SUB SaveDrives (all AS Bool)
+    VAR out AS Array OF String
+    VAR i AS Integer
+    FOR i = 0 TO dLetter.Count - 1
+        IF dKeep[i] OR all THEN
+            IF dKeep[i] THEN
+                out.Add(dLetter[i] + "=" + dTarget[i] + "|1")
+            ELSE
+                out.Add(dLetter[i] + "=" + dTarget[i] + "|0")
+            END IF
+        END IF
+    NEXT
+    FS.Write(DRIVESFILE, out.Join(Chr(10)) + Chr(10))
+END SUB
+
+FUNCTION DriveIndex (letter AS String) AS Integer
+    RETURN dLetter.IndexOf(letter.Upper())
+END FUNCTION
+
+' Z:\DOCS -> \\BRAVO\MYFILES\DOCS (and \\BRAVO\DOCS stays as it is)
+FUNCTION ToUnc (p AS String) AS String
+    VAR i AS Integer
+    IF NOT IsMapped(p) THEN RETURN p
+    i = DriveIndex(p.Substring(0, 1))
+    IF i < 0 THEN THROW p.Substring(0, 2) + " is not a network drive. Map it first (Tools > Map Network Drive)."
+    IF p.Length <= 3 THEN RETURN dTarget[i]
+    RETURN JoinPath(dTarget[i], p.Substring(3, p.Length - 3))
+END FUNCTION
+
+' The other way: \\BRAVO\MYFILES\DOCS -> Z:\DOCS, when a drive is mapped there
+FUNCTION FromUnc (p AS String) AS String
+    VAR i AS Integer
+    VAR t AS String
+    IF NOT IsUnc(p) THEN RETURN p
+    FOR i = 0 TO dTarget.Count - 1
+        t = dTarget[i]
+        IF p = t THEN RETURN dLetter[i] + ":\"
+        IF p.StartsWith(JoinPath(t, "")) THEN RETURN dLetter[i] + ":\" + p.Substring(JoinPath(t, "").Length, p.Length - JoinPath(t, "").Length)
+    NEXT
+    RETURN p
+END FUNCTION
+
+FUNCTION HostOf (p AS String) AS String
+    VAR u AS String
+    u = ToUnc(p)
+    u = u.Substring(2, u.Length - 2)
+    IF u.Contains("\") THEN u = u.Substring(0, u.IndexOf("\"))
+    RETURN u.Upper()
+END FUNCTION
+
+' The path on the other machine: \\BRAVO\DOCS -> C:\DOCS
+FUNCTION RemotePath (p AS String) AS String
+    VAR u AS String
+    u = ToUnc(p)
+    u = u.Substring(2, u.Length - 2)
+    IF NOT u.Contains("\") THEN RETURN "C:\"
+    RETURN "C:" + u.Substring(u.IndexOf("\"), u.Length - u.IndexOf("\"))
+END FUNCTION
+
+' Both on this machine, or both on the same other machine: then a move is a rename.
+FUNCTION SameDisk (a AS String, b AS String) AS Bool
+    IF IsVirtual(a) OR IsVirtual(b) THEN RETURN FALSE
+    IF NOT IsRemote(a) AND NOT IsRemote(b) THEN RETURN TRUE
+    IF IsRemote(a) AND IsRemote(b) THEN RETURN HostOf(a) = HostOf(b)
+    RETURN FALSE
+END FUNCTION
+
+' ================================================================ the network
+'
+' Another machine's disk is reached through its Files service (port 139):
+' AUTH user|password, then LIST, READ, WRITE, DEL, MKDIR, REN and STAT, one
+' message each way. Explorer keeps a connection to each machine it uses.
+'
+' Two rules keep a dead machine from stopping Explorer (SIM95-NOTES.md): a
+' failed Connect spoils the handler it happens in, so connecting is done by
+' the dial timer, in a tick of its own, while Explorer waits; and replies come
+' in through onMessage, waited for with SYS.Sleep, never with Receive.
+
+SUB Dial_OnTick ()
+    IF dialState <> "go" THEN RETURN
+    dialState = "dialing"
+    TRY
+        dialSock = NET_Socket.New()
+        dialSock.onMessage = Net_OnMessage
+        dialSock.onClose = Net_OnClose
+        dialConn = dialSock.Connect(dialHost, 139)
+        dialConn.Tag = dialHost
+        dialErr = ""
+        dialState = "done"
+    CATCH err
+        dialErr = err
+        dialState = "done"
+    END TRY
+END SUB
+
+SUB Net_OnMessage (conn AS NET_Connection, message AS String)
+    VAR i AS Integer
+    i = nHost.IndexOf(conn.Tag)
+    IF i < 0 THEN RETURN
+    nReply[i] = message
+    nGot[i] = TRUE
+END SUB
+
+SUB Net_OnClose (conn AS NET_Connection)
+    VAR i AS Integer
+    i = nHost.IndexOf(conn.Tag)
+    IF i >= 0 THEN nClosed[i] = TRUE
+END SUB
+
+' Waits for the dial timer to connect to host: its index in nHost, or THROWs.
+FUNCTION Dial (host AS String) AS Integer
+    VAR since AS Integer
+    VAR i AS Integer
+    dialHost = host
+    dialState = "go"
+    since = SYS.Ticks
+    WHILE dialState <> "done"
+        SYS.Sleep(20)
+        IF SYS.Ticks - since > 15000 THEN
+            dialState = ""
+            THROW "\\" + host + " is not answering." + Chr(10) + Chr(10) + "The machine may be turned off, or not on the network."
+        END IF
+    END WHILE
+    dialState = ""
+    IF dialErr <> "" THEN
+        IF dialErr.Contains("refused") THEN THROW "\\" + host + " is on the network, but isn't sharing its disk (its Files service, port 139, is not running)."
+        IF dialErr.Contains("Unknown host") THEN THROW "The network path \\" + host + " was not found." + Chr(10) + Chr(10) + "There is no machine called " + host + "."
+        THROW "\\" + host + " is not answering (" + dialErr + ")."
+    END IF
+    i = nHost.IndexOf(host)
+    IF i < 0 THEN
+        nHost.Add(host)
+        nConn.Add(dialConn)
+        nSock.Add(dialSock)
+        nReply.Add("")
+        nGot.Add(FALSE)
+        nClosed.Add(FALSE)
+        nAuthed.Add(FALSE)
+        i = nHost.Count - 1
+    ELSE
+        nConn[i] = dialConn
+        nSock[i] = dialSock
+        nReply[i] = ""
+        nGot[i] = FALSE
+        nClosed[i] = FALSE
+        nAuthed[i] = FALSE
+    END IF
+    RETURN i
+END FUNCTION
+
+' One request on connection i, and its reply ("" when the connection went).
+FUNCTION Exchange (i AS Integer, request AS String) AS String
+    VAR since AS Integer
+    nGot[i] = FALSE
+    nReply[i] = ""
+    IF nClosed[i] THEN RETURN ""
+    TRY
+        nConn[i].Send(request)
+    CATCH err
+        nClosed[i] = TRUE
+        RETURN ""
+    END TRY
+    since = SYS.Ticks
+    WHILE NOT nGot[i] AND NOT nClosed[i]
+        SYS.Sleep(10)
+        IF SYS.Ticks - since > 12000 THEN
+            nClosed[i] = TRUE
+            RETURN ""
+        END IF
+    END WHILE
+    IF NOT nGot[i] THEN RETURN ""
+    RETURN nReply[i]
+END FUNCTION
+
+SUB Hangup (host AS String)
+    VAR i AS Integer
+    i = nHost.IndexOf(host)
+    IF i < 0 THEN RETURN
+    TRY
+        nSock[i].Close()
+    CATCH err
+    END TRY
+    nClosed[i] = TRUE
+END SUB
+
+' Connected and logged on to host: its index. Asks for a password when
+' there's none to use, or the one there was is wrong.
+FUNCTION Session (host AS String) AS Integer
+    VAR i AS Integer
+    VAR r AS String
+    VAR tries AS Integer
+    i = nHost.IndexOf(host)
+    IF i >= 0 THEN
+        IF NOT nClosed[i] AND nAuthed[i] THEN RETURN i
+    END IF
+    ' the machine first (a name nobody has is "not found", before any password)
+    i = Dial(host)
+    nAuthed[i] = FALSE
+    WHILE TRUE
+        IF NOT HaveLogon(host) THEN
+            IF NOT AskLogon(host, tries > 0) THEN
+                Hangup(host)
+                THROW "!cancel"
+            END IF
+        END IF
+        r = Exchange(i, "AUTH " + LogonUser(host) + "|" + LogonPass(host))
+        IF r = "OK" THEN
+            nAuthed[i] = TRUE
+            RETURN i
+        END IF
+        IF r = "" THEN
+            Hangup(host)
+            THROW "\\" + host + " closed the connection."
+        END IF
+        triedHost = host
+        triedUser = LogonUser(host)
+        ForgetLogon(host)
+        tries = tries + 1
+    END WHILE
+    RETURN -1
+END FUNCTION
+
+' A request to another machine: what came after OK, or THROWs the error.
+FUNCTION Ask (host AS String, request AS String) AS String
+    VAR i AS Integer
+    VAR r AS String
+    VAR attempt AS Integer
+    FOR attempt = 1 TO 2
+        i = Session(host)
+        r = Exchange(i, request)
+        IF r <> "" THEN
+            IF r.StartsWith("OK" + Chr(10)) THEN RETURN r.Substring(3, r.Length - 3)
+            IF r = "OK" THEN RETURN ""
+            IF r.StartsWith("ERR ") THEN THROW FriendlyError(r.Substring(4, r.Length - 4))
+            THROW "\\" + host + " gave an answer Explorer doesn't understand."
+        END IF
+        ' the connection went: once more, with a new one
+        Hangup(host)
+    NEXT
+    THROW "The connection to \\" + host + " was lost."
+END FUNCTION
+
+FUNCTION FriendlyError (e AS String) AS String
+    IF e.StartsWith("File not found") THEN RETURN "The file or folder was not found."
+    IF e.Contains("Message too long") OR e.Contains("too long") THEN RETURN "The file is too big to send over the network (64K at most)."
+    RETURN e
+END FUNCTION
+
+' ---- logons: this session's, and the password list
+'
+' The password list is C:\SYSTEM\PASSWORD.PWL, one line a machine:
+' HOST|user|password. Like Windows 95's, it is not much of a secret.
+
+FUNCTION LogonAt (host AS String) AS Integer
+    VAR line AS String
+    VAR i AS Integer
+    i = lHost.IndexOf(host)
+    IF i >= 0 THEN RETURN i
+    IF NOT FS.Exists(PWLFILE) THEN RETURN -1
+    FOR EACH line IN FS.Read(PWLFILE).Lines()
+        IF line.Split("|").Count >= 3 AND line.Split("|")[0].Upper() = host THEN
+            lHost.Add(host)
+            lUser.Add(line.Split("|")[1])
+            lPass.Add(line.Substring(line.Split("|")[0].Length + line.Split("|")[1].Length + 2, line.Length - line.Split("|")[0].Length - line.Split("|")[1].Length - 2))
+            RETURN lHost.Count - 1
+        END IF
+    NEXT
+    RETURN -1
+END FUNCTION
+
+FUNCTION HaveLogon (host AS String) AS Bool
+    RETURN LogonAt(host) >= 0
+END FUNCTION
+
+FUNCTION LogonUser (host AS String) AS String
+    RETURN lUser[LogonAt(host)]
+END FUNCTION
+
+FUNCTION LogonPass (host AS String) AS String
+    RETURN lPass[LogonAt(host)]
+END FUNCTION
+
+SUB RememberLogon (host AS String, user AS String, pass AS String, save AS Bool)
+    VAR i AS Integer
+    VAR out AS Array OF String
+    VAR line AS String
+    i = lHost.IndexOf(host)
+    IF i < 0 THEN
+        lHost.Add(host)
+        lUser.Add(user)
+        lPass.Add(pass)
+    ELSE
+        lUser[i] = user
+        lPass[i] = pass
+    END IF
+    IF NOT save THEN RETURN
+    IF FS.Exists(PWLFILE) THEN
+        FOR EACH line IN FS.Read(PWLFILE).Lines()
+            IF line <> "" AND line.Split("|")[0].Upper() <> host THEN out.Add(line)
+        NEXT
+    END IF
+    out.Add(host + "|" + user + "|" + pass)
+    FS.Write(PWLFILE, out.Join(Chr(10)) + Chr(10))
+END SUB
+
+SUB ForgetLogon (host AS String)
+    VAR i AS Integer
+    VAR out AS Array OF String
+    VAR line AS String
+    i = lHost.IndexOf(host)
+    IF i >= 0 THEN
+        lHost.RemoveAt(i)
+        lUser.RemoveAt(i)
+        lPass.RemoveAt(i)
+    END IF
+    IF FS.Exists(PWLFILE) THEN
+        FOR EACH line IN FS.Read(PWLFILE).Lines()
+            IF line <> "" AND line.Split("|")[0].Upper() <> host THEN out.Add(line)
+        NEXT
+        FS.Write(PWLFILE, out.Join(Chr(10)) + Chr(10))
+    END IF
+END SUB
+
+' ================================================================ the disks
+
+' A folder's contents: "NAME|D|0" or "NAME|F|size", one each.
+FUNCTION VList (p AS String) AS Array OF String
+    VAR out AS Array OF String
+    VAR n AS String
+    VAR parts AS Array OF String
+    IF IsRemote(p) THEN
+        FOR EACH n IN Ask(HostOf(p), "LIST " + RemotePath(p)).Lines()
+            parts = n.Split("|")
+            IF parts.Count >= 2 THEN
+                IF parts.Count >= 3 THEN
+                    out.Add(parts[0] + "|" + parts[1] + "|" + parts[2])
+                ELSE
+                    out.Add(parts[0] + "|" + parts[1] + "|0")
+                END IF
+            END IF
+        NEXT
+        RETURN out
+    END IF
+    IF NOT FS.Exists(p) THEN THROW p + " is not accessible." + Chr(10) + Chr(10) + "The folder was not found."
+    FOR EACH n IN FS.List(p)
+        IF n.EndsWith("\") THEN
+            out.Add(n.Substring(0, n.Length - 1) + "|D|0")
+        ELSE
+            out.Add(n + "|F|" + Str(FS.Size(JoinPath(p, n))))
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+' "D" a folder, "F" a file, "" nothing there
+FUNCTION VStat (p AS String) AS String
+    VAR r AS String
+    IF IsVirtual(p) THEN RETURN "D"
+    IF IsRemote(p) THEN
+        IF IsRoot(p) THEN RETURN "D"
+        TRY
+            r = Ask(HostOf(p), "STAT " + RemotePath(p))
+        CATCH err
+            IF err.StartsWith("The file or folder was not found") THEN RETURN ""
+            THROW err
+        END TRY
+        RETURN r.Trim()
+    END IF
+    IF NOT FS.Exists(p) THEN RETURN ""
+    IF FS.IsDir(p) THEN RETURN "D"
+    RETURN "F"
+END FUNCTION
+
+FUNCTION VRead (p AS String) AS String
+    IF IsRemote(p) THEN RETURN Ask(HostOf(p), "READ " + RemotePath(p))
+    RETURN FS.Read(p)
+END FUNCTION
+
+SUB VWrite (p AS String, text AS String)
+    IF IsRemote(p) THEN
+        Ask(HostOf(p), "WRITE " + RemotePath(p) + Chr(10) + text)
+    ELSE
+        FS.Write(p, text)
+    END IF
+END SUB
+
+SUB VMakeDir (p AS String)
+    IF IsRemote(p) THEN
+        Ask(HostOf(p), "MKDIR " + RemotePath(p))
+    ELSE
+        FS.MakeDir(p)
+    END IF
+END SUB
+
+' A file, or an empty folder
+SUB VDeleteOne (p AS String)
+    IF IsRemote(p) THEN
+        Ask(HostOf(p), "DEL " + RemotePath(p))
+    ELSE
+        FS.Delete(p)
+    END IF
+END SUB
+
+' On the same disk only (see SameDisk); a folder moves with all it holds.
+SUB VRename (a AS String, b AS String)
+    IF IsRemote(a) THEN
+        Ask(HostOf(a), "REN " + RemotePath(a) + "|" + RemotePath(b))
+    ELSE
+        FS.Rename(a, b)
+    END IF
+END SUB
+
+' A file or a folder, and everything in it, for good.
+SUB VRemoveTree (p AS String, kind AS String)
+    VAR e AS String
+    IF kind = "D" THEN
+        FOR EACH e IN VList(p)
+            IF Cancelled() THEN THROW "!cancel"
+            VRemoveTree(JoinPath(p, e.Split("|")[0]), e.Split("|")[1])
+        NEXT
+    END IF
+    Progress("Deleting", p, "")
+    VDeleteOne(p)
+END SUB
+
+' src (a file or a folder) copied to dst, which must not be there yet.
+SUB VCopyTree (src AS String, kind AS String, dst AS String)
+    VAR e AS String
+    IF Cancelled() THEN THROW "!cancel"
+    IF kind = "D" THEN
+        Progress("Copying", src, ParentOf(dst))
+        VMakeDir(dst)
+        FOR EACH e IN VList(src)
+            VCopyTree(JoinPath(src, e.Split("|")[0]), e.Split("|")[1], JoinPath(dst, e.Split("|")[0]))
+        NEXT
+    ELSE
+        Progress("Copying", src, ParentOf(dst))
+        VWrite(dst, VRead(src))
+    END IF
+END SUB
+
+' How big, and how many files and folders, under p
+SUB VMeasure (p AS String, kind AS String)
+    VAR e AS String
+    VAR parts AS Array OF String
+    IF kind <> "D" THEN RETURN
+    FOR EACH e IN VList(p)
+        parts = e.Split("|")
+        IF parts[1] = "D" THEN
+            mFolders = mFolders + 1
+            VMeasure(JoinPath(p, parts[0]), "D")
+        ELSE
+            mFiles = mFiles + 1
+            mBytes = mBytes + Int(Val(parts[2]))
+        END IF
+    NEXT
+END SUB
+
+' ================================================================ the Recycle Bin
+'
+' What's deleted from C: goes to C:\RECYCLED, as D1.TXT, D2 (a folder)...
+' INFO.TXT there says what each was: Dn|original path|when (seconds)|size|F or D.
+' Things deleted on another machine's disk are deleted for good.
+
+FUNCTION BinLines () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    IF NOT FS.Exists(BINDIR + "\INFO.TXT") THEN RETURN out
+    FOR EACH line IN FS.Read(BINDIR + "\INFO.TXT").Lines()
+        IF line.Split("|").Count >= 5 THEN
+            IF FS.Exists(BINDIR + "\" + line.Split("|")[0]) THEN out.Add(line)
+        END IF
+    NEXT
+    RETURN out
+END FUNCTION
+
+SUB SaveBin (lines AS Array OF String)
+    IF NOT FS.Exists(BINDIR) THEN FS.MakeDir(BINDIR)
+    FS.Write(BINDIR + "\INFO.TXT", lines.Join(Chr(10)) + Chr(10))
+END SUB
+
+' Moves p into the Recycle Bin: the name it has there.
+FUNCTION Recycle (p AS String, kind AS String, size AS Integer) AS String
+    VAR lines AS Array OF String
+    VAR n AS Integer
+    VAR name AS String
+    VAR ext AS String
+    IF NOT FS.Exists(BINDIR) THEN FS.MakeDir(BINDIR)
+    lines = BinLines()
+    n = Int(Val(ReadOr(BINDIR + "\NEXT.TXT", "1")))
+    IF n < 1 THEN n = 1
+    ext = ""
+    IF kind = "F" AND ExtOf(BaseName(p)) <> "" THEN ext = "." + ExtOf(BaseName(p))
+    name = "D" + Str(n) + ext
+    WHILE FS.Exists(BINDIR + "\" + name)
+        n = n + 1
+        name = "D" + Str(n) + ext
+    END WHILE
+    FS.Write(BINDIR + "\NEXT.TXT", Str(n + 1))
+    FS.Rename(p, BINDIR + "\" + name)
+    lines.Add(name + "|" + p + "|" + Str(TIME.Now) + "|" + Str(size) + "|" + kind)
+    SaveBin(lines)
+    RETURN name
+END FUNCTION
+
+' Puts one back where it was (its folder made again if it's gone). Returns where.
+FUNCTION Unrecycle (name AS String) AS String
+    VAR lines AS Array OF String
+    VAR keep AS Array OF String
+    VAR line AS String
+    VAR orig AS String
+    VAR dir AS String
+    lines = BinLines()
+    FOR EACH line IN lines
+        IF line.Split("|")[0] = name THEN
+            orig = line.Split("|")[1]
+        ELSE
+            keep.Add(line)
+        END IF
+    NEXT
+    IF orig = "" THEN THROW "That is no longer in the Recycle Bin."
+    IF FS.Exists(orig) THEN THROW "Cannot restore " + BaseName(orig) + ": there is already something called that in " + ParentOf(orig) + "."
+    dir = ParentOf(orig)
+    MakeDirs(dir)
+    FS.Rename(BINDIR + "\" + name, orig)
+    SaveBin(keep)
+    RETURN orig
+END FUNCTION
+
+' A local folder, and the folders it's in, made if they're missing.
+SUB MakeDirs (p AS String)
+    IF IsRoot(p) OR FS.Exists(p) THEN RETURN
+    MakeDirs(ParentOf(p))
+    FS.MakeDir(p)
+END SUB
+
+FUNCTION ReadOr (p AS String, dflt AS String) AS String
+    IF FS.Exists(p) THEN RETURN FS.Read(p)
+    RETURN dflt
+END FUNCTION
+
+' ================================================================ machines
+
+' Network Neighborhood: the machines on the network (a broadcast ping, which
+' takes most of a second), kept until Refresh.
+FUNCTION Machines (fresh AS Bool) AS Array OF String
+    VAR found AS Array OF String
+    VAR entry AS String
+    IF fresh OR NOT machinesKnown THEN
+        machineNames.Clear()
+        TRY
+            found = NET.Machines()
+        CATCH err
+        END TRY
+        FOR EACH entry IN found
+            IF entry.Split(" ")[0] <> "" THEN machineNames.Add(entry.Split(" ")[0].Upper())
+        NEXT
+        machineNames.Sort()
+        machinesKnown = TRUE
+    END IF
+    RETURN machineNames
+END FUNCTION
