@@ -229,3 +229,14 @@ fresh handler. Read pages with `onMessage`/`onClose` rather than `Receive`.
   answers and returns them as `NAME ADDRESS MS`. Every machine sees the ping
   in Monitor, so calling it every half minute is fine, and calling it every
   second is noisy.
+
+## Files: Copy and Paste between windows
+
+Copy in one Files window and Paste in another does nothing, with no message.
+Each Files window (`C:\PROGRAMS\FILES.SPK`) is a program of its own, with
+what was copied in a variable (`clipboard`), so a second window has nothing to
+paste. That's how files usually go to another machine: Network's Files button
+opens a second window. Copying a folder also does nothing silently.
+[`filefix/`](filefix/) changes Copy and Paste to keep the copied file in
+`C:\SYSTEM\FILECLIP.TXT`. A fix in SIM95 itself could do the same, or keep a
+clipboard in the system for every program.

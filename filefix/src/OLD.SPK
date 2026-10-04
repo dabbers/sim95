@@ -1,0 +1,29 @@
+SUB Copy ()
+    VAR i AS Integer
+    i = Selected()
+    IF i < 0 OR eDirs[i] THEN RETURN
+    clipboard = ePaths[i]
+    win.Status = "Copied " + eNames[i] + " - Paste into a folder"
+END SUB
+
+SUB Paste ()
+    VAR text AS String
+    VAR target AS String
+    IF clipboard = "" THEN RETURN
+    TRY
+        IF IsUnc(clipboard) THEN
+            text = Ask(UncHost(clipboard), "READ " + UncPath(clipboard))
+        ELSE
+            text = FS.Read(clipboard)
+        END IF
+        IF IsUnc(cwd) THEN
+            target = JoinPath(UncPath(cwd), BaseName(clipboard))
+            Ask(UncHost(cwd), "WRITE " + target + Chr(10) + text)
+        ELSE
+            FS.Write(JoinPath(cwd, BaseName(clipboard)), text)
+        END IF
+        Refresh()
+    CATCH err
+        ShowError(err)
+    END TRY
+END SUB

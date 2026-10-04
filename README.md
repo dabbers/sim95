@@ -56,6 +56,9 @@ A series of programs for the sim95 playground
   wall the whole network draws on, a pixel every 15 seconds. Plain pages for
   Voyager; live in Simxplorer, where other people's pixels appear by
   themselves.
+* [`filefix/`](filefix/) – the Files fix: Copy in one Files window and Paste
+  in another, such as another machine's disk opened from Network. In SIM95's
+  Files that paste does nothing.
 * [`simsh/`](simsh/) – Sim Shell, a bash-like terminal with pipes, variables,
   scripts, `ssh`/`scp` (rsh with a password, not secure) and `sim-get`.
 * [`tools/aspsim/`](tools/aspsim/) – a headless SIM95 for testing SPARK
@@ -99,5 +102,5 @@ line in `tools/simxplorer-source.mjs` (`CENTRAL`).
 Tests: `node tools/aspsim/<app>.test.mjs` (simbook, coldmail, asksim, eliza,
 jscript, simxplorer,
 frostbird, clippy, vapor, simhost, geosimies, simpal, simtube, simstats, simsh,
-wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
+wikisim, simnic, simweb, dnsapps, voyagerdns, bridge, welcome, vspark, pixelwall, filefix). `SIM95_HTTPD=simweb/src/HTTPD.SPK node tools/aspsim/<app>.test.mjs`
 runs a suite with simweb's web server in place of the stock one. Rebuild the installers with `node tools/build-installer.mjs`.

@@ -1,0 +1,52 @@
+' Copy keeps the file itself, its name on the first line, in
+' C:\SYSTEM\FILECLIP.TXT, which every Files window shares: so Paste works in
+' another window, and with files from another machine. (FILEFIX)
+SUB Copy ()
+    VAR i AS Integer
+    VAR text AS String
+    i = Selected()
+    IF i < 0 THEN RETURN
+    IF eDirs[i] THEN
+        win.Status = "Copy works on files, not folders: open " + eNames[i] + " and copy its files"
+        RETURN
+    END IF
+    TRY
+        IF IsUnc(ePaths[i]) THEN
+            text = Ask(UncHost(ePaths[i]), "READ " + UncPath(ePaths[i]))
+        ELSE
+            text = FS.Read(ePaths[i])
+        END IF
+        FS.Write("C:\SYSTEM\FILECLIP.TXT", BaseName(ePaths[i]) + Chr(10) + text)
+        clipboard = ePaths[i]
+        win.Status = "Copied " + eNames[i] + " - Paste it into a folder, in any Files window"
+    CATCH err
+        ShowError(err)
+    END TRY
+END SUB
+
+SUB Paste ()
+    VAR clip AS String
+    VAR name AS String
+    VAR text AS String
+    VAR k AS Integer
+    IF NOT FS.Exists("C:\SYSTEM\FILECLIP.TXT") THEN
+        win.Status = "Nothing to paste: Copy a file first"
+        RETURN
+    END IF
+    TRY
+        clip = FS.Read("C:\SYSTEM\FILECLIP.TXT")
+        k = clip.IndexOf(Chr(10))
+        IF k < 1 THEN THROW "Nothing to paste: Copy a file first"
+        name = clip.Substring(0, k)
+        text = clip.Substring(k + 1, clip.Length - k - 1)
+        IF IsUnc(cwd) THEN
+            Ask(UncHost(cwd), "WRITE " + JoinPath(UncPath(cwd), name) + Chr(10) + text)
+        ELSE
+            FS.Write(JoinPath(cwd, name), text)
+        END IF
+        Refresh()
+        win.Status = "Pasted " + name
+    CATCH err
+        ShowError(err)
+    END TRY
+END SUB

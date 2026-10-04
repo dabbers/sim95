@@ -550,6 +550,62 @@ FUNCTION WelcomeHere () AS Bool
 END FUNCTION
 `,
   },
+  // The Files fix: Copy and Paste in SIM95's own file manager (FILES.SPK)
+  // work between its windows, and so between machines. It edits the
+  // machine's FILES.SPK in place (two SUBs, only if they're the stock ones),
+  // keeping the original as FILES.ORG.
+  filefix: {
+    vapor: { id: "FILEFIX", name: "Files Fix: Copy and Paste Anywhere", kind: "program", category: "System", run: "C:\\PROGRAMS\\FILES.SPK", tasks: "", startup: "", about: "Copy a file in one Files window and Paste it in another: from your disk to another machine's, or back. SIM95's Files keeps what you copied in each window, so Paste in a second window (the Network window opens one) does nothing. This keeps it in C:\\SYSTEM\\FILECLIP.TXT instead." },
+    title: "the Files fix",
+    about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. It changes Copy
+' and Paste in Files (C:\\PROGRAMS\\FILES.SPK) so they work between windows:
+' copy a file on your disk, open another machine from Network, and paste it
+' there. What you copy is kept in C:\\SYSTEM\\FILECLIP.TXT. Only those two
+' SUBs change, and only if they are as SIM95 made them; the original is kept as
+' C:\\PROGRAMS\\FILES.ORG (copy it back over FILES.SPK to undo this).`,
+    copy: [],
+    generated: [{ dest: "C:\\SYSTEM\\FILEFIX.TXT", text: () => "The Files fix is installed: Copy and Paste in Files work between windows.\nThe original Files is C:\\PROGRAMS\\FILES.ORG.\n" }],
+    dirs: [],
+    first: [],
+    last: ["FilesFix()"],
+    done: `Print("Open Files, copy a file, and paste it in another Files window: on this disk or another machine's.")`,
+    code: () => {
+      const text = (f) => read(f).replace(/\r/g, "").replace(/\n+$/, "").split("\n").map((l) => `    s = s + ${lit(l)} + NL`).join("\n");
+      return `
+FUNCTION StockCopyPaste () AS String
+    VAR s AS String
+${text("filefix/src/OLD.SPK")}
+    RETURN s.Substring(0, s.Length - 1)
+END FUNCTION
+
+FUNCTION FixedCopyPaste () AS String
+    VAR s AS String
+${text("filefix/src/NEW.SPK")}
+    RETURN s.Substring(0, s.Length - 1)
+END FUNCTION
+
+SUB FilesFix ()
+    VAR src AS String
+    IF NOT FS.Exists("C:\\PROGRAMS\\FILES.SPK") THEN
+        Print("There's no C:\\PROGRAMS\\FILES.SPK to fix.")
+        RETURN
+    END IF
+    src = FS.Read("C:\\PROGRAMS\\FILES.SPK").Replace(Chr(13), "")
+    IF src.Contains("(FILEFIX)") THEN
+        Print("Files already has the fix.")
+        RETURN
+    END IF
+    IF NOT src.Contains(StockCopyPaste()) THEN
+        Print("Files has been changed since SIM95 made it, so it was left alone: Copy and Paste in it are not the ones this fixes.")
+        RETURN
+    END IF
+    IF NOT FS.Exists("C:\\PROGRAMS\\FILES.ORG") THEN FS.Write("C:\\PROGRAMS\\FILES.ORG", src)
+    FS.Write("C:\\PROGRAMS\\FILES.SPK", src.Replace(StockCopyPaste(), FixedCopyPaste()))
+    Print("Fixed Copy and Paste in C:\\PROGRAMS\\FILES.SPK (the original is FILES.ORG).")
+END SUB
+`;
+    },
+  },
   // The Pixel Wall: one wall of pixels the whole network draws on, on the
   // central host. Plain HTML for Voyager; live in Simxplorer.
   pixelwall: {
