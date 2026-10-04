@@ -9,6 +9,17 @@ VAR y AS Integer
 VAR c AS Integer
 VAR r AS Integer
 VAR said AS String
+VAR agent AS String
+' Robots don't get to draw: AskSim's crawler follows every link, and each
+' square is one, so it once put Black pixels on the wall from STARTHERE.
+agent = REQUEST.Header("User-Agent").Lower()
+IF agent.Contains("asksim") OR agent.Contains("bot") OR agent.Contains("crawl") OR agent.Contains("spider") THEN
+    RESPONSE.Clear()
+    RESPONSE.Status = "403 Forbidden"
+    RESPONSE.ContentType = "text/plain"
+    RESPONSE.Write("Robots don't get to draw on the wall.")
+    RESPONSE.End()
+END IF
 IF REQUEST.Method = "POST" THEN
     x = Num(REQUEST.Form("x"), 0, SIZE - 1, -1)
     y = Num(REQUEST.Form("y"), 0, SIZE - 1, -1)

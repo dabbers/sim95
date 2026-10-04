@@ -37,7 +37,7 @@ END SELECT
 IF Fancy() THEN
     rows = WallRows()
     here = SERVER.ScriptName.Substring(0, LastAt(SERVER.ScriptName, "\") + 1)
-%><html><head><title>The Pixel Wall</title></head><body bgcolor="#C0C0C0">
+%><html><head><title>The Pixel Wall</title><meta name="robots" content="nofollow"></head><body bgcolor="#C0C0C0">
 <script language="JavaScript">
 var S = {r:<%= r %>, c:<%= c %>, v:<%= Version() %>, cool:<%= COOLDOWN %>, rows:"<%= RegionDigits(rows, r) %>", due:0, left:<%= left %>, feed:unescape("<%= JsEscape(Feed().Join(Chr(10))) %>"), msg:unescape("<%= JsEscape(msg) %>")};
 var CODE = unescape("<%= JsEscape(ReadOr(here + "WALL.JS", "document.write('WALL.JS is missing.');")) %>");
@@ -50,7 +50,7 @@ END IF
 rows = WallRows()
 digits = RegionDigits(rows, r)
 here = REQUEST.Path.Substring(0, LastAt(REQUEST.Path, "/") + 1)
-%><html><head><title>The Pixel Wall</title></head>
+%><html><head><title>The Pixel Wall</title><meta name="robots" content="nofollow"></head>
 <body bgcolor="#C0C0C0" link="#000080" vlink="#000080" onload="Page_Load">
 <script type="spark">
 SUB Page_Load ()

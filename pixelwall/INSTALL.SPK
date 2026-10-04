@@ -249,7 +249,7 @@ SUB File17 ()
     t = t + "IF Fancy() THEN" + NL
     t = t + "    rows = WallRows()" + NL
     t = t + "    here = SERVER.ScriptName.Substring(0, LastAt(SERVER.ScriptName, ""\"") + 1)" + NL
-    t = t + "%><html><head><title>The Pixel Wall</title></head><body bgcolor=""#C0C0C0"">" + NL
+    t = t + "%><html><head><title>The Pixel Wall</title><meta name=""robots"" content=""nofollow""></head><body bgcolor=""#C0C0C0"">" + NL
     t = t + "<script language=""JavaScript"">" + NL
     t = t + "var S = {r:<%= r %>, c:<%= c %>, v:<%= Version() %>, cool:<%= COOLDOWN %>, rows:""<%= RegionDigits(rows, r) %>"", due:0, left:<%= left %>, feed:unescape(""<%= JsEscape(Feed().Join(Chr(10))) %>""), msg:unescape(""<%= JsEscape(msg) %>"")};" + NL
     t = t + "var CODE = unescape(""<%= JsEscape(ReadOr(here + ""WALL.JS"", ""document.write('WALL.JS is missing.');"")) %>"");" + NL
@@ -262,7 +262,7 @@ SUB File17 ()
     t = t + "rows = WallRows()" + NL
     t = t + "digits = RegionDigits(rows, r)" + NL
     t = t + "here = REQUEST.Path.Substring(0, LastAt(REQUEST.Path, ""/"") + 1)" + NL
-    t = t + "%><html><head><title>The Pixel Wall</title></head>" + NL
+    t = t + "%><html><head><title>The Pixel Wall</title><meta name=""robots"" content=""nofollow""></head>" + NL
     t = t + "<body bgcolor=""#C0C0C0"" link=""#000080"" vlink=""#000080"" onload=""Page_Load"">" + NL
     t = t + "<script type=""spark"">" + NL
     t = t + "SUB Page_Load ()" + NL
@@ -319,6 +319,17 @@ SUB File18 ()
     t = t + "VAR c AS Integer" + NL
     t = t + "VAR r AS Integer" + NL
     t = t + "VAR said AS String" + NL
+    t = t + "VAR agent AS String" + NL
+    t = t + "' Robots don't get to draw: AskSim's crawler follows every link, and each" + NL
+    t = t + "' square is one, so it once put Black pixels on the wall from STARTHERE." + NL
+    t = t + "agent = REQUEST.Header(""User-Agent"").Lower()" + NL
+    t = t + "IF agent.Contains(""asksim"") OR agent.Contains(""bot"") OR agent.Contains(""crawl"") OR agent.Contains(""spider"") THEN" + NL
+    t = t + "    RESPONSE.Clear()" + NL
+    t = t + "    RESPONSE.Status = ""403 Forbidden""" + NL
+    t = t + "    RESPONSE.ContentType = ""text/plain""" + NL
+    t = t + "    RESPONSE.Write(""Robots don't get to draw on the wall."")" + NL
+    t = t + "    RESPONSE.End()" + NL
+    t = t + "END IF" + NL
     t = t + "IF REQUEST.Method = ""POST"" THEN" + NL
     t = t + "    x = Num(REQUEST.Form(""x""), 0, SIZE - 1, -1)" + NL
     t = t + "    y = Num(REQUEST.Form(""y""), 0, SIZE - 1, -1)" + NL

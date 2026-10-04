@@ -29,12 +29,12 @@ const delta = await net.boot("DELTA");
 const wait = (fn, what, ms = 15000) => net.until(fn, ms, what);
 
 // Voyager, as far as the web server can tell: HTTP/1.0, its User-Agent, one connection a request
-async function http(from, p, { method = "GET", body = "" } = {}) {
+async function http(from, p, { method = "GET", body = "", agent = "Voyager/1.1 (SIM95)" } = {}) {
   const conn = await from.stack.connect(0, "WALLHOST", 80);
   const parts = [];
   const done = new Promise((r) => conn.onClose(r));
   conn.onMessage((t) => parts.push(t));
-  let req = `${method} ${p} HTTP/1.0\nHost: wallhost\nUser-Agent: Voyager/1.1 (SIM95)`;
+  let req = `${method} ${p} HTTP/1.0\nHost: wallhost\nUser-Agent: ${agent}`;
   if (method === "POST") req += `\nContent-Type: application/x-www-form-urlencoded\nContent-Length: ${body.length}\n\n${body}`;
   conn.send(req);
   await Promise.race([done, sleep(8000)]);
@@ -147,6 +147,14 @@ const el = (id) => view().elements.get(id);
 // the page's cells with a handler, in order: the 256 squares come first
 const cells = () => html().split("<").filter((t) => /^td\b/i.test(t) && /onclick="js:\d+"/.test(t)).map((t) => ({ colour: /bgcolor="?(#[0-9A-Fa-f]{6})/.exec(t)?.[1], js: /onclick="(js:\d+)"/.exec(t)[1], tag: t }));
 const fire = (js) => view().fire("onScript", "onclick", js);
+
+await test("robots don't draw: AskSim's crawler is turned away, and the page asks not to be followed", async () => {
+  const before = host.read("C:\\WALLDATA\\WALL.TXT");
+  const r = await http(delta, "/wall/place.asp?x=40&y=40&c=0&r=10", { agent: "AskSim/1.0 (http://starthere/)" });
+  assert.match(r.status, /^403/);
+  assert.equal(host.read("C:\\WALLDATA\\WALL.TXT"), before);
+  assert.match(ok(await http(delta, "/wall/index.asp?plain=1")).body, /<meta name="robots" content="nofollow">/);
+});
 
 await test("Simxplorer: the wall drawn by its script, with every square, colour and part to click", async () => {
   await wait(() => win()?.get("Title") === "The Pixel Wall - Simxplorer" && String(win().get("Status")).startsWith("Done") && /Latest pixels/.test(html()), "the page in Simxplorer: " + win()?.get("Status") + " " + html().slice(0, 300), 60000);
