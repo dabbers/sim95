@@ -23,6 +23,7 @@
 CONST SSHPORT = 22
 CONST FILEPORT = 139
 CONST JOBPATIENCE = 15000
+CONST GETTRIES = 5                ' tries at each part sim-get downloads
 CONST MSGMAX = 60000
 
 VAR jobSock AS NET_Socket
@@ -441,6 +442,7 @@ FUNCTION JobFetch (url AS String) AS String
     VAR path AS String
     VAR raw AS String
     VAR since AS Integer
+    VAR got AS Integer
     host = url.Substring(7, url.Length - 7)
     path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
     host = host.Substring(0, host.IndexOf("/"))
@@ -449,14 +451,25 @@ FUNCTION JobFetch (url AS String) AS String
     IF NOT JobConnect(RsTarget(host), 80) THEN RETURN ""
     jobConn.Send("GET " + path + " HTTP/1.0" + EOL + "Host: " + host + EOL + "User-Agent: sim-get/1.0 (SIM95)")
     since = SYS.Ticks
+    got = 0
     WHILE NOT jobClosed AND SYS.Ticks - since < JOBPATIENCE
         jobBeat = SYS.Ticks
+        ' still coming: patience counts from the last word (a slow line)
+        IF jobParts.Count <> got THEN
+            got = jobParts.Count
+            since = SYS.Ticks
+        END IF
         SYS.Sleep(20)
     END WHILE
     JobHangUp()
     raw = jobParts.Join(EOL)
     IF raw = "" THEN
         jobError = "no answer"
+        RETURN ""
+    END IF
+    ' the store went quiet before the end: what came is only part of it
+    IF NOT jobClosed THEN
+        jobError = "it stopped answering partway"
         RETURN ""
     END IF
     IF NOT raw.StartsWith("HTTP/1.0 200") THEN
@@ -610,6 +623,8 @@ FUNCTION InstallOne (ln AS String, k AS Integer) AS Bool
     VAR pid AS Integer
     VAR since AS Integer
     VAR secs AS Integer
+    VAR wait AS Integer
+    VAR tries AS Integer
     store = StoreUrl()
     id = Field(ln, 0)
     parts = Int(Val(Field(ln, 2)))
@@ -619,6 +634,21 @@ FUNCTION InstallOne (ln AS String, k AS Integer) AS Bool
     JobSay("Get:" + Str(k) + " " + store + " " + id.Lower() + " " + Str(parts) + " parts [" + Kb(Int(Val(Field(ln, 3)))) + "]")
     FOR p = 1 TO parts
         chunk = JobFetch(store + id.Lower() + "/" + Str(p) + ".txt")
+        ' a part that didn't come: again after 2, 4, 8, 16 s, as Vapor does
+        ' (not when connecting failed: that spoils this handler)
+        wait = 1000
+        tries = 1
+        WHILE chunk = "" AND NOT jobBroken AND tries < GETTRIES
+            wait = wait * 2
+            tries = tries + 1
+            JobSay("W: " + id.Lower() + "/" + Str(p) + ".txt didn't come (" + jobError + "); trying again in " + Str(wait / 1000) + " s (" + Str(tries) + " of " + Str(GETTRIES) + ")")
+            since = SYS.Ticks
+            WHILE SYS.Ticks - since < wait
+                jobBeat = SYS.Ticks
+                SYS.Sleep(100)
+            END WHILE
+            chunk = JobFetch(store + id.Lower() + "/" + Str(p) + ".txt")
+        END WHILE
         IF jobBroken OR chunk = "" THEN
             JobSay("E: Failed to fetch " + store + id.Lower() + "/" + Str(p) + ".txt  " + jobError)
             JobEnd(100)

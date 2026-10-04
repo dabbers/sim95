@@ -258,10 +258,18 @@ await test("SimDOOM -warp: flip the exit switch and E1M1 is done", async () => {
   bravo.kernel.kill(pid);
 });
 
-await test("Snake 95: download, play, crash into the wall", async () => {
+const status = (m, u) => String(m.widgets(u.pid(), "Window")[0].get("Status"));
+await test("Snake 95: a part that doesn't come at first is tried again, then download, play, crash into the wall", async () => {
+  // the store's first part of Snake isn't there for a moment (a slow or busy line)
+  const part = "C:\\WEB\\VAPOR\\SNAKE\\1.TXT";
+  const text = alpha.read(part);
+  alpha.remove(part);
   await B.toStore();
   await B.select("Snake 95");
   await B.click("Install");
+  await wait(() => /Part 1 of Snake 95 didn't come \(HTTP\/1.0 404[^)]*\); trying it again\./.test(status(bravo, B)), "the first try failing: " + status(bravo, B));
+  await wait(() => / didn't come; trying again in \d s \(try 2 of 5\)/.test(B.labels().join(" / ")), "the countdown: " + B.labels().join(" / "));
+  alpha.write(part, text);
   await wait(() => bravo.exists("C:\\GAMES\\SNAKE\\SNAKE.SPK"), "the download", 30000);
   const pid = bravo.run("C:\\GAMES\\SNAKE\\SNAKE.SPK");
   await wait(() => bravo.widgets(pid, "Canvas").length, "the game", 30000);
@@ -273,6 +281,26 @@ await test("Snake 95: download, play, crash into the wall", async () => {
   await wait(() => state().startsWith("over"), "the crash", 10000);
   assert.match(bravo.read("C:\\GAMES\\SNAKE\\ACHIEVE.TXT"), /^Ouroboros\|/m);
   bravo.kernel.kill(pid);
+});
+
+await test("a part that never comes: five tries, then the download fails and says why", async () => {
+  // Snake again, with its last part gone for good
+  const parts = +entry("SNAKE").split("|")[2];
+  const part = `C:\\WEB\\VAPOR\\SNAKE\\${parts}.TXT`;
+  const text = alpha.read(part);
+  alpha.remove(part);
+  await B.toStore();
+  await B.select("Snake 95");
+  bravo.ui.answers.push(true);
+  await B.click("Uninstall");
+  await wait(() => !/^SNAKE\|/m.test(library()), "Snake off the library");
+  said(bravo);
+  await B.toStore();
+  await B.select("Snake 95");
+  await B.click("Install");
+  await wait(() => /The download of Snake 95 failed: part \d+ didn't come after 5 tries \(HTTP\/1.0 404/.test(status(bravo, B)), "giving up: " + status(bravo, B), 60000);
+  assert.ok(!bravo.exists("C:\\GAMES\\SNAKE\\SNAKE.SPK"));
+  alpha.write(part, text);
 });
 
 await test("uninstalling a program stops it and deletes its files", async () => {

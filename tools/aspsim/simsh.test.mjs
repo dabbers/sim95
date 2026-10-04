@@ -328,11 +328,18 @@ await test("sim-get installs from a Vapor store, lists, upgrades and removes", a
   assert.match(sh.since(k), /^Package: frostbrd$/m);
   assert.match(sh.since(k), /^Installed: no$/m);
 
+  // its first part isn't on the shelf for a moment: sim-get tries again
+  const part = "C:\\WEB\\VAPOR\\FROSTBRD\\1.TXT";
+  const partText = alpha.read(part);
+  alpha.remove(part);
+  // (back 3 s later: a job's lines show when it ends, so not waited for)
+  setTimeout(() => alpha.write(part, partText), 3000);
   k = sh.mark();
   await sh.type("sim-get install frostbrd");
-  await wait(() => bravo.exists("C:\\PROGRAMS\\FROSTBRD.SPK"), "Frostbird installed by sim-get", 40000);
+  await wait(() => bravo.exists("C:\\PROGRAMS\\FROSTBRD.SPK"), "Frostbird installed by sim-get", 40000).catch((e) => { throw new Error(e.message + "\n" + sh.since(k)); });
   await sh.settle();
   assert.match(sh.since(k), /Unpacking Frostbird/);
+  assert.match(sh.since(k), /W: frostbrd\/1\.txt didn't come \(HTTP\/1\.0 404[^)]*\); trying again in 2 s \(2 of 5\)/);
   // the library line matches exactly what Vapor writes
   const lib = bravo.read("C:\\GAMES\\LIBRARY.TXT").split("\n").find((l) => l.startsWith("FROSTBRD|"));
   const ver = catLine.split("|")[8];

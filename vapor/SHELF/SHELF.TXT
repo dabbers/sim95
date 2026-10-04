@@ -1,29 +1,29 @@
 # What a Vapor store built from this repository stocks. Made by tools/build-installer.mjs;
 # tools/vapor-bridge.js reads it. (item <path> <version> | soon <catalog line> | site <path> <SIM95 path> | central <path> <hash> <marker>)
-item vapor/SHELF/VAPOR.SPK d0000c03
+item vapor/SHELF/VAPOR.SPK fcac4f7c
 item vapor/SHELF/SIMDOOM.SPK c0f9cfa6
 item vapor/SHELF/SNAKE.SPK aa5d9aeb
 soon HL3|Half-Life 3|0|0|soon|Shooter|The long-awaited conclusion. Coming soon.|game|||||
 item simbook/INSTALL.SPK cd4a7574
-item coldmail/INSTALL.SPK 756d6ef5
-item asksim/INSTALL.SPK b0f619e7
-item simxplorer/INSTALL.SPK 75d1a6b5
-item simplayer/INSTALL.SPK 1b95d304
-item frostbird/INSTALL.SPK 43583306
+item coldmail/INSTALL.SPK 45092ee7
+item asksim/INSTALL.SPK b19063a6
+item simxplorer/INSTALL.SPK 3665d099
+item simplayer/INSTALL.SPK e95e5825
+item frostbird/INSTALL.SPK 1fb85dda
 item clippy/INSTALL.SPK 9e573165
 item simhost/INSTALL.SPK 6030651c
 item geosimies/INSTALL.SPK 381f5bf0
 item simpal/INSTALL.SPK 6e12c626
 item simtube/INSTALL.SPK d8d3ebf2
 item simstats/INSTALL.SPK b9240bbb
-item simsh/INSTALL.SPK be171f8b
+item simsh/INSTALL.SPK 63ab0868
 item wikisim/INSTALL.SPK 4998e899
 item vspark/INSTALL.SPK 680a32c3
 item node/INSTALL.SPK d1d2f68d
 item filefix/INSTALL.SPK e030bb75
 item explorer/INSTALL.SPK 6c2a7437
 item chatfix/INSTALL.SPK 1a5da812
-item simweb/INSTALL.SPK b51300fc
+item simweb/INSTALL.SPK c194e6eb
 item eliza/INSTALL.SPK c6f091b3
 site vapor/WEB/GETVAPOR.ASP C:\WEB\VAPOR\GETVAPOR.ASP
 site vapor/WEB/GETVAPOR.TXT C:\WEB\VAPOR\GETVAPOR.TXT

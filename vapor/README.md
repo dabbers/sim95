@@ -203,6 +203,12 @@ that store, and starts it.
 * **Installing:** a game downloads part by part into
   `C:\GAMES\<ID>\<ID>.SPK`. A program or web app downloads its installer,
   which Vapor runs.
+  * A part that doesn't come (no answer, an error, or the store going quiet
+    partway) is tried again after 2, 4, 8 and 16 seconds, and the download
+    fails only after five tries. The Downloads tab counts down to the next
+    try. sim-get does the same.
+  * The store has 8 seconds to say something, counted from the last thing it
+    sent, so a slow line that is still sending isn't cut off.
   * A web app asks first: it becomes this machine's home page, and a machine
     has room for one. On a [SimHost](../simhost/) machine, it goes into a
     folder of its own (`/book/`, `/mail/`...) without asking.
@@ -257,6 +263,8 @@ Tests: `node tools/aspsim/vapor.test.mjs` and `node tools/aspsim/bridge.test.mjs
 
 * the store and its download site, and fetching Vapor onto another machine;
 * publishing apps, installing a program and a web app;
+* a part that's missing at first and then comes back (tried again), and one
+  that never does (five tries, then a failure that says why);
 * updates, and Vapor updating itself;
 * the bridge: a store stocked from the repository, the same as INSTALL.SPK
   and Publish Apps make one, and its new builds reaching another machine's

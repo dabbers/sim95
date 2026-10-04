@@ -41,7 +41,7 @@
 CONST RSCENTRAL = "starthere.56k.net"   ' the central name server
 CONST RSINI = "C:\SYSTEM\RESOLV.INI"
 CONST RSPORT = 53
-CONST RSWAIT = 2000             ' ms to wait for an answer
+CONST RSWAIT = 5000             ' ms to wait for an answer (a slow line takes a while)
 CONST RSQUIET = 30000            ' ms to leave a silent name server alone
 CONST RSNEG = 60000             ' ms to remember that SimDNS doesn't know a name
 CONST RSMOST = 100              ' names kept

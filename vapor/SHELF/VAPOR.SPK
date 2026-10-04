@@ -1,4 +1,4 @@
-' VAPOR|id=VAPOR|name=Vapor|kind=client|version=d0000c03|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself.
+' VAPOR|id=VAPOR|name=Vapor|kind=client|version=fcac4f7c|category=Vapor|run=C:\PROGRAMS\VAPOR.SPK|files=C:\PROGRAMS\VAPOR.SPK|tasks=VAPOR|startup=|folder=|about=The Vapor program itself.
 ' VAPOR.SPK - Vapor, the store and library for everything on SIM95: games,
 ' programs (Simxplorer, Frostbird, Clippy...) and web apps (SimBook, ColdMail,
 ' AskSim, ELIZA-95).
@@ -43,7 +43,8 @@ CONST HOME = "C:\GAMES"
 CONST ME = "C:\PROGRAMS\VAPOR.SPK"
 CONST STOREDIR = "C:\WEB\VAPOR"
 CONST BROWSER = "C:\PROGRAMS\SIMXPLOR.SPK"
-CONST PATIENCE = 8000
+CONST PATIENCE = 8000              ' ms without a word from the store before a fetch gives up
+CONST TRIES = 5                    ' tries at each part of a download before it fails
 CONST PART = 15000
 CONST WEBAPPS = "C:\SYSTEM\WEBAPPS.INI"
 CONST RECHECK = 300000            ' look at the store again after this long (ms)
@@ -92,6 +93,9 @@ VAR dlPart AS Integer
 VAR dlParts AS Integer
 VAR dlText AS String
 VAR dlStart AS Integer
+VAR dlTries AS Integer            ' tries at this part that failed
+VAR dlAgainAt AS Integer          ' SYS.Ticks when to try it again
+VAR dlWait AS Integer             ' how long it waited last (ms; doubles)
 VAR queue AS Array OF String      ' catalog lines waiting
 VAR setupPid AS Integer           ' an installer Vapor is running
 VAR setupLine AS String
@@ -813,8 +817,16 @@ SUB Tick ()
         dlPart = 0
         dlText = ""
         dlStart = SYS.Ticks
+        dlTries = 0
+        dlAgainAt = 0
+        dlWait = 1000
     END IF
     IF dlId <> "" THEN
+        ' a part that failed: wait a little before asking again
+        IF SYS.Ticks < dlAgainAt THEN
+            note.Text = "Downloading " + Field(dlLine, 1) + ": part " + Str(dlPart + 1) + " of " + Str(dlParts) + " didn't come; trying again in " + Str(Int((dlAgainAt - SYS.Ticks) / 1000) + 1) + " s (try " + Str(dlTries + 1) + " of " + Str(TRIES) + ")"
+            RETURN
+        END IF
         IF RsNext(StoreHost()) THEN RETURN
         dlPart = dlPart + 1
         ' (last thing in the tick: it may be spoiled)
@@ -905,7 +917,11 @@ SUB StartFetch (what AS String, url AS String)
 END SUB
 
 SUB Web_OnMessage (conn AS NET_Connection, message AS String)
-    IF conn.Tag = Str(fNumber) AND NOT fDone THEN fParts.Add(message)
+    IF conn.Tag = Str(fNumber) AND NOT fDone THEN
+        fParts.Add(message)
+        ' still coming: patience counts from the last word (a slow line)
+        fSince = SYS.Ticks
+    END IF
 END SUB
 
 SUB Web_OnClose (conn AS NET_Connection)
@@ -939,6 +955,14 @@ SUB Arrived ()
         web.Close()
     CATCH err
     END TRY
+    ' the store went quiet before the end: what came is only part of it
+    IF NOT fDone AND fError = "" THEN
+        IF fParts.Count = 0 THEN
+            fError = "no answer in " + Str(PATIENCE / 1000) + " s"
+        ELSE
+            fError = "it stopped answering partway"
+        END IF
+    END IF
     text = Body()
     IF fWhat = "catalog" THEN
         ' (a store that doesn't answer keeps the list it had)
@@ -971,7 +995,18 @@ SUB Arrived ()
     END IF
     ' a part of the download
     IF text = "" THEN
-        win.Status = "The download of " + Field(dlLine, 1) + " failed (" + fError + ")."
+        IF fError = "" THEN fError = "an empty answer"
+        ' try it again after a while (2, 4, 8, 16 s): a slow or busy line
+        ' often does better the second time
+        dlTries = dlTries + 1
+        IF dlTries < TRIES THEN
+            dlPart = dlPart - 1
+            dlWait = MATH.Min(30000, dlWait * 2)
+            dlAgainAt = SYS.Ticks + dlWait
+            win.Status = "Part " + Str(dlPart + 1) + " of " + Field(dlLine, 1) + " didn't come (" + fError + "); trying it again."
+            RETURN
+        END IF
+        win.Status = "The download of " + Field(dlLine, 1) + " failed: part " + Str(dlPart) + " didn't come after " + Str(TRIES) + " tries (" + fError + ")."
         progress.Value = 0
         note.Text = ""
         dlId = ""
@@ -979,6 +1014,9 @@ SUB Arrived ()
         RETURN
     END IF
     dlText = dlText + text
+    dlTries = 0
+    dlAgainAt = 0
+    dlWait = 1000
     progress.Value = Int(dlPart * 100 / dlParts)
     note.Text = "Downloading " + Field(dlLine, 1) + ": part " + Str(dlPart) + " of " + Str(dlParts) + "  -  " + Str(Int(dlText.Length / MATH.Max(1, SYS.Ticks - dlStart) * 1000 / 102.4) / 10) + " KB/s"
     IF tab = "DOWNLOADS" AND games.Count > 0 THEN games.Set(0, Field(dlLine, 1) + "  " + Str(Int(dlPart * 100 / dlParts)) + "%")
@@ -1401,7 +1439,7 @@ END SUB
 CONST RSCENTRAL = "starthere.56k.net"   ' the central name server
 CONST RSINI = "C:\SYSTEM\RESOLV.INI"
 CONST RSPORT = 53
-CONST RSWAIT = 2000             ' ms to wait for an answer
+CONST RSWAIT = 5000             ' ms to wait for an answer (a slow line takes a while)
 CONST RSQUIET = 30000            ' ms to leave a silent name server alone
 CONST RSNEG = 60000             ' ms to remember that SimDNS doesn't know a name
 CONST RSMOST = 100              ' names kept
