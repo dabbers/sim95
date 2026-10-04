@@ -39,6 +39,9 @@ const ide = {
   editor: () => ide.w("TextArea", 0),
   code: () => String(ide.editor().get("Text")),
   menu: (item) => ide.w("Menu").fire("onSelect", item),
+  ctx: () => ide.w("Menu", 1),
+  keys: () => dev.widgets(ide.pid(), "Button").find((b) => b.get("Width") === 1),
+  propDel: () => dev.widgets(ide.pid(), "Button").find((b) => b.get("Text") === "&Delete"),
   drawn: () => (ide.design().ops || []).filter((o) => o[0] === "Text").map((o) => o[3]),
   prop: (key) => (ide.props().get("Items").find((l) => l.startsWith(key.padEnd(11))) ?? "").slice(11),
   pick(list, i) { list.set("Selected", i); list.fire("onSelect"); },
@@ -124,9 +127,37 @@ await test("the designer: drag to move, the corner handle to size, Delete to rem
   await ide.tool("CheckBox");
   await ide.drag(200, 120, 200, 120);
   await wait(() => ide.prop("Name") === "Check1", "Check1");
-  ide.design().fire("onKey", "Delete");
+  // (a Canvas gets no keys: the designer's go to a button too small to see)
+  ide.keys().fire("onKey", "Delete");
   await wait(() => !ide.propObj().get("Items").some((s) => s.startsWith("Check1")), "Check1 deleted");
   assert.equal(ide.prop("Name"), "Form1");
+  assert.equal(ide.propDel().get("Enabled"), false, "the form can't be deleted");
+});
+
+await test("deleting a control: the Delete button, Edit > Delete Control, and the right-click menu", async () => {
+  const has = (name) => ide.propObj().get("Items").some((s) => s.startsWith(name + " "));
+  for (const [x, y] of [[200, 100], [200, 140], [200, 180]]) {
+    await ide.tool("CheckBox");
+    await ide.drag(x, y, x, y);
+  }
+  await wait(() => has("Check3"), "three check boxes");
+  await ide.select("Check1");
+  assert.equal(ide.propDel().get("Enabled"), true);
+  ide.propDel().fire("onClick");
+  await wait(() => !has("Check1"), "Check1 deleted by the button");
+  await ide.select("Check2");
+  ide.menu("Delete Control");
+  await wait(() => !has("Check2"), "Check2 deleted from the menu");
+  ide.menu("Delete Control");
+  await wait(() => /Select a control/.test(ide.status()), "nothing to delete: " + ide.status());
+  assert.ok(has("Form1"), "the form stays");
+  // a right click selects what's under it, then its menu deletes it
+  ide.design().fire("onMouseDown", CX + 205, CY + 185, 2);
+  await wait(() => ide.prop("Name") === "Check3", "Check3 selected by the right click");
+  ide.design().fire("onMouseUp", CX + 205, CY + 185, 2);
+  ide.ctx().fire("onSelect", "Delete");
+  await wait(() => !has("Check3"), "Check3 deleted from its menu");
+  assert.deepEqual(ide.propObj().get("Items"), ["Form1  (Form)", "Command1  (Button)", "Label1  (Label)", "Text1  (TextBox)"]);
 });
 
 await test("properties: type a value and press Enter; double-click switches TRUE/FALSE; bad names are refused", async () => {

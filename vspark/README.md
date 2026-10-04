@@ -15,7 +15,10 @@ what's on it, and write what happens. **F5** runs it.
 * **Designer** (middle): the form, drawn in Win95 style on an 8-pixel grid.
   * Click to select a control, drag to move it, and drag its corner handle to
     size it. The form's own corner handle sizes the form.
-  * **Delete** removes the selected control, and the arrow keys nudge it.
+  * To remove the selected control: press **Delete**, click **Delete** by the
+    Properties list, choose **Edit > Delete Control**, or right-click it and
+    choose **Delete**. The arrow keys nudge it.
+  * **Right-click** a control for its menu: View Code or Delete.
   * **Double-click** a control to go to its usual event's code.
 * **Properties** (right): pick the object at the top, then a property; type
   its value and press **Enter**.

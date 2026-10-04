@@ -50,6 +50,9 @@ VAR propObj AS GUI_DropDown
 VAR propList AS GUI_ListBox
 VAR propEdit AS GUI_TextBox
 VAR propHelp AS GUI_TextArea
+VAR propDel AS GUI_Button
+VAR keys AS GUI_Button              ' takes the designer's keys (a Canvas gets none of its own)
+VAR ctx AS GUI_Menu                 ' the designer's right-click menu
 
 ' The form (0) and its controls: their type, and their properties as
 ' Key=Value lines.
@@ -104,6 +107,8 @@ SUB Main ()
     bar.AddItem("&File", "Save Project &As...")
     bar.AddSeparator("&File")
     bar.AddItem("&File", "E&xit")
+    bar.AddMenu("&Edit")
+    bar.AddItem("&Edit", "&Delete Control")
     bar.AddMenu("&View")
     bar.AddItem("&View", "&Code" + Chr(9) + "F7")
     bar.AddItem("&View", "&Form" + Chr(9) + "Shift+F7")
@@ -152,6 +157,17 @@ SUB Main ()
     runBtn.SetBounds(514, 4, 70, 23)
     runBtn.onClick = RunBtn_OnClick
 
+    ' A Canvas can't hold the keyboard, so the designer focuses this instead:
+    ' a button too small to see, under the canvas. Its keys are the designer's.
+    keys = GUI_Button.New(win)
+    keys.SetBounds(140, 40, 1, 1)
+    keys.onKey = Design_OnKey
+    ctx = GUI_Menu.New(win)
+    ctx.AddMenu("Control")
+    ctx.AddItem("Control", "&View Code")
+    ctx.AddItem("Control", "&Delete")
+    ctx.onSelect = Ctx_OnSelect
+
     design = GUI_Canvas.New(win)
     design.SetBounds(134, 32, 450, 470)
     design.Background = 8
@@ -176,8 +192,12 @@ SUB Main ()
     l.Bold = TRUE
     l.SetBounds(592, 8, 180, 16)
     propObj = GUI_DropDown.New(win)
-    propObj.SetBounds(592, 26, 182, 21)
+    propObj.SetBounds(592, 26, 128, 21)
     propObj.onSelect = PropObj_OnSelect
+    propDel = GUI_Button.New(win)
+    propDel.Text = "&Delete"
+    propDel.SetBounds(724, 25, 50, 23)
+    propDel.onClick = PropDel_OnClick
     propList = GUI_ListBox.New(win)
     propList.SetBounds(592, 52, 182, 300)
     propList.Mono = TRUE
@@ -1177,7 +1197,17 @@ END SUB
 
 SUB Design_OnMouseDown (x AS Integer, y AS Integer, button AS Integer)
     VAR i AS Integer
-    design.Focus()
+    keys.Focus()
+    ' the right button: select what's there, and offer its menu
+    IF button = 2 THEN
+        tool = ""
+        toolbox.Selected = 0
+        i = HitAt(x, y)
+        IF i < 0 THEN RETURN
+        SelectObj(i)
+        IF i > 0 THEN ctx.Popup(design.X + x, design.Y + y)
+        RETURN
+    END IF
     ' drawing a new control
     IF tool <> "" THEN
         dragMode = "new"
@@ -1316,9 +1346,24 @@ END SUB
 SUB SelectObj (i AS Integer)
     IF i < 0 OR i >= kType.Count THEN RETURN
     sel = i
+    propDel.Enabled = i > 0
     IF propObj.Selected <> i THEN propObj.Selected = i
     FillProps()
     Draw()
+END SUB
+
+SUB PropDel_OnClick ()
+    DeleteSelected()
+END SUB
+
+SUB Ctx_OnSelect (item AS String)
+    IF sel <= 0 OR sel >= kType.Count THEN RETURN
+    SELECT CASE item
+        CASE "View Code"
+            OpenHandler(sel, Events(kType[sel])[0])
+        CASE "Delete"
+            DeleteSelected()
+    END SELECT
 END SUB
 
 SUB Toolbox_OnSelect ()
@@ -1541,6 +1586,7 @@ SUB ShowForm ()
     objList.Visible = FALSE
     evtList.Visible = FALSE
     design.Visible = TRUE
+    keys.Visible = TRUE
     formBtn.Enabled = FALSE
     codeBtn.Enabled = TRUE
     Draw()
@@ -1549,6 +1595,7 @@ END SUB
 SUB ShowCode ()
     codeView = TRUE
     design.Visible = FALSE
+    keys.Visible = FALSE
     editor.Visible = TRUE
     objList.Visible = TRUE
     evtList.Visible = TRUE
@@ -1694,6 +1741,12 @@ SUB Menu_OnSelect (item AS String)
             SaveAs()
         CASE "Exit"
             win.Close()
+        CASE "Delete Control"
+            IF sel > 0 THEN
+                DeleteSelected()
+            ELSE
+                win.Status = "Select a control on the form first. (The form itself stays.)"
+            END IF
         CASE "Code"
             ShowCode()
         CASE "Form"
