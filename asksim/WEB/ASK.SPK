@@ -7,6 +7,7 @@
 '   C:\ASKDATA\IDX\<c>.TXT    word|id:count id:count ...
 '   C:\ASKDATA\STATS.TXT      last crawl, pages, machines, seconds, TIME.Now
 '   C:\ASKDATA\SEEDS.TXT      sites people submitted
+'   C:\ASKDATA\BANNED.TXT     what's kept out (below; the crawler's Admin button)
 '
 ' Ranking is tf-idf: a word counts for more the more often it is on a page,
 ' and for less the more pages it is on; a page with all your words beats one
@@ -16,6 +17,7 @@ CONST DATADIR = "C:\ASKDATA"
 CONST PERPAGE = 10
 CONST MAXWORDS = 8
 CONST MAXSEEDS = 200
+CONST BANFILE = "C:\ASKDATA\BANNED.TXT"
 ' Words that say nothing about what you are looking for
 CONST IGNORE = "|a|an|the|and|or|of|to|in|on|at|by|for|is|it|its|be|as|are|was|with|this|that|from|you|your|i|me|my|we|our|he|she|they|them|but|not|no|so|if|do|does|did|have|has|had|can|will|just|all|any|there|here|what|where|who|how|which|when|why|about|into|out|up|than|then|also|more|some|very|would|could|should|been|were|these|those|their|his|her|him|am|get|got|one|nbsp|find|information|info|page|pages|site|sites|web|please|tell|show|know|want|looking|look|search|need|anything|something|someone|somebody|anyone|anybody|place|places|go|best|good|thing|things|let|lot|lots|like|ask|simms|"
 
@@ -54,6 +56,110 @@ FUNCTION HostOf (url AS String) AS String
     rest = url.Substring(7, url.Length - 7)
     IF rest.Contains("/") THEN rest = rest.Substring(0, rest.IndexOf("/"))
     RETURN rest
+END FUNCTION
+
+' ---------------------------------------------------------------- the ban list
+'
+' C:\ASKDATA\BANNED.TXT: what Simms won't show, keep or visit, one rule a line
+' (rule|why|when; the crawler's Admin window writes them, a line typed by hand
+' needs only the rule; a line starting ' is a note):
+'   badguy                   a machine: every page on it (BADGUY.DIALUP.ZONE too)
+'   www.gross.sim            a site by name, its subdomains, and the same site
+'                            by path on any machine (http://alpha/www.gross.sim/)
+'   http://bob/stuff/        an address: that page, or that folder and all in it
+' The same rules are in CRAWLER.SPK and ASK.SPK: keep them alike.
+
+FUNCTION BanRules () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR r AS String
+    FOR EACH line IN ReadOr(BANFILE, "").Lines()
+        r = line.Split("|")[0].Trim().Lower()
+        IF r = "" OR r.StartsWith("'") THEN CONTINUE
+        ' an address that is just a machine is a machine
+        IF r.StartsWith("http://") AND (r.Substring(7, r.Length - 7).IndexOf("/") < 0 OR r.Substring(7, r.Length - 7).IndexOf("/") = r.Length - 8) THEN r = r.Substring(7, r.Length - 7).Replace("/", "")
+        out.Add(r)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Does this rule cover this address?
+FUNCTION BanCovers (rule AS String, url AS String) AS Bool
+    VAR host AS String
+    VAR path AS String
+    url = url.Lower()
+    IF NOT url.StartsWith("http://") THEN url = "http://" + url
+    IF rule.StartsWith("http://") THEN RETURN url.StartsWith(rule) OR url + "/" = rule
+    host = url.Substring(7, url.Length - 7)
+    path = "/"
+    IF host.Contains("/") THEN
+        path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
+        host = host.Substring(0, host.IndexOf("/"))
+    END IF
+    IF host.Contains(":") THEN host = host.Substring(0, host.IndexOf(":"))
+    IF host.EndsWith(".") THEN host = host.Substring(0, host.Length - 1)
+    IF host = rule OR host.EndsWith("." + rule) THEN RETURN TRUE
+    ' a machine by its short name or its full one (BOB, BOB.DIALUP.ZONE)
+    IF NOT rule.Contains(".") AND host.Split(".")[0] = rule THEN RETURN TRUE
+    IF NOT host.Contains(".") AND rule.Split(".")[0] = host AND rule.EndsWith(".dialup.zone") THEN RETURN TRUE
+    ' a site by name, served by path (http://alpha/www.gross.sim/...)
+    IF rule.Contains(".") AND (path.StartsWith("/" + rule + "/") OR path = "/" + rule) THEN RETURN TRUE
+    RETURN FALSE
+END FUNCTION
+
+' The rule that keeps this address out, or "".
+FUNCTION BannedBy (url AS String, rules AS Array OF String) AS String
+    VAR r AS String
+    FOR EACH r IN rules
+        IF BanCovers(r, url) THEN RETURN r
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' A page without its pictures: every <img> (and <input type=image>, <embed>,
+' <object>, <applet>) becomes [picture], and background= pictures go. AskSim
+' never keeps or shows a site's pictures, only its words.
+FUNCTION NoPictures (html AS String) AS String
+    VAR tag AS String
+    VAR low AS String
+    VAR at AS Integer
+    VAR gt AS Integer
+    VAR q AS String
+    VAR rest AS String
+    FOR EACH tag IN ["<img", "<image", "<embed", "<object", "<applet", "<input type=image", "<input type=""image"""]
+        low = html.Lower()
+        at = low.IndexOf(tag)
+        WHILE at >= 0
+            gt = low.Substring(at, low.Length - at).IndexOf(">")
+            IF gt < 0 THEN
+                html = html.Substring(0, at)
+            ELSE
+                html = html.Substring(0, at) + "[picture]" + html.Substring(at + gt + 1, html.Length - at - gt - 1)
+            END IF
+            low = html.Lower()
+            at = low.IndexOf(tag)
+        END WHILE
+    NEXT
+    ' background="pic" on <body>, <table>, <td>...
+    low = html.Lower()
+    at = low.IndexOf(" background=")
+    WHILE at >= 0
+        rest = html.Substring(at + 12, html.Length - at - 12)
+        q = rest.CharAt(0)
+        IF q = """" OR q = "'" THEN
+            gt = rest.Substring(1, rest.Length - 1).IndexOf(q) + 2
+            IF gt < 2 THEN gt = rest.Length
+        ELSE
+            gt = 0
+            WHILE gt < rest.Length AND NOT " >".Contains(rest.CharAt(gt))
+                gt = gt + 1
+            END WHILE
+        END IF
+        html = html.Substring(0, at) + rest.Substring(gt, rest.Length - gt)
+        low = html.Lower()
+        at = low.IndexOf(" background=")
+    END WHILE
+    RETURN html
 END FUNCTION
 
 ' ---------------------------------------------------------------- questions
@@ -119,7 +225,9 @@ SUB Search (words AS Array OF String)
     VAR n AS Integer
     VAR doc AS String
     VAR score AS Real
+    VAR bans AS Array OF String
     found.Clear()
+    bans = BanRules()
     n = PageCount()
     IF n = 0 OR words.Count = 0 THEN RETURN
     FOR EACH w IN words
@@ -144,6 +252,7 @@ SUB Search (words AS Array OF String)
     FOR i = 0 TO ids.Count - 1
         doc = FindLine(ReadOr(DATADIR + "\DOCS.TXT", ""), ids[i])
         IF doc = "" THEN CONTINUE
+        IF BannedBy(doc.Split("|")[1], bans) <> "" THEN CONTINUE
         IF siteFilter <> "" AND NOT HostOf(doc.Split("|")[1]).StartsWith(siteFilter) THEN CONTINUE
         score = scores[i] * hits[i] / words.Count
         IF doc.Split("|")[4] = "gone" THEN score = score / 2
@@ -156,9 +265,13 @@ END SUB
 ' Every page of one machine, for "site:host" on its own.
 SUB SiteOnly ()
     VAR line AS String
+    VAR bans AS Array OF String
     found.Clear()
+    bans = BanRules()
     FOR EACH line IN ReadOr(DATADIR + "\DOCS.TXT", "").Lines()
-        IF line <> "" AND HostOf(line.Split("|")[1]).StartsWith(siteFilter) THEN found.Add("1|" + line.Split("|")[0])
+        IF line = "" THEN CONTINUE
+        IF BannedBy(line.Split("|")[1], bans) <> "" THEN CONTINUE
+        IF HostOf(line.Split("|")[1]).StartsWith(siteFilter) THEN found.Add("1|" + line.Split("|")[0])
     NEXT
 END SUB
 

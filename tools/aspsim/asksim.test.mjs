@@ -47,7 +47,7 @@ bravo.write("C:\\WEB\\SECRET\\PLANS.HTM", `<html><head><title>Secret</title></he
 bravo.write("C:\\WEB\\ORPHAN.HTM", `<html><head><title>Nobody links here</title></head><body>An unlinked page about walrus.</body></html>`);
 bravo.write("C:\\WEB\\DOCS\\SPARK.TXT", "The SPARK manual, which every machine has: ocelot.");
 bravo.write("C:\\WEB\\ROBOTS.TXT", "User-agent: *\nDisallow: /secret/\n");
-charlie.write("C:\\WEB\\CLUB.HTM", `<html><head><title>Charlie's Chess Club</title></head><body>
+charlie.write("C:\\WEB\\CLUB.HTM", `<html><head><title>Charlie's Chess Club</title></head><body background="wood.pic">
 <p>The chess club meets on Tuesdays. Bring your own chess board. Chess chess chess!</p>
 <p><img src="board.pic"> <a href="index.htm">Charlie's home page</a> &middot; <a href="/docs/spark.txt">The SPARK manual</a></p></body></html>`);
 charlie.write("C:\\WEB\\DOCS\\SPARK.TXT", "The SPARK manual, which every machine has: ocelot.");
@@ -126,14 +126,34 @@ await test("Just take me there goes to the best answer", async () => {
   assert.ok(r.headers.includes("Location: http://charlie/club.htm"));
 });
 
-await test("the cached copy points back at the real site", async () => {
+await test("the cached copy points back at the real site, and keeps no pictures", async () => {
   const id = doc("http://charlie/club.htm").split("|")[0];
   const r = ok(await visitor.get(`/cache.asp?id=${id}`));
   assert.match(r.body, /AskSim<\/b><\/a>'s copy of <a href="http:\/\/charlie\/club.htm">/);
   assert.match(r.body, /The real page may have changed since/);
-  assert.match(r.body, /<img src="http:\/\/charlie\/board.pic">/);
+  // pictures: not kept, not shown, not even linked to
+  assert.match(r.body, /\[picture\] <a href/);
+  assert.doesNotMatch(r.body, /<img|board\.pic|wood\.pic|background=/i);
+  assert.doesNotMatch(alpha.read(`C:\\ASKDATA\\CACHE\\${id}.HTM`), /<img|board\.pic|wood\.pic/i);
+  // a copy kept before AskSim left pictures out is shown without them too
+  const kept = alpha.read(`C:\\ASKDATA\\CACHE\\${id}.HTM`);
+  alpha.write(`C:\\ASKDATA\\CACHE\\${id}.HTM`, `<body background='old.pic'><p>Old <IMG SRC="http://charlie/board.pic" alt="x"> copy <input type=image src="go.pic"></p></body>`);
+  const old = ok(await visitor.get(`/cache.asp?id=${id}`)).body;
+  assert.match(old, /<body><p>Old \[picture\] copy \[picture\]<\/p>/);
+  assert.doesNotMatch(old, /\.pic/i);
+  alpha.write(`C:\\ASKDATA\\CACHE\\${id}.HTM`, kept);
   assert.match(r.body, /<a href="http:\/\/charlie\/">Charlie's home page/);
   for (const bad of ["..\\..\\SYSTEM\\USERS", "999", "1.2"]) assert.equal((await alpha.request("GET", "/cache.asp?id=" + encodeURIComponent(bad))).status, "302 Found", bad);
+});
+
+await test("cached copies kept before pictures were left out are cleaned on disk, once", async () => {
+  const id = doc("http://charlie/club.htm").split("|")[0];
+  const kept = alpha.read(`C:\\ASKDATA\\CACHE\\${id}.HTM`);
+  alpha.write(`C:\\ASKDATA\\CACHE\\${id}.HTM`, kept.replace("[picture]", '<img src="http://charlie/board.pic">'));
+  alpha.remove("C:\\ASKDATA\\NOPICS.TXT");
+  await net.until(() => alpha.exists("C:\\ASKDATA\\NOPICS.TXT"), 20000, "the clean-up");
+  assert.equal(alpha.read(`C:\\ASKDATA\\CACHE\\${id}.HTM`), kept);
+  assert.match(alpha.widgets(crawlerPid(), "ListBox")[0].get("Items").join("\n"), /Took the pictures out of 1 cached pages/);
 });
 
 await test("a machine that goes away stays findable, marked, with its cached copy", async () => {
@@ -193,6 +213,59 @@ await test("the front page, and a results page full of answers, fit in a message
   assert.match(r.body, /Simms knows \d+ pages on 3 machines/, [...new Set(docs().map((l) => l.split("|")[1].split("/")[2]))].join(", "));
   r = await ask("chess cooking pancakes knight bishop club hobby welcome");
   assert.ok(r.raw.length < MESSAGE_LIMIT - 8000, r.raw.length);
+});
+
+await test("Admin: banning a machine or an address removes it at once, and the crawler stays away", async () => {
+  const pid = crawlerPid();
+  const crawl = async (n) => {
+    const before = stats();
+    alpha.button(pid, "Crawl Now").call("Click");
+    await net.until(() => stats() !== before, 240000, "crawl " + n);
+  };
+  if (!bravo.running(webOf.BRAVO)) webOf.BRAVO = bravo.run("C:\\PROGRAMS\\HTTPD.SPK");
+  if (!charlie.running(webOf.CHARLIE)) webOf.CHARLIE = charlie.run("C:\\PROGRAMS\\HTTPD.SPK");
+  await crawl(1);
+  const chessId = doc("http://bravo/chess.htm").split("|")[0];
+  const clubId = doc("http://charlie/club.htm").split("|")[0];
+  assert.match((await ask("chess")).body, /http:\/\/bravo\/chess\.htm/);
+  // the Admin window
+  alpha.button(pid, "Admin...").call("Click");
+  await net.until(() => alpha.widgets(pid, "Window").some((w) => /AskSim Admin/.test(w.get("Title"))), 5000, "the Admin window");
+  const boxes = () => alpha.widgets(pid, "TextBox");
+  const lines = () => alpha.widgets(pid, "ListBox")[1].get("Items");
+  const said = () => alpha.widgets(pid, "Label").map((l) => l.get("Text")).pop();
+  assert.deepEqual(lines(), ["(nothing banned)"]);
+  boxes()[0].set("Text", "BRAVO");
+  boxes()[1].set("Text", "gross stuff");
+  alpha.button(pid, "Ban").call("Click");
+  await net.until(() => /Banned bravo: \d+ pages removed/.test(said()), 20000, "the ban: " + said());
+  assert.match(lines()[0], /^bravo +\d{4}-\d\d-\d\d gross stuff$/);
+  assert.match(alpha.read("C:\\ASKDATA\\BANNED.TXT"), /^bravo\|gross stuff\|\d{4}-\d\d-\d\d$/m);
+  // gone from the index, the disk and the answers, and can't come back by the front door
+  assert.ok(!docs().some((l) => /\|http:\/\/bravo\//.test(l)), "no bravo pages in DOCS.TXT");
+  assert.ok(!alpha.exists(`C:\\ASKDATA\\TEXT\\${chessId}.TXT`) && !alpha.exists(`C:\\ASKDATA\\CACHE\\${chessId}.HTM`), "its text and copy deleted");
+  assert.doesNotMatch((await ask("chess")).body, /bravo/i);
+  assert.doesNotMatch((await ask("site:bravo")).body, /http:\/\/bravo\//);
+  assert.match((await ask("chess")).body, /http:\/\/charlie\/club\.htm/);
+  assert.match(ok(await visitor.post("/addurl.asp", { url: "http://bravo.dialup.zone/new.htm" })).body, /Simms doesn't call on that site/);
+  // an address: just that page; the search pages leave it out before the crawler has even looked
+  alpha.write("C:\\ASKDATA\\BANNED.TXT", alpha.read("C:\\ASKDATA\\BANNED.TXT") + "http://charlie/club.htm\n");
+  assert.doesNotMatch((await ask("chess club")).body, /club\.htm/);
+  assert.match(ok(await visitor.get(`/cache.asp?id=${clubId}`)).body, /Simms has removed this page/);
+  await net.until(() => !alpha.exists(`C:\\ASKDATA\\CACHE\\${clubId}.HTM`), 20000, "the crawler applying the file");
+  assert.ok(doc("http://charlie/"), "the rest of charlie stays");
+  // the next crawl doesn't go there
+  await crawl(2);
+  assert.ok(!docs().some((l) => /\|http:\/\/bravo\/|\|http:\/\/charlie\/club\.htm\|/.test(l)), "the crawl kept away:\n" + docs().join("\n"));
+  // unbanned: found again on the next crawl
+  alpha.widgets(pid, "ListBox")[1].set("Selected", 0);
+  alpha.button(pid, "Unban Selected").call("Click");
+  await net.until(() => /Unbanned bravo/.test(said()), 5000, "the unban");
+  alpha.remove("C:\\ASKDATA\\BANNED.TXT");
+  await crawl(3);
+  assert.match((await ask("chess")).body, /http:\/\/bravo\/chess\.htm/);
+  alpha.button(pid, "Close").call("Click");
+  assert.deepEqual(alpha.errors, []);
 });
 
 await test("a big site on one machine (an encyclopedia) gets indexed whole, a crawl at a time", async () => {

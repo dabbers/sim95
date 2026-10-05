@@ -14,7 +14,8 @@
 '      machines too. A page with the same text as one already kept from
 '      another machine (the SIM95 manuals every machine has) is kept once.
 '   3. Keep the page's text (TEXT\<id>.TXT) and a copy of the page itself with
-'      its links pointing back at the real site (CACHE\<id>.HTM).
+'      its links pointing back at the real site and its pictures taken out
+'      (CACHE\<id>.HTM).
 '   4. A known page that does not answer this time is not forgotten: it stays,
 '      marked "gone" since the first crawl that missed it, and its cached copy
 '      is what the search pages offer instead.
@@ -26,6 +27,11 @@
 '   C:\ASKDATA\IDX\<c>.TXT    word|id:count id:count ...  for words starting with c (0: digits)
 '   C:\ASKDATA\STATS.TXT      when, how many pages and machines, how long it took
 '   C:\ASKDATA\SEEDS.TXT      submitted sites, one URL per line
+'   C:\ASKDATA\BANNED.TXT     hosts and addresses kept out (the Admin button)
+'
+' Banned: what the Admin window lists is never visited, and the moment a rule
+' is added (or the file changes) every page it covers is deleted (its text,
+' its cached copy) and the index rebuilt. The search pages leave them out too.
 '
 ' Why the crawl is a timer and not a loop: in SIM95 a failed wait (a Connect
 ' nobody answers, a Receive on a closed connection) can be caught with TRY, but
@@ -47,6 +53,7 @@
 ' server, or one that doesn't answer, names are machine names as always.
 
 CONST DATA = "C:\ASKDATA"
+CONST BANFILE = "C:\ASKDATA\BANNED.TXT"
 CONST PERHOST = 200
 CONST MAXPAGES = 1000
 CONST TEXTMAX = 12000
@@ -60,6 +67,7 @@ CONST STOPWORDS = "|a|an|the|and|or|of|to|in|on|at|by|for|is|it|its|be|as|are|wa
 VAR win AS GUI_Window
 VAR log AS GUI_ListBox
 VAR go AS GUI_Button
+VAR admin AS GUI_Button
 VAR timer AS GUI_Timer
 VAR web AS NET_Socket
 VAR NL AS String
@@ -83,6 +91,8 @@ VAR docUrls AS Array OF String
 VAR docLines AS Array OF String
 VAR fetchedOk AS String
 VAR tried AS String              ' |url|... asked for this crawl, answered or not
+VAR bans AS Array OF String      ' the ban list's rules
+VAR bansRead AS String           ' BANNED.TXT as last applied ("-" before the first time)
 
 ' The fetch in progress, and what it got
 VAR fUrl AS String
@@ -108,6 +118,10 @@ SUB Main ()
     go = GUI_Button.New(win)
     go.Text = "&Crawl Now"
     go.onClick = Go_OnClick
+    admin = GUI_Button.New(win)
+    admin.Text = "&Admin..."
+    admin.onClick = Admin_OnClick
+    bansRead = "-"
     Win_OnResize()
     EnsureDirs()
     web = NET_Socket.New()
@@ -125,6 +139,7 @@ END SUB
 SUB Win_OnResize ()
     log.SetBounds(0, 0, win.Width, win.Height - 36)
     go.SetBounds(8, win.Height - 32, 120, 26)
+    admin.SetBounds(136, win.Height - 32, 100, 26)
 END SUB
 
 SUB Win_OnClose ()
@@ -168,6 +183,16 @@ SUB Tick ()
     VAR stats AS Array OF String
     SELECT CASE phase
         CASE "idle"
+            ' cached copies from before AskSim left pictures out: once, without them
+            IF NOT FS.Exists(DATA + "\NOPICS.TXT") THEN
+                CleanCache()
+                RETURN
+            END IF
+            ' the ban list changed (or this is the first look): apply it
+            IF ReadOr(BANFILE, "") <> bansRead THEN
+                Purge()
+                RETURN
+            END IF
             IF NOT NET.Online THEN RETURN
             stats = ReadOr(DATA + "\STATS.TXT", "").Lines()
             IF stats.Count >= 5 THEN
@@ -412,6 +437,7 @@ SUB Enqueue (url AS String)
     ' "localhost" means whoever is reading the page, not the machine it is on
     IF HostOf(url) = "localhost" OR HostOf(url).StartsWith("127.") THEN RETURN
     IF seen.Contains("|" + url + "|") OR NOT Harmless(url) THEN RETURN
+    IF BannedBy(url, bans) <> "" THEN RETURN
     seen = seen + url + "|"
     queue.Add(url)
 END SUB
@@ -554,6 +580,52 @@ SUB ReadLinks (html AS String, base AS String)
     NEXT
 END SUB
 
+' A page without its pictures: every <img> (and <input type=image>, <embed>,
+' <object>, <applet>) becomes [picture], and background= pictures go. AskSim
+' never keeps or shows a site's pictures, only its words.
+FUNCTION NoPictures (html AS String) AS String
+    VAR tag AS String
+    VAR low AS String
+    VAR at AS Integer
+    VAR gt AS Integer
+    VAR q AS String
+    VAR rest AS String
+    FOR EACH tag IN ["<img", "<image", "<embed", "<object", "<applet", "<input type=image", "<input type=""image"""]
+        low = html.Lower()
+        at = low.IndexOf(tag)
+        WHILE at >= 0
+            gt = low.Substring(at, low.Length - at).IndexOf(">")
+            IF gt < 0 THEN
+                html = html.Substring(0, at)
+            ELSE
+                html = html.Substring(0, at) + "[picture]" + html.Substring(at + gt + 1, html.Length - at - gt - 1)
+            END IF
+            low = html.Lower()
+            at = low.IndexOf(tag)
+        END WHILE
+    NEXT
+    ' background="pic" on <body>, <table>, <td>...
+    low = html.Lower()
+    at = low.IndexOf(" background=")
+    WHILE at >= 0
+        rest = html.Substring(at + 12, html.Length - at - 12)
+        q = rest.CharAt(0)
+        IF q = """" OR q = "'" THEN
+            gt = rest.Substring(1, rest.Length - 1).IndexOf(q) + 2
+            IF gt < 2 THEN gt = rest.Length
+        ELSE
+            gt = 0
+            WHILE gt < rest.Length AND NOT " >".Contains(rest.CharAt(gt))
+                gt = gt + 1
+            END WHILE
+        END IF
+        html = html.Substring(0, at) + rest.Substring(gt, rest.Length - gt)
+        low = html.Lower()
+        at = low.IndexOf(" background=")
+    END WHILE
+    RETURN html
+END FUNCTION
+
 ' ---------------------------------------------------------------- the crawl
 
 ' A short fingerprint of a page's text, to tell copies apart.
@@ -622,6 +694,7 @@ SUB Begin ()
     seen = "|"
     fetchedOk = "|"
     EnsureDirs()
+    Purge()
     FOR EACH line IN ReadOr(DATA + "\DOCS.TXT", "").Lines()
         IF line.Split("|").Count >= 6 THEN
             docUrls.Add(line.Split("|")[1])
@@ -672,6 +745,10 @@ SUB NextPage ()
             again.RemoveAt(0)
         END IF
         url = queue[0]
+        IF BannedBy(url, bans) <> "" THEN
+            queue.RemoveAt(0)
+            CONTINUE
+        END IF
         ' a domain name: asked about first (a Connect, so the tick ends)
         IF RsNext(HostOf(url)) THEN RETURN
         ' a site by path whose name leads to this machine: kept by name
@@ -765,6 +842,8 @@ SUB Arrived ()
             fetchedOk = fetchedOk + url + "|"
             RETURN
         END IF
+        ' (words only: no pictures are kept, not even links to them)
+        pageCopy = NoPictures(pageCopy)
         IF pageCopy.Length > CACHEMAX THEN pageCopy = pageCopy.Substring(0, CACHEMAX)
         ' the first line is the title, then a tab and the keywords
         IF keywords <> "" THEN title = title + Chr(9) + keywords
@@ -795,7 +874,10 @@ SUB Finish ()
     NEXT
     FOR EACH line IN docLines
         p = line.Split("|")
-        IF p[4] = "new" THEN
+        IF BannedBy(p[1], bans) <> "" THEN
+            Forget(p[0])
+            SetDoc(p[1], "")
+        ELSEIF p[4] = "new" THEN
             SetDoc(p[1], "")
         ELSEIF p[4] = "gone" THEN
             gone = gone + 1
@@ -813,6 +895,253 @@ SUB Finish ()
     go.Enabled = TRUE
     timer.Interval = 5000
     phase = "idle"
+END SUB
+
+' ---------------------------------------------------------------- the ban list
+'
+' C:\ASKDATA\BANNED.TXT: what Simms won't show, keep or visit, one rule a line
+' (rule|why|when; the Admin window writes them, a line typed by hand needs
+' only the rule; a line starting ' is a note):
+'   badguy                   a machine: every page on it (BADGUY.DIALUP.ZONE too)
+'   www.gross.sim            a site by name, its subdomains, and the same site
+'                            by path on any machine (http://alpha/www.gross.sim/)
+'   http://bob/stuff/        an address: that page, or that folder and all in it
+' The same rules are in ASK.SPK (WEB) and here: keep them alike.
+
+FUNCTION BanRules () AS Array OF String
+    VAR out AS Array OF String
+    VAR line AS String
+    VAR r AS String
+    FOR EACH line IN ReadOr(BANFILE, "").Lines()
+        r = line.Split("|")[0].Trim().Lower()
+        IF r = "" OR r.StartsWith("'") THEN CONTINUE
+        ' an address that is just a machine is a machine
+        IF r.StartsWith("http://") AND (r.Substring(7, r.Length - 7).IndexOf("/") < 0 OR r.Substring(7, r.Length - 7).IndexOf("/") = r.Length - 8) THEN r = r.Substring(7, r.Length - 7).Replace("/", "")
+        out.Add(r)
+    NEXT
+    RETURN out
+END FUNCTION
+
+' Does this rule cover this address?
+FUNCTION BanCovers (rule AS String, url AS String) AS Bool
+    VAR host AS String
+    VAR path AS String
+    url = url.Lower()
+    IF NOT url.StartsWith("http://") THEN url = "http://" + url
+    IF rule.StartsWith("http://") THEN RETURN url.StartsWith(rule) OR url + "/" = rule
+    host = url.Substring(7, url.Length - 7)
+    path = "/"
+    IF host.Contains("/") THEN
+        path = host.Substring(host.IndexOf("/"), host.Length - host.IndexOf("/"))
+        host = host.Substring(0, host.IndexOf("/"))
+    END IF
+    IF host.Contains(":") THEN host = host.Substring(0, host.IndexOf(":"))
+    IF host.EndsWith(".") THEN host = host.Substring(0, host.Length - 1)
+    IF host = rule OR host.EndsWith("." + rule) THEN RETURN TRUE
+    ' a machine by its short name or its full one (BOB, BOB.DIALUP.ZONE)
+    IF NOT rule.Contains(".") AND host.Split(".")[0] = rule THEN RETURN TRUE
+    IF NOT host.Contains(".") AND rule.Split(".")[0] = host AND rule.EndsWith(".dialup.zone") THEN RETURN TRUE
+    ' a site by name, served by path (http://alpha/www.gross.sim/...)
+    IF rule.Contains(".") AND (path.StartsWith("/" + rule + "/") OR path = "/" + rule) THEN RETURN TRUE
+    RETURN FALSE
+END FUNCTION
+
+' The rule that keeps this address out, or "".
+FUNCTION BannedBy (url AS String, rules AS Array OF String) AS String
+    VAR r AS String
+    FOR EACH r IN rules
+        IF BanCovers(r, url) THEN RETURN r
+    NEXT
+    RETURN ""
+END FUNCTION
+
+' A page's text and cached copy, gone.
+SUB Forget (id AS String)
+    IF id = "" OR id.Contains("\") OR id.Contains(".") THEN RETURN
+    IF FS.Exists(DATA + "\TEXT\" + id + ".TXT") THEN FS.Delete(DATA + "\TEXT\" + id + ".TXT")
+    IF FS.Exists(DATA + "\CACHE\" + id + ".HTM") THEN FS.Delete(DATA + "\CACHE\" + id + ".HTM")
+END SUB
+
+' Applies the ban list: every page it covers out of DOCS.TXT, its text and
+' cached copy deleted, submitted sites it covers dropped, and the index
+' rebuilt if anything went. purged says how many pages went.
+VAR purged AS Integer
+
+SUB Purge ()
+    VAR line AS String
+    VAR out AS String
+    VAR p AS Array OF String
+    VAR n AS Integer
+    VAR why AS String
+    EnsureDirs()
+    bansRead = ReadOr(BANFILE, "")
+    bans = BanRules()
+    purged = 0
+    IF bans.Count = 0 THEN RETURN
+    FOR EACH line IN ReadOr(DATA + "\DOCS.TXT", "").Lines()
+        IF line = "" THEN CONTINUE
+        p = line.Split("|")
+        why = ""
+        IF p.Count >= 2 THEN why = BannedBy(p[1], bans)
+        IF why <> "" THEN
+            Forget(p[0])
+            n = n + 1
+        ELSE
+            out = out + line + NL
+        END IF
+    NEXT
+    ' (a crawl going on keeps its own list; Finish drops them from it)
+    FOR EACH line IN docLines
+        IF line <> "" AND BannedBy(line.Split("|")[1], bans) <> "" THEN SetDoc(line.Split("|")[1], line.Split("|")[0] + "|" + line.Split("|")[1] + "|||new|")
+    NEXT
+    IF n > 0 THEN FS.Write(DATA + "\DOCS.TXT", out)
+    out = ""
+    FOR EACH line IN ReadOr(DATA + "\SEEDS.TXT", "").Lines()
+        IF line.Trim() <> "" AND BannedBy(line.Trim(), bans) = "" THEN out = out + line.Trim() + NL
+    NEXT
+    IF FS.Exists(DATA + "\SEEDS.TXT") AND out <> ReadOr(DATA + "\SEEDS.TXT", "") THEN FS.Write(DATA + "\SEEDS.TXT", out)
+    IF n > 0 THEN
+        Note("Ban list: " + Str(n) + " pages removed from the index.")
+        IF phase = "idle" THEN BuildIndex()
+    END IF
+    purged = n
+END SUB
+
+SUB CleanCache ()
+    VAR f AS String
+    VAR html AS String
+    VAR n AS Integer
+    EnsureDirs()
+    FOR EACH f IN FS.List(DATA + "\CACHE")
+        IF f.EndsWith("\") THEN CONTINUE
+        html = FS.Read(DATA + "\CACHE\" + f)
+        IF NoPictures(html) <> html THEN
+            FS.Write(DATA + "\CACHE\" + f, NoPictures(html))
+            n = n + 1
+        END IF
+        SYS.Sleep(0)
+    NEXT
+    FS.Write(DATA + "\NOPICS.TXT", "Cached copies keep no pictures (" + TIME.Date + ")." + NL)
+    IF n > 0 THEN Note("Took the pictures out of " + Str(n) + " cached pages.")
+END SUB
+
+' ---------------------------------------------------------------- Admin: the ban list
+
+VAR adWin AS GUI_Window
+VAR adList AS GUI_ListBox
+VAR adRule AS GUI_TextBox
+VAR adWhy AS GUI_TextBox
+VAR adNote AS GUI_Label
+VAR adRules AS Array OF String   ' the rule behind each line of adList
+
+SUB Admin_OnClick ()
+    VAR l AS GUI_Label
+    VAR b AS GUI_Button
+    adWin = GUI_Window.New("AskSim Admin: Banned", 460, 330)
+    l = GUI_Label.New(adWin)
+    l.Text = "Simms won't show, keep or visit anything these cover. A machine (badguy)," + NL + "a site by name (www.gross.sim), or an address: a page or a folder" + NL + "(http://bob/stuff/). Banning removes what he already has at once."
+    l.SetBounds(10, 8, 440, 46)
+    adList = GUI_ListBox.New(adWin)
+    adList.Mono = TRUE
+    adList.SetBounds(10, 58, 440, 140)
+    l = GUI_Label.New(adWin)
+    l.Text = "Host or address:"
+    l.SetBounds(10, 208, 110, 18)
+    adRule = GUI_TextBox.New(adWin)
+    adRule.SetBounds(124, 206, 326, 21)
+    adRule.onEnter = Ban_OnClick
+    l = GUI_Label.New(adWin)
+    l.Text = "Why (a note):"
+    l.SetBounds(10, 236, 110, 18)
+    adWhy = GUI_TextBox.New(adWin)
+    adWhy.SetBounds(124, 234, 326, 21)
+    adWhy.onEnter = Ban_OnClick
+    b = GUI_Button.New(adWin)
+    b.Text = "&Ban"
+    b.Default = TRUE
+    b.SetBounds(124, 264, 90, 26)
+    b.onClick = Ban_OnClick
+    b = GUI_Button.New(adWin)
+    b.Text = "&Unban Selected"
+    b.SetBounds(222, 264, 120, 26)
+    b.onClick = Unban_OnClick
+    b = GUI_Button.New(adWin)
+    b.Text = "Close"
+    b.SetBounds(370, 264, 80, 26)
+    b.onClick = AdClose_OnClick
+    adNote = GUI_Label.New(adWin)
+    adNote.SetBounds(10, 298, 440, 18)
+    ShowBans()
+    adWin.Center()
+    adWin.Show()
+    adRule.Focus()
+END SUB
+
+SUB AdClose_OnClick ()
+    adWin.Close()
+END SUB
+
+SUB ShowBans ()
+    VAR line AS String
+    VAR p AS Array OF String
+    adList.Clear()
+    adRules.Clear()
+    FOR EACH line IN ReadOr(BANFILE, "").Lines()
+        IF line.Trim() = "" OR line.Trim().StartsWith("'") THEN CONTINUE
+        p = (line + "||").Split("|")
+        adList.Add(p[0].Trim().PadRight(30) + " " + p[2].PadRight(10) + " " + p[1])
+        adRules.Add(p[0].Trim().Lower())
+    NEXT
+    IF adList.Count = 0 THEN adList.Add("(nothing banned)")
+END SUB
+
+SUB Ban_OnClick ()
+    VAR rule AS String
+    VAR n AS Integer
+    rule = adRule.Text.Trim().Lower()
+    IF rule = "" THEN
+        adNote.Text = "Type a machine, a site or an address first."
+        RETURN
+    END IF
+    IF rule.Contains("|") OR rule.Contains(" ") OR rule.Length > 120 THEN
+        adNote.Text = "That doesn't look like a machine, a site or an address."
+        RETURN
+    END IF
+    IF rule.StartsWith("http://") AND rule.Contains("#") THEN rule = rule.Substring(0, rule.IndexOf("#"))
+    FS.Append(BANFILE, rule + "|" + adWhy.Text.Replace("|", "/").Trim() + "|" + TIME.Date + NL)
+    Note("Banned " + rule + ".")
+    Purge()
+    n = purged
+    adRule.Text = ""
+    adWhy.Text = ""
+    ShowBans()
+    IF phase = "idle" THEN
+        adNote.Text = "Banned " + rule + ": " + Str(n) + " pages removed."
+    ELSE
+        adNote.Text = "Banned " + rule + ": " + Str(n) + " pages removed (the index is rebuilt when this crawl ends)."
+    END IF
+END SUB
+
+SUB Unban_OnClick ()
+    VAR want AS String
+    VAR line AS String
+    VAR out AS String
+    IF adList.Selected < 0 OR adList.Selected >= adRules.Count THEN
+        adNote.Text = "Pick one in the list first."
+        RETURN
+    END IF
+    want = adRules[adList.Selected]
+    FOR EACH line IN ReadOr(BANFILE, "").Lines()
+        IF line = "" THEN CONTINUE
+        IF line.Split("|")[0].Trim().Lower() = want THEN CONTINUE
+        out = out + line + NL
+    NEXT
+    FS.Write(BANFILE, out)
+    bansRead = out
+    bans = BanRules()
+    Note("Unbanned " + want + ".")
+    ShowBans()
+    adNote.Text = "Unbanned " + want + ". Simms finds its pages again on his next crawl."
 END SUB
 
 FUNCTION CountMachines (docs AS String) AS Integer

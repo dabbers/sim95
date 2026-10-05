@@ -53,7 +53,12 @@ window has a **Crawl Now** button and a log of what it found.
      same page.
 3. **Keeping**: for each page it saves the title, the text (scripts and tags
    stripped), and a **cached copy** with its links made absolute, so the copy
-   still points at the real site.
+   still points at the real site. **No pictures are kept:** every `<img>`
+   (and `<embed>`, `<object>`, `<applet>`, `<input type=image>`) becomes
+   `[picture]` and `background=` pictures go, so a cached copy neither stores
+   a site's pictures nor loads them from it. Copies kept before this are
+   cleaned once when the crawler starts, and the cache page strips them as
+   it shows a page in any case.
 4. **Pages that go away**: a known page that doesn't answer stays in the
    index, marked "not answering since" the first crawl that missed it, and the
    results offer its cached copy.
@@ -75,6 +80,41 @@ Each answer has a snippet with your words in bold, plus a **Cached** link.
 There is also **site:machine** to keep to one machine, **Just take me to the
 best answer** (`go=1`), follow-up questions to try, and **Add your site**.
 
+## Banning a machine or a page
+
+The crawler's window has an **Admin...** button. Its window lists what's
+banned, with a note and the date, and takes a new rule:
+
+* **a machine**: `badguy` (that's `BADGUY.DIALUP.ZONE` too), every page on it;
+* **a site by name**: `www.gross.sim`, with its subdomains, and the same site
+  served by path from any machine (`http://alpha/www.gross.sim/...`);
+* **an address**: `http://bob/stuff/page.htm` for one page, or
+  `http://bob/stuff/` for a folder and everything in it.
+
+**Ban** removes everything the rule covers at once: its lines in `DOCS.TXT`,
+its text and cached copies, and any submitted sites it covers, then rebuilds
+the index. (During a crawl, the index is rebuilt when the crawl ends.)
+After that, the crawler never visits it, links to it aren't followed, and
+**Add your site** refuses it. The search pages check the list too, so a
+banned page leaves the results and its cached copy says "removed" even
+before the crawler has got round to it. **Unban Selected** lets Simms find
+it again on his next crawl.
+
+The list is `C:\ASKDATA\BANNED.TXT`, one `rule|note|date` a line, so it can
+be edited by hand too, over ssh for one (in a session, so the `>>`
+happens over there):
+
+```
+ssh dab@starthere
+echo badguy >> C:\ASKDATA\BANNED.TXT
+exit
+```
+
+(A line needs only the rule; the note and date are what the Admin window adds.)
+
+The crawler notices a changed file within a few seconds and removes what it
+covers.
+
 ## Storage
 
 ```
@@ -84,6 +124,8 @@ C:\ASKDATA\CACHE\<id>.HTM  the page as last seen, links absolute (up to 40K)
 C:\ASKDATA\IDX\<c>.TXT     word|id:count id:count ...   (0.TXT: words starting with a digit)
 C:\ASKDATA\STATS.TXT       last crawl, pages, machines, seconds, TIME.Now
 C:\ASKDATA\SEEDS.TXT       submitted sites
+C:\ASKDATA\BANNED.TXT      what's banned: rule|note|date (the Admin button)
+C:\ASKDATA\NOPICS.TXT      says the cached copies have been cleaned of pictures
 ```
 
 ## A SIM95 quirk the crawler works around

@@ -10,6 +10,8 @@ IF REQUEST.Method = "POST" THEN
     seeds = ReadOr(DATADIR + "\SEEDS.TXT", "")
     IF url.Length > 120 OR url.Length < 9 OR url.Contains(" ") OR url.Contains("|") THEN
         said = "That doesn't look like an address. Try http://machine/ or http://machine/page.htm"
+    ELSEIF BannedBy(url, BanRules()) <> "" THEN
+        said = "Simms doesn't call on that site."
     ELSEIF (Chr(10) + seeds).Contains(Chr(10) + url + Chr(10)) THEN
         said = "Simms already has " + url + " on his list."
     ELSEIF seeds.Lines().Count > MAXSEEDS THEN
