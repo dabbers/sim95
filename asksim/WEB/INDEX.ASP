@@ -71,8 +71,8 @@ Perhaps try fewer words, or <a href="addurl.asp">tell me about a site</a> I ough
      doc = DocLine(id).Split("|") %>
 <dt><font size="3"><a href="<%= H(doc[1]) %>"><b><%= H(Clip(doc[2], 80)) %></b></a></font></dt>
 <dd><font size="2"><%= Snippet(id, words) %><br>
-<font color="#008000"><%= H(Clip(doc[1], 80)) %></font> &middot;
-<a href="cache.asp?id=<%= id %>">Cached</a>
+<font color="#008000"><%= H(Clip(doc[1], 80)) %></font>
+<% IF FS.Exists(DATADIR + "\CACHE\" + id + ".HTM") THEN %> &middot; <a href="cache.asp?id=<%= id %>">Cached</a><% END IF %>
 <% IF doc[4] = "gone" THEN %> &middot; <font color="#990000">not answering since <%= H(doc[5]) %></font><% END IF %>
 </font><br><br></dd>
 <% NEXT %>

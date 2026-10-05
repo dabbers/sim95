@@ -268,6 +268,55 @@ await test("Admin: banning a machine or an address removes it at once, and the c
   assert.deepEqual(alpha.errors, []);
 });
 
+await test("pictures written out as text are never kept: .PIC data, hex rows, scripts and data: addresses", async () => {
+  const pid = crawlerPid();
+  const crawl = async (n) => {
+    const before = stats();
+    alpha.button(pid, "Crawl Now").call("Click");
+    await net.until(() => stats() !== before, 240000, "crawl " + n);
+  };
+  const row = "F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0";
+  bravo.write("C:\\WEB\\PIC.TXT", "SIM95PIC 32 4\n" + [row, row, row, row].join("\n") + "\n");
+  bravo.write("C:\\WEB\\ROWS.TXT", "pixels\n" + ["0F0F0F", "F0F0F0", "0F0F0F", "F0F0F0", "0F0F0F"].join("\n") + "\n");
+  bravo.write("C:\\WEB\\MIXED.HTM", `<html><head><title>Mixed bag</title></head><body><p>Some honest words about quokka.
+<a href="data:text/plain;base64,SGVsbG8=">a data link</a> and inline ${row}${row} here.</p>
+<script type="spark">SUB Draw ()
+    ' would draw a picture
+END SUB</script><canvas id="c"></canvas></body></html>`);
+  for (const u of ["http://bravo/pic.txt", "http://bravo/rows.txt", "http://bravo/mixed.htm"]) ok(await visitor.post("/addurl.asp", { url: u }));
+  await crawl(1);
+  assert.ok(!doc("http://bravo/pic.txt"), "a .PIC served as text isn't kept");
+  assert.ok(!doc("http://bravo/rows.txt"), "nor a page that is mostly pixel rows");
+  const id = doc("http://bravo/mixed.htm")?.split("|")[0];
+  assert.ok(id, "an ordinary page with a little of it is kept, cleaned:\n" + docs().join("\n"));
+  const text = alpha.read(`C:\\ASKDATA\\TEXT\\${id}.TXT`), copy = alpha.read(`C:\\ASKDATA\\CACHE\\${id}.HTM`);
+  assert.match(text, /quokka/);
+  assert.match(text, /inline \[data\] here/);
+  assert.doesNotMatch(text + copy, /F0F0F0F0F0F0F0F0|SGVsbG8|data:/);
+  assert.doesNotMatch(copy, /<script|<canvas|SUB Draw/i);
+  assert.match(asked(alpha) + alpha.widgets(pid, "ListBox")[0].get("Items").join("\n"), /pic\.txt: looks like a picture, not kept/);
+  // no cached copies at all, if you'd rather
+  alpha.button(pid, "Admin...").call("Click");
+  await net.until(() => alpha.widgets(pid, "CheckBox").length, 5000, "the Admin window");
+  const box = alpha.widgets(pid, "CheckBox")[0];
+  assert.equal(box.get("Checked"), true);
+  box.set("Checked", false);
+  box.fire("onChange");
+  await net.until(() => alpha.exists("C:\\ASKDATA\\NOCACHE.TXT"), 5000, "switched off");
+  assert.equal(alpha.list("C:\\ASKDATA\\CACHE").length, 0, "every copy deleted");
+  const r = (await ask("quokka")).body;
+  assert.match(r, /Mixed bag/);
+  assert.doesNotMatch(r, /Cached/);
+  assert.match(ok(await visitor.get(`/cache.asp?id=${id}`)).body, /Simms keeps no copy of this page/);
+  await crawl(2);
+  assert.equal(alpha.list("C:\\ASKDATA\\CACHE").length, 0, "and none kept by the next crawl");
+  box.set("Checked", true);
+  box.fire("onChange");
+  await net.until(() => !alpha.exists("C:\\ASKDATA\\NOCACHE.TXT"), 5000, "switched back on");
+  alpha.button(pid, "Close").call("Click");
+  for (const f of ["PIC.TXT", "ROWS.TXT", "MIXED.HTM"]) bravo.remove("C:\\WEB\\" + f);
+});
+
 await test("a big site on one machine (an encyclopedia) gets indexed whole, a crawl at a time", async () => {
   // 260 linked pages on CHARLIE: more than one crawl gives a machine
   if (!charlie.running(webOf.CHARLIE)) webOf.CHARLIE = charlie.run("C:\\PROGRAMS\\HTTPD.SPK");

@@ -27,4 +27,4 @@ as it looked on <b><%= H(doc[3]) %></b>.
 The real page may have changed since.
 <% END IF %>
 </font></td></tr></table>
-<%= NoPictures(ReadOr(DATADIR + "\CACHE\" + id + ".HTM", "<p>Simms has misplaced his copy of this page. Most embarrassing.</p>")) %>
+<%= NoPictures(ReadOr(DATADIR + "\CACHE\" + id + ".HTM", "<p>Simms keeps no copy of this page.</p>")) %>

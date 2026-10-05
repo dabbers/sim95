@@ -116,9 +116,89 @@ FUNCTION BannedBy (url AS String, rules AS Array OF String) AS String
     RETURN ""
 END FUNCTION
 
+' Words only, part two: what might be a picture written out as text is not
+' kept. A run of 16 or more hex digits (a SIM95 .PIC's rows of pixels, or
+' parts of one) or of 60 or more base64 letters becomes [data]. blobShare
+' says what share of a page's words looked like pixels (hex, 6 or more), so
+' a page that is mostly picture can be left out whole.
+VAR blobShare AS Real
+
+FUNCTION NoBlobs (s AS String) AS String
+    VAR lines AS Array OF String
+    VAR words AS Array OF String
+    VAR li AS Integer
+    VAR wi AS Integer
+    VAR w AS String
+    VAR total AS Integer
+    VAR hexy AS Integer
+    lines = s.Split(Chr(10))
+    FOR li = 0 TO lines.Count - 1
+        words = lines[li].Split(" ")
+        FOR wi = 0 TO words.Count - 1
+            w = words[wi]
+            IF w = "" THEN CONTINUE
+            total = total + 1
+            IF w.Length >= 6 AND AllOf(w.Trim(), "0123456789abcdefABCDEF") THEN hexy = hexy + 1
+            IF w.Length >= 16 THEN words[wi] = NoRuns(w)
+        NEXT
+        lines[li] = words.Join(" ")
+    NEXT
+    blobShare = 0
+    IF total > 0 THEN blobShare = hexy / total
+    RETURN lines.Join(Chr(10))
+END FUNCTION
+
+FUNCTION AllOf (w AS String, chars AS String) AS Bool
+    VAR i AS Integer
+    IF w = "" THEN RETURN FALSE
+    FOR i = 0 TO w.Length - 1
+        IF NOT chars.Contains(w.CharAt(i)) THEN RETURN FALSE
+    NEXT
+    RETURN TRUE
+END FUNCTION
+
+' One long word with its hex and base64 runs taken out.
+FUNCTION NoRuns (w AS String) AS String
+    VAR out AS String
+    VAR i AS Integer
+    VAR j AS Integer
+    VAR allHex AS Bool
+    VAR b64 AS String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    i = 0
+    WHILE i < w.Length
+        IF NOT b64.Contains(w.CharAt(i)) THEN
+            out = out + w.CharAt(i)
+            i = i + 1
+            CONTINUE
+        END IF
+        j = i
+        allHex = TRUE
+        WHILE j < w.Length AND b64.Contains(w.CharAt(j))
+            IF NOT "0123456789abcdefABCDEF".Contains(w.CharAt(j)) THEN allHex = FALSE
+            j = j + 1
+        END WHILE
+        IF (allHex AND j - i >= 16) OR j - i >= 60 THEN
+            out = out + "[data]"
+        ELSE
+            out = out + w.Substring(i, j - i)
+        END IF
+        i = j
+    END WHILE
+    RETURN out
+END FUNCTION
+
+' A page with a SIM95 picture in it, or mostly pixel-looking words: not kept.
+FUNCTION LooksLikePicture (s AS String) AS Bool
+    IF s.Upper().Contains("SIM95PIC") THEN RETURN TRUE
+    NoBlobs(s)
+    RETURN blobShare > 0.3
+END FUNCTION
+
 ' A page without its pictures: every <img> (and <input type=image>, <embed>,
-' <object>, <applet>) becomes [picture], and background= pictures go. AskSim
-' never keeps or shows a site's pictures, only its words.
+' <object>, <applet>) becomes [picture], background= pictures go, and so do
+' scripts, canvases, data: addresses and anything that looks like picture
+' data written out as text (NoBlobs). AskSim never keeps or shows a site's
+' pictures, only its words.
 FUNCTION NoPictures (html AS String) AS String
     VAR tag AS String
     VAR low AS String
@@ -159,7 +239,33 @@ FUNCTION NoPictures (html AS String) AS String
         low = html.Lower()
         at = low.IndexOf(" background=")
     END WHILE
-    RETURN html
+    ' scripts (a SPARK script could draw a picture) and canvases
+    low = html.Lower()
+    at = low.IndexOf("<script")
+    WHILE at >= 0
+        gt = low.Substring(at, low.Length - at).IndexOf("</script>")
+        IF gt < 0 THEN
+            html = html.Substring(0, at)
+        ELSE
+            html = html.Substring(0, at) + html.Substring(at + gt + 9, html.Length - at - gt - 9)
+        END IF
+        low = html.Lower()
+        at = low.IndexOf("<script")
+    END WHILE
+    html = html.Replace("<canvas", "<span").Replace("<CANVAS", "<span")
+    ' data: addresses carry a picture (or anything) inside the page itself
+    low = html.Lower()
+    at = low.IndexOf("data:")
+    WHILE at >= 0
+        gt = at
+        WHILE gt < html.Length AND NOT " ""'>".Contains(html.CharAt(gt))
+            gt = gt + 1
+        END WHILE
+        html = html.Substring(0, at) + "#" + html.Substring(gt, html.Length - gt)
+        low = html.Lower()
+        at = low.IndexOf("data:")
+    END WHILE
+    RETURN NoBlobs(html)
 END FUNCTION
 
 ' ---------------------------------------------------------------- questions

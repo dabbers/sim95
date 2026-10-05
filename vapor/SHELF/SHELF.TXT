@@ -6,7 +6,7 @@ item vapor/SHELF/SNAKE.SPK aa5d9aeb
 soon HL3|Half-Life 3|0|0|soon|Shooter|The long-awaited conclusion. Coming soon.|game|||||
 item simbook/INSTALL.SPK cd4a7574
 item coldmail/INSTALL.SPK 45092ee7
-item asksim/INSTALL.SPK db1f9bea
+item asksim/INSTALL.SPK 3a752ddd
 item simxplorer/INSTALL.SPK 3665d099
 item simplayer/INSTALL.SPK e95e5825
 item frostbird/INSTALL.SPK 1fb85dda

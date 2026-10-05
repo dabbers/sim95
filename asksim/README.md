@@ -56,9 +56,20 @@ window has a **Crawl Now** button and a log of what it found.
    still points at the real site. **No pictures are kept:** every `<img>`
    (and `<embed>`, `<object>`, `<applet>`, `<input type=image>`) becomes
    `[picture]` and `background=` pictures go, so a cached copy neither stores
-   a site's pictures nor loads them from it. Copies kept before this are
-   cleaned once when the crawler starts, and the cache page strips them as
-   it shows a page in any case.
+   a site's pictures nor loads them from it. Nor does it keep anything that
+   could draw or carry one:
+   * scripts and `<canvas>` are taken out, and `data:` addresses too;
+   * a SIM95 picture is text (`SIM95PIC w h`, then rows of hex pixels), so a
+     page with one in it, or one that is mostly hex words, isn't kept at all;
+   * a run of 16 or more hex digits, or 60 or more base64 letters, in the
+     text or the copy of a page that is kept becomes `[data]`.
+
+   Copies and texts kept before this are cleaned once when the crawler
+   starts, and the cache page strips them as it shows a page in any case.
+   The crawler never fetches `.pic` files themselves. For the most caution,
+   untick **Keep cached copies of pages** in the Admin window: every copy is
+   deleted, none are kept again, and results have no Cached link (the text
+   for snippets and the index is still kept).
 4. **Pages that go away**: a known page that doesn't answer stays in the
    index, marked "not answering since" the first crawl that missed it, and the
    results offer its cached copy.
@@ -125,7 +136,8 @@ C:\ASKDATA\IDX\<c>.TXT     word|id:count id:count ...   (0.TXT: words starting w
 C:\ASKDATA\STATS.TXT       last crawl, pages, machines, seconds, TIME.Now
 C:\ASKDATA\SEEDS.TXT       submitted sites
 C:\ASKDATA\BANNED.TXT      what's banned: rule|note|date (the Admin button)
-C:\ASKDATA\NOPICS.TXT      says the cached copies have been cleaned of pictures
+C:\ASKDATA\NOPICS.TXT      says the copies and texts have been cleaned of pictures
+C:\ASKDATA\NOCACHE.TXT     there when cached copies are switched off (the Admin window)
 ```
 
 ## A SIM95 quirk the crawler works around
