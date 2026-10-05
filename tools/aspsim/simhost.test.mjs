@@ -43,10 +43,9 @@ async function joinBook(m, base, u, name) {
 const host = await net.boot("HOST");
 
 await test("web apps that were the home page move into folders when SimHost comes", async () => {
-  // HOST has been a SimBook (with a member and a picture), then a ColdMail
+  // HOST has been a SimBook (with a member), then a ColdMail
   await install(host, "simbook");
   const ann = await joinBook(host, "/", "ann", "Ann Host");
-  host.write("C:\\WEB\\PICS\\ANN.PIC", "picture of ann");
   await install(host, "coldmail");
   assert.match(host.read("C:\\WEB\\INDEX.ASP"), /MAIL\.SPK/, "ColdMail took the home page");
 
@@ -55,7 +54,6 @@ await test("web apps that were the home page move into folders when SimHost come
   assert.match(said, /moved SimBook \(\d+ files\) into C:\\WEB\\BOOK: http:\/\/host\/book\//);
   assert.match(said, /moved ColdMail \(12 files\) into C:\\WEB\\MAIL/);
   assert.match(said, /SimBook is missing DELETE.ASP, INDEX.ASP, JOIN.ASP, LOGIN.ASP, LOGOUT.ASP \(another web app wrote over them\)/);
-  assert.equal(host.read("C:\\WEB\\BOOK\\PICS\\ANN.PIC"), "picture of ann");
   assert.ok(host.exists("C:\\WEB\\MAIL\\DIST\\MANIFEST.TXT"));
   assert.ok(!host.exists("C:\\WEB\\BOOK.SPK") && !host.exists("C:\\WEB\\MAIL.SPK") && !host.exists("C:\\WEB\\PICS"));
   assert.ok(host.exists("C:\\PROGRAMS\\MOVEIN.SPK"));
@@ -80,9 +78,9 @@ await test("web apps that were the home page move into folders when SimHost come
   r = ok(await b.get("/book/profile.asp?u=ann"));
   assert.match(r.body, /Ann Host/);
   r = ok(await b.get("/book/picture.asp"));
-  assert.match(r.body, /<img src="pics\/ann.pic"/);
-  assert.match(r.body, /SHRINK.SPK - /, "the program to copy is there");
-  assert.equal((await b.get("/book/pics/ann.pic")).body, "picture of ann");
+  assert.match(r.body, /<img src="av\d\d\.pic" alt="ann">/, "her stock picture");
+  assert.match(r.body, /<input type="radio" name="avatar" value="20"/, "and the others to choose from");
+  assert.match((await b.get("/book/av01.pic")).body, /^SIM95PIC 80 80/);
   void ann;
 });
 
@@ -173,7 +171,6 @@ await test("Move In copies another machine's data over its Files service", async
   const old = await net.boot("OLDBOOK");
   await install(old, "simbook");
   await joinBook(old, "/", "cat", "Cat Old");
-  old.write("C:\\WEB\\PHOTOS\\CAT1.PIC", "a photo");
   old.write("C:\\SYSTEM\\FAVORITE.TXT", "Cat's page|http://oldbook/\nAsk|http://host/ask/\n");
   old.mkdir("C:\\GAMES");
   old.mkdir("C:\\GAMES\\SNAKE");
@@ -207,7 +204,7 @@ await test("Move In copies another machine's data over its Files service", async
   // SimBook: Cat's account, Ann's still there, both in the people list
   assert.match(host.read("C:\\BOOKDATA\\PEOPLE.TXT"), /^ann\|/m);
   assert.match(host.read("C:\\BOOKDATA\\PEOPLE.TXT"), /^cat\|/m);
-  assert.equal(host.read("C:\\WEB\\BOOK\\PHOTOS\\CAT1.PIC"), "a photo");
+  assert.ok(!host.exists("C:\\WEB\\BOOK\\PHOTOS") && !host.exists("C:\\WEB\\BOOK\\PICS"), "no picture folders moved in");
   const b = browser(host);
   const r = ok(await b.post("/book/login.asp", { u: "cat", pw: "secret" }));
   assert.match(r.url, /home\.asp$/, r.body.slice(0, 300));
@@ -236,11 +233,9 @@ await test("Move In onto a new SimHost before SimBook is there, then SimBook fin
   fresh.button(pid, "Move In").call("Click");
   await wait(() => /^(Done|Stopped)/m.test(log()), "Move In to finish: " + log(), 60000);
   assert.match(log(), /^Done:/m, log());
-  assert.equal(fresh.read("C:\\WEB\\BOOK\\PHOTOS\\CAT1.PIC"), "a photo");
   assert.deepEqual(fresh.ui.dialogs, [], "nothing here yet: nothing to ask");
   // SimBook installs around them
   await install(fresh, "simbook");
-  assert.equal(fresh.read("C:\\WEB\\BOOK\\PHOTOS\\CAT1.PIC"), "a photo");
   const r = ok(await browser(fresh).post("/book/login.asp", { u: "cat", pw: "secret" }));
   assert.match(r.url, /home\.asp$/, r.body.slice(0, 300));
 });

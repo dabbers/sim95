@@ -6,11 +6,59 @@
 '                 POSTS.TXT is kept as POSTS.OLD.
 '   REPLIES\*.TXT Replies were date|author|name|text. They now start with a
 '                 reply number, so a single reply can be deleted.
+'   PICS, PHOTOS  SimBook took uploaded pictures and photos. It takes none
+'                 now (every member has a stock picture), and what was
+'                 uploaded is deleted, so nothing a stranger drew stays on
+'                 this machine. Posts that had a photo stay, as words.
 
 SUB Migrate ()
     IF NOT FS.Exists("C:\BOOKDATA") THEN RETURN
+    ' (wherever SimBook was: C:\WEB, or a folder of its own on SimHost)
+    DropPictures("C:\WEB\PICS", FALSE)
+    DropPictures("C:\WEB\BOOK\PICS", FALSE)
+    DropPictures("C:\WEB\PHOTOS", TRUE)
+    DropPictures("C:\WEB\BOOK\PHOTOS", TRUE)
+    DropPictures("C:\BOOKDATA\ALBUMS", TRUE)
     MigrateLog()
     MigrateReplies()
+END SUB
+
+' The uploads SimBook kept in a folder: only what is plainly SimBook's (a
+' member's picture, <user>.PIC; a photo, <post number>.PIC; an album,
+' <user>.TXT), so a home page's own pictures in a folder of the same name
+' stay. The folder goes too if nothing else is in it.
+SUB DropPictures (dir AS String, numbered AS Bool)
+    VAR f AS String
+    VAR name AS String
+    VAR n AS Integer
+    VAR left AS Integer
+    IF NOT FS.Exists(dir) THEN RETURN
+    FOR EACH f IN FS.List(dir)
+        IF f.EndsWith("\") THEN
+            left = left + 1
+            CONTINUE
+        END IF
+        name = f.Split(".")[0].Upper()
+        IF dir.EndsWith("ALBUMS") AND FS.Exists("C:\BOOKDATA\USERS\" + name + ".TXT") THEN
+            FS.Delete(dir + "\" + f)
+            n = n + 1
+        ELSEIF numbered AND f.Upper().EndsWith(".PIC") AND Str(Int(Val(name))) = name THEN
+            FS.Delete(dir + "\" + f)
+            n = n + 1
+        ELSEIF NOT numbered AND f.Upper().EndsWith(".PIC") AND FS.Exists("C:\BOOKDATA\USERS\" + name + ".TXT") THEN
+            FS.Delete(dir + "\" + f)
+            n = n + 1
+        ELSE
+            left = left + 1
+        END IF
+    NEXT
+    IF left = 0 THEN
+        TRY
+            FS.Delete(dir)
+        CATCH err
+        END TRY
+    END IF
+    IF n > 0 THEN Print("  deleted " + Str(n) + " uploaded pictures from " + dir)
 END SUB
 
 SUB MigrateLog ()

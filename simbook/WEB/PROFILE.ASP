@@ -35,7 +35,6 @@ friend = IsFriend(viewer, who)
 <% END IF %>
 </form>
 <% END IF %>
-<p><font size="2"><a href="photos.asp?u=<%= who %>">Photos (<%= Album(who).Count %>)</a></font></p>
 <a name="friends"></a>
 <%= BoxTop("Friends (" + Str(pals.Count) + ")") %>
 <font size="2">

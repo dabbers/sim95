@@ -3,7 +3,7 @@
 ' 139, on by default) with that machine's user name and password, the ones in
 ' its C:\SYSTEM\USERS.INI, and copies what you tick:
 '
-'   SimBook    C:\BOOKDATA, and its pictures and photos
+'   SimBook    C:\BOOKDATA (not uploaded pictures: SimBook keeps none now)
 '   ColdMail   C:\MAILDATA (accounts and letters; not sign-ins)
 '   AskSim     C:\ASKDATA, the index
 '   ELIZA-95   C:\BOTDATA
@@ -225,10 +225,6 @@ FUNCTION AppHere (folder AS String, marker AS String) AS String
     RETURN "C:\WEB"
 END FUNCTION
 
-FUNCTION BookHere () AS String
-    RETURN AppHere("BOOK", "BOOK.SPK")
-END FUNCTION
-
 ' The neighborhoods GeoSimies keeps homepages in (geosimies/WEB/GEO.SPK)
 FUNCTION Hoods () AS Array OF String
     RETURN ["AREA95", "SIMWOOD", "CHIPVALE", "HOMETOWN", "NEOTOKYO", "ROCKCITY", "STADIUM", "TOYLAND"]
@@ -372,16 +368,8 @@ SUB MoveIn ()
         ELSE
             CopyTree(SetPath(s), SetPath(s))
         END IF
-        IF s = "BOOK" THEN
-            ' the pictures are beside SimBook's pages, at the root or in its folder
-            IF ThereHas("C:\WEB\BOOK\BOOK.SPK") THEN
-                CopyTree("C:\WEB\BOOK\PICS", BookHere() + "\PICS")
-                CopyTree("C:\WEB\BOOK\PHOTOS", BookHere() + "\PHOTOS")
-            ELSE
-                CopyTree("C:\WEB\PICS", BookHere() + "\PICS")
-                CopyTree("C:\WEB\PHOTOS", BookHere() + "\PHOTOS")
-            END IF
-        END IF
+        ' (SimBook's uploaded pictures and photos aren't moved: SimBook takes
+        ' none now, and deletes old ones when it is installed)
         IF s = "GEO" THEN
             ' the homepages' own folders are beside GeoSimies' pages, at the root or in its folder
             IF ThereHas("C:\WEB\GEO\GEO.SPK") THEN
@@ -399,8 +387,8 @@ SUB MoveIn ()
     Say("Nothing on " + host + " was changed. Once you are happy, you can close it.")
 END SUB
 
-' A folder, and any folders it is in that are not there yet (SimBook's
-' pictures go in C:\WEB\BOOK\PICS even before SimBook is installed here).
+' A folder, and any folders it is in that are not there yet (GeoSimies'
+' homepages go in C:\WEB\GEO\... even before GeoSimies is installed here).
 SUB MakeDirs (path AS String)
     VAR part AS String
     VAR sofar AS String

@@ -55,7 +55,8 @@ Run `C:\PROGRAMS\MOVEIN.SPK` on the host for each old machine:
 1. Type the old machine's name, and its user name and password (the ones in
    its `C:\SYSTEM\USERS.INI`).
 2. Tick what to bring over:
-   * SimBook, with its pictures and photos;
+   * SimBook (its accounts and posts; uploaded pictures aren't moved, since
+     SimBook keeps none now);
    * ColdMail accounts and letters;
    * the AskSim index;
    * ELIZA-95's conversations;

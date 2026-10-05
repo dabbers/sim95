@@ -17,10 +17,13 @@
 '   C:\BOOKDATA\REPLIES\<post>.TXT  replies to one post, one per line
 '   C:\BOOKDATA\NOTES\<user>.TXT    their notifications (and .SEE: how far they read)
 '   C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them
-'   C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos
 '   C:\BOOKDATA\RESETS\<id>.TXT     a password reset link sent by e-mail: user, when, secret
-'   C:\WEB\PICS\<user>.PIC          profile pictures (Sketch .PIC files)
-'   C:\WEB\PHOTOS\<post>.PIC        photos
+'
+' Pictures: SimBook takes no uploaded pictures or photos, so nothing a
+' stranger draws is ever kept on this machine. Every member has one of the
+' stock pictures beside the pages, AV01.PIC to AV20.PIC (avatar=N in their
+' profile; picture.asp to choose another). Uploads from older SimBooks are
+' deleted when the installer runs (MIGRATE.SPK).
 '
 ' A post is one line: id|date time|author|author name|wall|wall name|text
 ' Names and text are escaped with Esc so they never contain | or a line break.
@@ -30,18 +33,15 @@
 ' stop after a screenful, and the feed only looks back through recent posts.
 
 CONST DATADIR = "C:\BOOKDATA"
-' Pictures and photos live beside the pages (C:\WEB\PICS, or C:\WEB\BOOK\PICS
-' when SimBook is in a folder of its own), so the pages can link to them as pics/...
+' The folder the pages are in (C:\WEB, or C:\WEB\BOOK when SimBook has a
+' folder of its own).
 FUNCTION AppDir () AS String
     VAR page AS String
     page = SERVER.ScriptName
     RETURN page.Substring(0, page.Length - page.Split("\")[page.Split("\").Count - 1].Length - 1)
 END FUNCTION
 
-FUNCTION PicDir () AS String
-    RETURN AppDir() + "\PICS"
-END FUNCTION
-
+' (where photos were kept, when SimBook took them)
 FUNCTION PhotoDir () AS String
     RETURN AppDir() + "\PHOTOS"
 END FUNCTION
@@ -56,12 +56,7 @@ CONST FEEDREPLIES = 2         ' replies shown under a post in the feed and on Wa
 CONST MAXNAME = 40
 CONST SHORTFIELD = 60
 CONST LONGFIELD = 500
-CONST MAXPIC = 20000
-CONST PICSIZE = 100
-CONST MAXPHOTO = 45000
-CONST PHOTOSIZE = 200
-CONST MAXCAPTION = 200
-CONST ALBUMSHOW = 20
+CONST AVATARS = 20            ' stock pictures, AV01.PIC to AV20.PIC
 CONST PAGEROOM = 20000        ' how much feed, Wall or replies one page may carry
 
 ' HTTPD.SPK sends a whole page as one network message, and a message holds
@@ -76,12 +71,10 @@ VAR formToken AS String       ' their session's form token; see RequireToken
 SUB EnsureDisk ()
     VAR dir AS String
     VAR dirs AS Array OF String
-    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES", "\LOG", "\NOTES", "\POKES", "\ALBUMS", "\RESETS"]
+    dirs = ["", "\USERS", "\FRIENDS", "\WALLS", "\SESSIONS", "\VOTES", "\REPLIES", "\LOG", "\NOTES", "\POKES", "\RESETS"]
     FOR EACH dir IN dirs
         IF NOT FS.Exists(DATADIR + dir) THEN FS.MakeDir(DATADIR + dir)
     NEXT
-    IF NOT FS.Exists(PicDir()) THEN FS.MakeDir(PicDir())
-    IF NOT FS.Exists(PhotoDir()) THEN FS.MakeDir(PhotoDir())
 END SUB
 
 FUNCTION ReadOr (path AS String, fallback AS String) AS String
@@ -213,6 +206,8 @@ FUNCTION CreateUser (u AS String, pw AS String, name AS String) AS String
     SetField(rec, "salt", salt)
     SetField(rec, "pass", Hash(salt, pw))
     SetField(rec, "joined", TIME.Date)
+    ' a stock picture, picked at random (picture.asp to choose another)
+    SetField(rec, "avatar", Str(Rnd(AVATARS) + 1))
     SaveUser(u, rec)
     FS.Write(DATADIR + "\FRIENDS\" + u + ".TXT", "|")
     FS.Append(DATADIR + "\PEOPLE.TXT", u + "|" + Esc(name) + Chr(10))
@@ -368,29 +363,32 @@ SUB RenamePerson (u AS String, name AS String)
     FS.Write(DATADIR + "\PEOPLE.TXT", lines.Join(Chr(10)))
 END SUB
 
-FUNCTION HasPicture (u AS String) AS Bool
-    RETURN FS.Exists(PicDir() + "\" + u + ".PIC")
+' The number of someone's stock picture, 1 to AVATARS: the one they chose,
+' or for a member from before there were any, one their name picks.
+FUNCTION AvatarOf (u AS String) AS Integer
+    VAR n AS Integer
+    VAR i AS Integer
+    n = Int(Val(Field(LoadUser(u), "avatar")))
+    IF n >= 1 AND n <= AVATARS THEN RETURN n
+    n = 0
+    FOR i = 0 TO u.Length - 1
+        n = n + Asc(u.CharAt(i)) * (i + 1)
+    NEXT
+    RETURN n MOD AVATARS + 1
 END FUNCTION
 
-' A picture is a SIM95PIC file: "SIM95PIC width height", then a row of hex digits
-' per line. Returns "" when it will do, otherwise what is wrong with it.
-FUNCTION CheckPicture (pic AS String, most AS Integer, longest AS Integer) AS String
-    VAR size AS Array OF String
-    IF pic = "" THEN RETURN "Choose a .PIC file first."
-    size = pic.Lines()[0].Trim().Split(" ")
-    IF NOT pic.StartsWith("SIM95PIC ") OR size.Count < 3 THEN RETURN "That is not a picture. Save one from Sketch as a .PIC file."
-    IF pic.Length > longest OR Val(size[1]) > most OR Val(size[2]) > most THEN RETURN "That picture is " + size[1] + " by " + size[2] + ". Shrink it to " + Str(most) + " by " + Str(most) + " or less with SHRINK.SPK."
-    RETURN ""
+FUNCTION AvatarFile (n AS Integer) AS String
+    IF n < 10 THEN RETURN "av0" + Str(n) + ".pic"
+    RETURN "av" + Str(n) + ".pic"
 END FUNCTION
 
-FUNCTION SavePicture (u AS String, pic AS String) AS String
-    VAR problem AS String
-    problem = CheckPicture(pic, PICSIZE, MAXPIC)
-    IF problem <> "" THEN RETURN problem
-    EnsureDisk()
-    FS.Write(PicDir() + "\" + u + ".PIC", pic)
-    RETURN ""
-END FUNCTION
+SUB SetAvatar (u AS String, n AS Integer)
+    VAR rec AS Array OF String
+    IF n < 1 OR n > AVATARS THEN RETURN
+    rec = LoadUser(u)
+    SetField(rec, "avatar", Str(n))
+    SaveUser(u, rec)
+END SUB
 
 ' Text from a form, trimmed and cut to a length.
 FUNCTION Clip (s AS String, most AS Integer) AS String
@@ -863,36 +861,12 @@ END SUB
 
 ' ---------------------------------------------------------------- photos
 
-' A photo is a post on its owner's own Wall with a picture beside it in
-' C:\WEB\PHOTOS\<post>.PIC, so it gets thumbs, replies and the feed for free.
-' C:\BOOKDATA\ALBUMS\<user>.TXT lists their photos: |12|40|
-
+' SimBook once took photos: a post on its owner's Wall with a picture in
+' PHOTOS\<post>.PIC. It takes none now, and the installer deletes the old
+' ones; a post that had one is an ordinary post. (Deleting a post still
+' takes a photo left behind, if any.)
 FUNCTION IsPhoto (id AS String) AS Bool
     RETURN FS.Exists(PhotoDir() + "\" + id + ".PIC")
-END FUNCTION
-
-FUNCTION Album (u AS String) AS Array OF String
-    VAR all AS Array OF String
-    VAR out AS Array OF String
-    VAR id AS String
-    all = ReadOr(DATADIR + "\ALBUMS\" + u + ".TXT", "|").Split("|")
-    FOR EACH id IN all
-        IF id <> "" THEN out.Add(id)
-    NEXT
-    RETURN out
-END FUNCTION
-
-FUNCTION AddPhoto (u AS String, pic AS String, caption AS String) AS String
-    VAR problem AS String
-    VAR id AS Integer
-    caption = caption.Replace(Chr(13), "").Trim()
-    IF caption.Length > MAXCAPTION THEN RETURN "Keep the caption under " + Str(MAXCAPTION) + " characters."
-    problem = CheckPicture(pic, PHOTOSIZE, MAXPHOTO)
-    IF problem <> "" THEN RETURN problem
-    id = WritePost(u, u, caption)
-    FS.Write(PhotoDir() + "\" + Str(id) + ".PIC", pic)
-    FS.Write(DATADIR + "\ALBUMS\" + u + ".TXT", ReadOr(DATADIR + "\ALBUMS\" + u + ".TXT", "|") + Str(id) + "|")
-    RETURN ""
 END FUNCTION
 
 ' ---------------------------------------------------------------- showing posts
@@ -935,10 +909,6 @@ FUNCTION PostHtml (line AS String, onWall AS Bool, back AS String, most AS Integ
         who = who + " &raquo; <a href=""profile.asp?u=" + p[4] + """><b>" + H(Unesc(p[5])) + "</b></a>"
     END IF
     body = Br(Unesc(p[6]))
-    IF IsPhoto(p[0]) THEN
-        who = who + " added a photo"
-        body = "<a href=""view.asp?id=" + p[0] + """><img src=""photos/" + p[0] + ".pic"" alt=""photo""></a><br>" + body
-    END IF
     all = Replies(p[0])
     RETURN "<tr><td bgcolor=""#F7F7F7""><font size=""2"">" + who + " <a href=""view.asp?id=" + p[0] + """><font color=""#808080"">" + p[1] + "</font></a><br>" _
          + body + "</font><br>" + ActionsHtml(line, back, all.Count) _
@@ -1073,6 +1043,5 @@ FUNCTION LimitScript (names AS String, limits AS String) AS String
 END FUNCTION
 
 FUNCTION Picture (u AS String) AS String
-    IF HasPicture(u) THEN RETURN "<img src=""pics/" + u + ".pic"" alt=""" + u + """>"
-    RETURN "<img src=""nopic.pic"" alt=""no picture"">"
+    RETURN "<img src=""" + AvatarFile(AvatarOf(u)) + """ alt=""" + u + """>"
 END FUNCTION

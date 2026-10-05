@@ -2,8 +2,7 @@
 
 A tiny social network for [SIM95](https://sim95.kippy.io/), in the spirit of
 the 2004 PHP-era thefacebook: accounts, profiles with a picture, friends,
-Walls, a News Feed, thumbs up and down, replies, notifications, pokes and
-photo albums. It is written entirely in SPARK as ActiveSparkPages
+Walls, a News Feed, thumbs up and down, replies, notifications and pokes. It is written entirely in SPARK as ActiveSparkPages
 (`.ASP`) served by the machine's own `HTTPD.SPK`, and it installs as the
 machine's home page.
 
@@ -29,9 +28,8 @@ the pages without touching anyone's data.
 | `home.asp` | News Feed: status box, plus posts by or to you and your friends |
 | `profile.asp?u=name` | Picture, information, friends, and the Wall |
 | `edit.asp` | Edit your profile |
-| `picture.asp` | Upload or remove your picture (a `.PIC`, up to 100x100) |
+| `picture.asp` | Choose your picture from the 20 stock ones |
 | `view.asp?id=N` | One post with all its replies, and a reply box |
-| `photos.asp?u=name` | Photo album; add photos (`.PIC`, up to 200x200) to your own |
 | `notify.asp` | Your notifications, new ones highlighted |
 | `delete.asp?id=N[&r=R]` | "Delete this?", then deletes a post or a reply |
 | `vote.asp`, `reply.asp`, `poke.asp` | Thumbs, replies and pokes; they redirect back |
@@ -47,7 +45,7 @@ the pages without touching anyone's data.
   author, the owner of its Wall, and their friends. The feed and Walls show
   the newest two replies; the post's own page shows the rest.
 * **Deleting**: whoever wrote a post, or the owner of the Wall it is on, can
-  delete it, along with its thumbs, replies and photo. The same goes for
+  delete it, along with its thumbs and replies. The same goes for
   replies. You are always asked first.
 * **Notifications**: you get one when someone writes on your Wall, replies to
   your post or to one on your Wall, gives your post a thumb, pokes you, or
@@ -55,10 +53,6 @@ the pages without touching anyone's data.
   kept.
 * **Pokes**: poke a friend from their profile. Your home page lists who
   poked you, with "poke back" and "remove".
-* **Photos**: a photo is a post on your own Wall with a picture attached, so
-  it shows up in the feed and takes thumbs and replies. Run `SHRINK.SPK` with
-  the size 200 to turn a Sketch drawing into a 200x150 `PHOTO.PIC` (about
-  30K).
 * **Counters**: every text box counts down as you type, and the button greys
   out while a box holds too much. This is a SPARK page script, which Voyager
   runs on every keystroke. The server checks the limits again anyway.
@@ -83,23 +77,29 @@ the pages without touching anyone's data.
 
 Every reset ends all of that member's sign-ins.
 
-## Pictures and the 64K limit
+## Pictures: stock ones only
+
+SimBook takes **no uploaded pictures or photos**, so nothing a stranger draws
+is ever kept on the machine that runs it. Every member has one of 20 stock
+pictures, `AV01.PIC` to `AV20.PIC` beside the pages (80 by 80): sixteen
+little characters and four places (a beach, mountains, a sunset, a night).
+A new member is given one at random; **Change My Picture** (`picture.asp`)
+picks another. The choice is `avatar=N` in their profile, and a member from
+before there were stock pictures has one their name picks.
+
+The pictures are drawn by [`make-avatars.mjs`](make-avatars.mjs)
+(`node simbook/make-avatars.mjs preview.png` also writes a contact sheet).
+
+Upgrading an older SimBook deletes what was uploaded to it: each member's
+`PICS\<user>.PIC`, every `PHOTOS\<post>.PIC` and the photo albums. Only
+files that are plainly SimBook's go, so a home page's own pictures in a
+folder of the same name stay. Posts that had a photo stay, as words, and old
+links to an album lead to the member's profile.
+
+## The 64K limit
 
 SIM95 carries at most 65,536 characters in one network message. Voyager sends
 a whole request as one message, and `HTTPD.SPK` sends a whole page as one.
-Sketch always saves 400x300 pictures, about 120K, so Voyager refuses to send
-one ("Message too long"). The picture page therefore hands out
-[`SHRINK.SPK`](WEB/SHRINK.SPK), which a visitor runs on their own machine. It
-turns `ME.PIC` into a 100x75 `AVATAR.PIC` of about 8K. Each 4x4 block becomes
-the colour it holds most of, ignoring white, so thin lines survive.
-
-Can a page batch a big submission into several requests instead? Not from
-Voyager. A page script gets only `PAGE`, `TIME`, `MATH`, and a `SYS` with
-`Ticks`, `Sleep` and `Beep`. It cannot open a connection, and it cannot read
-the file a file box points at. A stand-alone SPARK program could (it has
-`NET_Socket`), but a full-size picture would then be too big for `HTTPD.SPK`
-to send back as an image. So SimBook keeps everything small enough to travel
-in one message, and the live counters make sure text boxes do.
 
 On the server side, a page over 64K would stop the web server. So names,
 profile fields and posts are capped, and the feed, Wall and directory stop
@@ -137,10 +137,8 @@ C:\BOOKDATA\VOTES\<post>.TXT    |ann+|bob-|
 C:\BOOKDATA\REPLIES\<post>.TXT  number|date|author|name|text, one reply per line
 C:\BOOKDATA\NOTES\<user>.TXT    notifications (.SEE: the last one read)
 C:\BOOKDATA\POKES\<user>.TXT    |bob|cat|  who has poked them
-C:\BOOKDATA\ALBUMS\<user>.TXT   |12|40|  which posts are their photos
 C:\BOOKDATA\RESETS\<id>.TXT     an e-mailed reset link: user, when (TIME.Now), secret
-C:\WEB\PHOTOS\<post>.PIC        photos
-C:\WEB\PICS\<user>.PIC          profile pictures
+C:\WEB\AV01.PIC ... AV20.PIC     the stock pictures
 ```
 
 User names are 3–8 letters or digits, because they double as 8.3 file names.

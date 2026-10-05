@@ -102,17 +102,6 @@ await test("register rejects bad names, taken names and mismatched passwords", a
   assert.match(r.body, /3 to 8 letters/);
 });
 
-// What Sketch saves: always 400 by 300. A black line across a white page, with a red blob.
-function sketchPicture() {
-  const rows = [];
-  for (let y = 0; y < 300; y++) {
-    let r = "";
-    for (let x = 0; x < 400; x++) r += y === 150 ? "0" : (x >= 40 && x < 80 && y >= 40 && y < 80 ? "9" : "F");
-    rows.push(r);
-  }
-  return "SIM95PIC 400 300\n" + rows.join("\n") + "\n";
-}
-
 await test("edit profile saves fields and escapes them", async () => {
   const r = ok(await ann.post("/edit.asp", {
     name: "Ann <Example>", sex: "Female", birthday: "1980-02-04", hometown: "Cambridge | MA",
@@ -123,54 +112,53 @@ await test("edit profile saves fields and escapes them", async () => {
   assert.match(r.body, /Cambridge \| MA/);
   assert.match(r.body, /line one<br>line two/);
   assert.match(r.body, /100% real/);
-  assert.match(r.body, /<img src="nopic.pic"/);
+  assert.match(r.body, /<img src="av\d\d\.pic" alt="ann">/);
   ok(await ann.post("/edit.asp", { name: "Ann Example", status: "It's Complicated" }));
   const e = ok(await ann.get("/edit.asp"));
   assert.match(e.body, /<option selected>It&#39;s Complicated<\/option>|<option selected>It's Complicated<\/option>/);
 });
 
-await test("a picture straight from Sketch is too big for Voyager to send", async () => {
-  await assert.rejects(ann.post("/picture.asp", { pic: sketchPicture() }), /Message too long/);
-});
-
-await test("SHRINK.SPK makes a Sketch picture uploadable, keeping thin lines", async () => {
-  // On the visitor's own machine
-  const home = await machine("ANNSPC");
-  home.write("C:\\MYFILES\\ME.PIC", sketchPicture());
-  const said = await home.runScript(fs.readFileSync(path.join(root, "simbook/WEB/SHRINK.SPK"), "utf8"), { input: ["c:\\myfiles\\me.pic"] });
-  assert.match(said.join("\n"), /Saved C:\\MYFILES\\AVATAR.PIC \(100 by 75\)/);
-  const avatar = home.read("C:\\MYFILES\\AVATAR.PIC");
-  const rows = avatar.trim().split("\n");
-  assert.equal(rows[0], "SIM95PIC 100 75");
-  assert.equal(rows.length, 76);
-  assert.ok(rows.slice(1).every((r) => r.length === 100));
-  assert.equal(rows[1 + 37], "0".repeat(100), "the 1-pixel line survives");
-  assert.equal(rows[1 + 12].slice(10, 20), "9".repeat(10), "the blob survives");
-  assert.ok(avatar.length < 9000);
-  // ...then uploaded to SimBook
-  const r = ok(await ann.post("/picture.asp", { pic: avatar }));
+await test("every member gets a stock picture at random, and can choose another; nothing is uploaded", async () => {
+  // twenty stock pictures beside the pages, 80 by 80
+  for (let i = 1; i <= 20; i++) {
+    const f = "AV" + String(i).padStart(2, "0") + ".PIC";
+    assert.match(m.read("C:\\WEB\\" + f), /^SIM95PIC 80 80\n([0-9A-F]{80}\n){80}$/, f);
+  }
+  assert.match((await m.request("GET", "/av07.pic")).body, /^SIM95PIC 80 80/, "the web server hands them out");
+  // ann was given one when she joined
+  const n0 = Number(/^avatar=(\d+)$/m.exec(m.read("C:\\BOOKDATA\\USERS\\ANN.TXT"))[1]);
+  assert.ok(n0 >= 1 && n0 <= 20);
+  const av = (n) => "av" + String(n).padStart(2, "0") + ".pic";
+  assert.match(ok(await ann.get("/profile.asp?u=ann")).body, new RegExp(`<img src="${av(n0)}" alt="ann">`));
+  // the choosing page: all twenty, hers ticked, by this machine's address (Voyager asks for them all at once)
+  let r = ok(await ann.get("/picture.asp"));
+  assert.equal([...r.body.matchAll(/<input type="radio" name="avatar" value="(\d+)"/g)].length, 20);
+  assert.match(r.body, new RegExp(`value="${n0}" checked`));
+  assert.match(r.body, /<img src="http:\/\/[\d.]+\/av01\.pic" width="80" height="80"/);
+  assert.doesNotMatch(r.body, /type="file"|value="Upload/i);
+  r = ok(await ann.post("/picture.asp", { avatar: "7" }));
   assert.equal(r.url, "/profile.asp?u=ann");
-  assert.match(r.body, /<img src="pics\/ann.pic"/);
-  assert.equal(m.read("C:\\WEB\\PICS\\ANN.PIC"), avatar);
+  assert.match(r.body, /<img src="av07\.pic" alt="ann">/);
+  // nonsense changes nothing; an upload has nowhere to go
+  ok(await ann.post("/picture.asp", { avatar: "99" }));
+  ok(await ann.post("/picture.asp", { avatar: "7", pic: "SIM95PIC 2 2\n00\n00\n" }));
+  assert.match(m.read("C:\\BOOKDATA\\USERS\\ANN.TXT"), /^avatar=7$/m);
+  assert.ok(!m.exists("C:\\WEB\\PICS") && !m.exists("C:\\WEB\\PHOTOS"), "no picture folders at all");
+  // a member from before there were stock pictures has one their name picks, always the same
+  const rec = m.read("C:\\BOOKDATA\\USERS\\ANN.TXT");
+  m.write("C:\\BOOKDATA\\USERS\\ANN.TXT", rec.replace(/^avatar=\d+\n/m, ""));
+  const first = /<img src="(av\d\d\.pic)" alt="ann">/.exec(ok(await ann.get("/profile.asp?u=ann")).body)[1];
+  assert.equal(/<img src="(av\d\d\.pic)" alt="ann">/.exec(ok(await ann.get("/home.asp")).body)[1], first);
+  m.write("C:\\BOOKDATA\\USERS\\ANN.TXT", rec);
 });
 
-await test("the picture page explains the limit and hands out SHRINK.SPK", async () => {
-  const r = ok(await ann.get("/picture.asp"));
-  assert.match(r.body, /Voyager cannot send anything over 64K/);
-  assert.match(r.body, /SHRINK.SPK - makes a Sketch picture small enough/);
-  assert.match(r.body, /Remove My Picture/);
-});
-
-await test("the picture page refuses bad and oversized pictures, and can remove one", async () => {
-  let r = ok(await ann.post("/picture.asp", { pic: "<html>not a pic" }));
-  assert.match(r.body, /not a picture/);
-  r = ok(await ann.post("/picture.asp", { pic: "SIM95PIC 101 10\n" + ("F".repeat(101) + "\n").repeat(10) }));
-  assert.match(r.body, /101 by 10. Shrink it/);
-  assert.match(m.read("C:\\WEB\\PICS\\ANN.PIC"), /^SIM95PIC 100 75/);
-  const pic = m.read("C:\\WEB\\PICS\\ANN.PIC");
-  r = ok(await ann.post("/picture.asp", { remove: "1" }));
-  assert.match(r.body, /<img src="nopic.pic"/);
-  ok(await ann.post("/picture.asp", { pic }));
+await test("new members get pictures at random", async () => {
+  const seen = new Set();
+  for (let i = 0; i < 12; i++) {
+    await join(m, "rnd" + i, "Random " + i);
+    seen.add(/^avatar=(\d+)$/m.exec(m.read(`C:\\BOOKDATA\\USERS\\RND${i}.TXT`))[1]);
+  }
+  assert.ok(seen.size >= 4, "12 members, " + seen.size + " different pictures");
 });
 
 await test("only friends can write on a Wall", async () => {
@@ -340,7 +328,7 @@ await test("requests from another site's page change nothing", async () => {
     ["POST", "/reply.asp", { id, text: "forged reply" }],
     ["POST", "/friend.asp", { u: "ann", do: "remove" }],
     ["POST", "/edit.asp", { name: "Pwned" }],
-    ["POST", "/picture.asp", { remove: "1" }],
+    ["POST", "/picture.asp", { avatar: "3" }],
     ["GET", `/vote.asp?id=${id}&v=down&b=home`],
     ["GET", "/logout.asp"],
   ];
@@ -413,7 +401,7 @@ await test("the data survives a restart: it is all on disk", async () => {
 });
 
 
-// ---- deleting, notifications, pokes, photos and the chunked log, on a machine of their own
+// ---- deleting, notifications, pokes and the chunked log, on a machine of their own
 const n = await fresh();
 const al = await join(n, "alice", "Alice A");
 const bo = await join(n, "bobby", "Bobby B");
@@ -520,44 +508,27 @@ await test("deleting a reply: its author or the Wall owner", async () => {
   assert.ok(view.includes("alice says") && !view.includes("&r="), "carol sees no delete links");
 });
 
-await test("photos: shrink a Sketch drawing, add it, see it in the album and the feed", async () => {
-  const home = await machine("BOBSPC");
-  home.write("C:\\MYFILES\\ME.PIC", sketchPicture());
-  const said = await home.runScript(fs.readFileSync(path.join(root, "simbook/WEB/SHRINK.SPK"), "utf8"), { args: ["C:\\MYFILES\\ME.PIC", "200"] });
-  assert.match(said.join("\n"), /Saved C:\\MYFILES\\PHOTO.PIC \(200 by 150\)/);
-  const photo = home.read("C:\\MYFILES\\PHOTO.PIC");
-  assert.ok(photo.length < 45000);
-  let r = ok(await bo.post("/photos.asp", { pic: photo, caption: "me <drawn>" }));
-  assert.equal(r.url, "/photos.asp?u=bobby");
-  const id = nLog().filter((l) => l.split("|")[2] === "bobby").pop().split("|")[0];
-  assert.match(r.body, new RegExp(`<img src="photos/${id}.pic"`));
-  assert.match(r.body, /me &lt;drawn&gt;/);
-  assert.match(r.body, /Photos \(1\)/);
-  assert.equal(n.read(`C:\\WEB\\PHOTOS\\${id}.PIC`), photo);
-  assert.equal((await n.request("GET", `/photos/${id}.pic`)).body, photo, "the web server hands it out");
-  r = ok(await al.get("/home.asp"));
-  assert.match(r.body, new RegExp(`Bobby B</b></a> added a photo .*<img src="photos/${id}.pic"`, "s"));
-  ok(await al.post("/reply.asp", { id, text: "nice drawing" }));
-  assert.match(ok(await al.get(`/vote.asp?id=${id}&v=up&b=view`)).body, /nice drawing/);
-  assert.match(ok(await al.get("/profile.asp?u=bobby")).body, /Photos \(1\)/);
-  assert.ok(!ok(await al.get("/photos.asp?u=bobby")).body.includes("Add a Photo"), "only on your own album");
-});
-
-await test("photos: too big, not a picture, long captions; deleting takes the file", async () => {
-  await assert.rejects(bo.post("/photos.asp", { pic: sketchPicture(), caption: "" }), /Message too long/);
-  let r = ok(await bo.post("/photos.asp", { pic: "SIM95PIC 201 2\n" + ("F".repeat(201) + "\n").repeat(2), caption: "" }));
-  assert.match(r.body, /201 by 2. Shrink it to 200 by 200/);
-  r = ok(await bo.post("/photos.asp", { pic: "hello", caption: "" }));
-  assert.match(r.body, /not a picture/);
-  r = ok(await bo.post("/photos.asp", { pic: "SIM95PIC 2 2\n00\n00\n", caption: "c".repeat(201) }));
-  assert.match(r.body, /caption under 200/);
-  ok(await bo.post("/photos.asp", { pic: "SIM95PIC 2 2\n00\n00\n", caption: "" }));
-  const id = nLog().filter((l) => l.split("|")[2] === "bobby").pop().split("|")[0];
-  assert.match(ok(await al.get("/home.asp")).body, new RegExp(`photos/${id}.pic`), "no caption is fine");
-  ok(await bo.post("/delete.asp", { id }));
-  assert.ok(!n.exists(`C:\\WEB\\PHOTOS\\${id}.PIC`));
-  assert.ok(!n.read("C:\\BOOKDATA\\ALBUMS\\BOBBY.TXT").includes(`|${id}|`));
-  assert.match(ok(await bo.get("/photos.asp")).body, /Photos \(1\)/);
+await test("an older SimBook's uploads are deleted by the installer; photo posts stay, as words", async () => {
+  const old = await fresh();
+  const ob = await join(old, "olduser", "Old User");
+  ok(await ob.post("/post.asp", { to: "olduser", text: "my holiday" }));
+  const id = logLines(old).find((l) => l.endsWith("|my holiday")).split("|")[0];
+  // what the old SimBook left: a profile picture, a photo and an album, and a home page's own picture
+  old.mkdir("C:\\WEB\\PICS"); old.mkdir("C:\\WEB\\PHOTOS");
+  old.write("C:\\WEB\\PICS\\OLDUSER.PIC", "SIM95PIC 2 2\n00\n00\n");
+  old.write("C:\\WEB\\PICS\\LOGO.PIC", "my home page's logo");
+  old.write(`C:\\WEB\\PHOTOS\\${id}.PIC`, "SIM95PIC 2 2\n99\n99\n");
+  old.mkdir("C:\\BOOKDATA\\ALBUMS");
+  old.write("C:\\BOOKDATA\\ALBUMS\\OLDUSER.TXT", `|${id}|`);
+  const said = await old.runScript(fs.readFileSync(path.join(root, "simbook/INSTALL.SPK"), "utf8"));
+  assert.ok(said.some((l) => /deleted 1 uploaded pictures from C:\\WEB\\PICS/.test(l)), said.join("\n"));
+  assert.ok(!old.exists("C:\\WEB\\PICS\\OLDUSER.PIC") && !old.exists(`C:\\WEB\\PHOTOS\\${id}.PIC`) && !old.exists("C:\\BOOKDATA\\ALBUMS\\OLDUSER.TXT"));
+  assert.ok(!old.exists("C:\\WEB\\PHOTOS"), "an empty folder goes");
+  assert.equal(old.read("C:\\WEB\\PICS\\LOGO.PIC"), "my home page's logo", "what isn't SimBook's stays");
+  const feed = ok(await ob.get("/home.asp")).body;
+  assert.match(feed, /my holiday/);
+  assert.doesNotMatch(feed, /photos\/|added a photo/);
+  assert.equal(ok(await ob.get("/photos.asp?u=olduser")).url, "/profile.asp?u=olduser", "old album links lead to the profile");
 });
 
 await test("the log rolls over to a new file every 500 posts", async () => {
@@ -597,7 +568,6 @@ await test("the new actions refuse forged requests too", async () => {
   for (const [method, url, form] of [
     ["POST", "/delete.asp", { id }],
     ["GET", "/poke.asp?u=bobby&do=poke"],
-    ["POST", "/photos.asp", { pic: "SIM95PIC 2 2\n00\n00\n", caption: "forged" }],
   ]) {
     const body = form ? new URLSearchParams(form).toString() : "";
     const r = await n.request(method, url, { body, cookies });
@@ -623,10 +593,9 @@ await test("every page stays under 64K even with the nastiest content allowed", 
   const ids = logLines(big).map((l) => l.split("|")[0]).sort((a, b) => a - b);
   for (const id of ids.slice(-30)) for (let j = 0; j < 3; j++) ok(await a.post("/reply.asp", { id, text: lt(500) }));
   const one = ids[ids.length - 1];
-  for (let j = 0; j < 22; j++) ok(await a.post("/photos.asp", { pic: "SIM95PIC 2 2\n00\n00\n", caption: lt(200) }));
   for (let j = 0; j < 60; j++) ok(await books["wst" + (1 + (j % 30))].post("/reply.asp", { id: one, text: lt(500) }));
   const sizes = [];
-  for (const url of ["/home.asp", "/profile.asp?u=wst0", "/profile.asp?u=wst1", "/people.asp", "/edit.asp", "/picture.asp", "/view.asp?id=" + one, "/delete.asp?id=" + one, "/photos.asp", "/notify.asp"]) {
+  for (const url of ["/home.asp", "/profile.asp?u=wst0", "/profile.asp?u=wst1", "/people.asp", "/edit.asp", "/picture.asp", "/view.asp?id=" + one, "/delete.asp?id=" + one, "/notify.asp"]) {
     const r = ok(await a.get(url));
     assert.equal(r.url, url, "not signed in");
     const pg = await page(r.body);

@@ -645,7 +645,7 @@ await test("every app on WEB comes through the new web server, by path and by na
   assert.equal(r.status, "302 Found");
   const cookie = header(r, "Set-Cookie").split(";")[0];
   assert.match(ok(await http(client, "WEB", "GET", "/book/home.asp", { cookie })).body, /Ann/);
-  assert.match(ok(await http(client, "WEB", "GET", "/book/nopic.pic")).body, /^SIM95PIC /);
+  assert.match(ok(await http(client, "WEB", "GET", "/book/av01.pic")).body, /^SIM95PIC /);
   assert.ok(ok(await http(client, "WEB", "GET", "/mail/dist/manifest.txt")).body.includes("|C:\\WEB\\"));
   assert.match(ok(await http(client, "WEB", "GET", "/ask/")).body, /AskSim/);
   assert.match(ok(await http(client, "WEB", "GET", "/pal/")).body, /SimPal/);

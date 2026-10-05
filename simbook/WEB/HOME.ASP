@@ -16,7 +16,6 @@ pokers = PokesOf(viewer).Split("|")
 <a href="profile.asp?u=<%= viewer %>">My Profile</a><br>
 <a href="edit.asp">Edit My Profile</a><br>
 <a href="picture.asp">Change My Picture</a><br>
-<a href="photos.asp?u=<%= viewer %>">My Photos</a><br>
 <a href="profile.asp?u=<%= viewer %>#friends">My Friends (<%= Friends(viewer).Count %>)</a><br>
 <a href="people.asp">Find People</a></font>
 </td>

@@ -122,7 +122,7 @@ function vaporStore() {
 // folder that has one. An app not listed here gets the first sentence of its
 // Vapor blurb.
 const portal = {
-  BOOK: ["The social network: profiles, friends, a news feed, walls, photos and pokes.", "#3B5998"],
+  BOOK: ["The social network: profiles, friends, a news feed, walls and pokes.", "#3B5998"],
   MAIL: ["Free webmail, with a real mail server behind it.", "#2E5E8C"],
   ASK: ["A search engine with a real crawler that goes round every machine on the network.", "#8B1A1A"],
   GEO: ["Free homepages for everybody: neighborhoods, hit counters, guestbooks and webrings.", "#008080"],
@@ -341,7 +341,7 @@ END SUB
 const apps = {
   simbook: {
     folder: "BOOK",
-    vapor: { folder: "BOOK", id: "SIMBOOK", name: "SimBook", kind: "web", category: "Social", run: "/", tasks: "", startup: "", about: "The social network for the SIM95 network: profiles, friends, a news feed, walls, photos and pokes. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
+    vapor: { folder: "BOOK", id: "SIMBOOK", name: "SimBook", kind: "web", category: "Social", run: "/", tasks: "", startup: "", about: "The social network for the SIM95 network: profiles, friends, a news feed, walls and pokes. Becomes this machine's home page, or on a SimHost machine gets a folder of its own." },
     title: "SimBook",
     about: `' Save this as C:\\MYFILES\\INSTALL.SPK in SPARK and press F5. SimBook becomes
 ' this machine's home page: its pages go into C:\\WEB, and the stock INDEX.HTM is
@@ -349,8 +349,7 @@ const apps = {
 ' leaves C:\\BOOKDATA (accounts, posts) alone, so running it again upgrades
 ' SimBook without losing anybody. Then open http://YOURNAME/ in Voyager.`,
     copy: [["simbook/WEB", "C:\\WEB"]],
-    dirs: ["C:\\WEB\\PICS"],
-    moreDirs: ["C:\\WEB\\PHOTOS"],
+    dirs: [],
     first: ["MoveHomePage()", "Migrate()"],
     last: [],
     url: "/",
