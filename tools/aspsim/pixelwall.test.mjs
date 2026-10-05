@@ -57,6 +57,8 @@ async function click(from, href) {
 }
 const wallRows = () => host.read("C:\\WALLDATA\\WALL.TXT").trim().split("\n");
 const pixel = (x, y) => wallRows()[y][x];
+// each part of the wall's own wait, forgotten (for tests about something else)
+const forgetParts = () => host.write("C:\\WALLDATA\\COOL.TXT", host.read("C:\\WALLDATA\\COOL.TXT").split("\n").filter((l) => !l.startsWith("part")).join("\n"));
 
 await test("installing: the wall in C:\\WEB\\WALL, a white wall in C:\\WALLDATA, and its place on the front page", async () => {
   const installer = src("pixelwall/INSTALL.SPK");
@@ -122,7 +124,13 @@ await test("Voyager: a square placed, the wait before the next, and someone else
   r = await click(alpha, "place.asp?x=21&y=17&c=9&r=5");
   assert.match(r.body, /Not yet: one pixel every 15 seconds\./);
   assert.equal(pixel(21, 17), "F");
-  // another machine isn't kept waiting
+  // another machine, in the same part: that part takes one pixel every 15 seconds, from anyone
+  r = await click(delta, "place.asp?x=22&y=17&c=2&r=5");
+  assert.match(r.body, /Someone just drew in this part of the wall: it takes one pixel every 15 seconds\. Try another part, or wait\./);
+  assert.match(r.body, /Next pixel in 1[45] seconds/, "and the countdown is the part's");
+  assert.equal(pixel(22, 17), "F");
+  assert.match(host.read("C:\\WALLDATA\\COOL.TXT"), /^part5\|\d+$/m);
+  // another machine, in another part, isn't kept waiting
   r = await click(bravo, "place.asp?x=0&y=0&c=4&r=0");
   assert.match(r.body, /Placed: Navy at 0,0\./);
   assert.match(r.body, /BRAVO put Navy at 0,0[\s\S]*ALPHA put Red at 20,17/, "newest first");
@@ -139,6 +147,7 @@ await test("Voyager: a square placed, the wait before the next, and someone else
 
 // Simxplorer on CHARLIE
 charlie.write("C:\\PROGRAMS\\SIMXPLOR.SPK", simxplorerSource());
+forgetParts();
 const ie = charlie.run("C:\\PROGRAMS\\SIMXPLOR.SPK", ["http://wallhost/wall/"]);
 const win = () => charlie.widgets(ie, "Window")[0];
 const view = () => charlie.widgets(ie, "HtmlView")[0];
@@ -190,6 +199,7 @@ await test("Simxplorer: the wall drawn by its script, with every square, colour 
 });
 
 await test("Simxplorer: a colour, a square, the countdown, and another part of the wall, without reloading", async () => {
+  forgetParts();
   fire(cells()[256 + 15 + 12].js); // Blue
   await wait(() => /<b>Colour:<\/b> Blue/.test(html()), "Blue chosen");
   fire(cells()[2 * 16 + 5].js); // 21,18
@@ -199,7 +209,7 @@ await test("Simxplorer: a colour, a square, the countdown, and another part of t
   assert.match(html(), /CHARLIE put Blue at 21,18/);
   // too soon: said, and nothing sent
   fire(cells()[0].js);
-  await wait(() => /^Not yet: one pixel every 15 seconds\.$/.test(el("msg").Text), "not yet");
+  await wait(() => /^Not yet: the next pixel here in 1[0-5] seconds\.$/.test(el("msg").Text), "not yet: " + el("msg").Text);
   assert.equal(pixel(16, 16), "F");
   await wait(() => /^Next pixel in 1[0-3] seconds$/.test(el("cd").Text), "the countdown going down: " + el("cd").Text);
   // A1, the top left
@@ -211,6 +221,7 @@ await test("Simxplorer: a colour, a square, the countdown, and another part of t
 });
 
 await test("Simxplorer: someone else's pixel turns up by itself", async () => {
+  forgetParts();
   await click(delta, "place.asp?x=1&y=0&c=10&r=0");
   assert.equal(pixel(1, 0), "A");
   await wait(() => cells()[1]?.colour.toUpperCase() === "#00FF00", "DELTA's lime on CHARLIE's page", 20000);

@@ -236,12 +236,14 @@ SUB File17 ()
     t = t + "VAR mark AS String" + NL
     t = t + "r = Num(REQUEST.Query(""r""), 0, 15, 5)" + NL
     t = t + "c = Num(REQUEST.Query(""c""), 0, 15, 0)" + NL
-    t = t + "left = CoolLeft(REQUEST.From)" + NL
+    t = t + "left = WaitFor(REQUEST.From, r)" + NL
     t = t + "SELECT CASE REQUEST.Query(""m"")" + NL
     t = t + "    CASE ""ok""" + NL
     t = t + "        msg = ""Placed: "" + ColourName(c) + "" at "" + Str(Num(REQUEST.Query(""x""), 0, SIZE - 1, 0)) + "","" + Str(Num(REQUEST.Query(""y""), 0, SIZE - 1, 0)) + "".""" + NL
     t = t + "    CASE ""wait""" + NL
     t = t + "        msg = ""Not yet: one pixel every "" + Str(COOLDOWN) + "" seconds.""" + NL
+    t = t + "    CASE ""hold""" + NL
+    t = t + "        msg = ""Someone just drew in this part of the wall: it takes one pixel every "" + Str(PARTCOOL) + "" seconds. Try another part, or wait.""" + NL
     t = t + "    CASE ""busy""" + NL
     t = t + "        msg = ""The wall was busy: try again.""" + NL
     t = t + "    CASE ""bad""" + NL
@@ -252,7 +254,7 @@ SUB File17 ()
     t = t + "    here = SERVER.ScriptName.Substring(0, LastAt(SERVER.ScriptName, ""\"") + 1)" + NL
     t = t + "%><html><head><title>The Pixel Wall</title><meta name=""robots"" content=""nofollow""></head><body bgcolor=""#C0C0C0"">" + NL
     t = t + "<script language=""JavaScript"">" + NL
-    t = t + "var S = {r:<%= r %>, c:<%= c %>, v:<%= Version() %>, cool:<%= COOLDOWN %>, rows:""<%= RegionDigits(rows, r) %>"", due:0, left:<%= left %>, feed:unescape(""<%= JsEscape(Feed().Join(Chr(10))) %>""), msg:unescape(""<%= JsEscape(msg) %>"")};" + NL
+    t = t + "var S = {r:<%= r %>, c:<%= c %>, v:<%= Version() %>, cool:<%= COOLDOWN %>, part:<%= PARTCOOL %>, rows:""<%= RegionDigits(rows, r) %>"", due:0, left:<%= left %>, feed:unescape(""<%= JsEscape(Feed().Join(Chr(10))) %>""), msg:unescape(""<%= JsEscape(msg) %>"")};" + NL
     t = t + "var CODE = unescape(""<%= JsEscape(ReadOr(here + ""WALL.JS"", ""document.write('WALL.JS is missing.');"")) %>"");" + NL
     t = t + "eval(CODE);" + NL
     t = t + "</script>" + NL
@@ -278,7 +280,7 @@ SUB File17 ()
     t = t + "END SUB" + NL
     t = t + "</script>" + NL
     t = t + "<center><font size=""5""><b>The Pixel Wall</b></font><br>" + NL
-    t = t + "<font size=""2"">Everyone on the network shares this wall. Pick a colour, then click a square: one pixel every <%= COOLDOWN %> seconds.</font>" + NL
+    t = t + "<font size=""2"">Everyone on the network shares this wall. Pick a colour, then click a square: one pixel every <%= COOLDOWN %> seconds, and each part of the wall takes one every <%= PARTCOOL %> seconds from anyone.</font>" + NL
     t = t + "<p><table cellspacing=""10"" border=""0""><tr><td valign=""top"">" + NL
     t = t + "<table cellspacing=""1"" cellpadding=""0"" border=""0"" bgcolor=""#808080"">" + NL
     t = t + "<% FOR y = 0 TO TILE - 1 %><tr><% FOR x = 0 TO TILE - 1" + NL
@@ -629,7 +631,7 @@ SUB File36 ()
     t = t + "" + NL
     t = t + "// S, written out as JavaScript for the next page" + NL
     t = t + "function saved() {" + NL
-    t = t + "  return ""{r:"" + S.r + "",c:"" + S.c + "",v:"" + S.v + "",cool:"" + S.cool + "",rows:\"""" + S.rows + ""\"",due:"" + S.due +" + NL
+    t = t + "  return ""{r:"" + S.r + "",c:"" + S.c + "",v:"" + S.v + "",cool:"" + S.cool + "",part:"" + S.part + "",rows:\"""" + S.rows + ""\"",due:"" + S.due +" + NL
     t = t + "    "",left:0,feed:unescape(\"""" + escape(S.feed) + ""\""),msg:unescape(\"""" + escape(S.msg) + ""\"")}"";" + NL
     t = t + "}" + NL
     t = t + "" + NL
@@ -671,13 +673,14 @@ SUB File36 ()
     t = t + "" + NL
     t = t + "function put(x, y) {" + NL
     t = t + "  if (busy) return;" + NL
-    t = t + "  if (S.due > now()) { say(""Not yet: one pixel every "" + S.cool + "" seconds.""); return; }" + NL
+    t = t + "  if (S.due > now()) { say(""Not yet: the next pixel here in "" + Math.ceil((S.due - now()) / 1000) + "" seconds.""); return; }" + NL
     t = t + "  say(""Placing "" + NAMES[S.c] + "" at "" + x + "","" + y + ""..."");" + NL
     t = t + "  ask(""POST"", ""place.asp"", ""x="" + x + ""&y="" + y + ""&c="" + S.c + ""&r="" + S.r, function (lines) {" + NL
     t = t + "    var said = lines[0];" + NL
     t = t + "    take(lines.slice(1));" + NL
     t = t + "    if (said == ""OK"") S.msg = ""Placed: "" + NAMES[S.c] + "" at "" + x + "","" + y + ""."";" + NL
     t = t + "    else if (said == ""WAIT"") S.msg = ""Not yet: one pixel every "" + S.cool + "" seconds."";" + NL
+    t = t + "    else if (said == ""HOLD"") S.msg = ""Someone just drew in this part of the wall: it takes one pixel every "" + S.part + "" seconds. Try another part, or wait."";" + NL
     t = t + "    else if (said == ""BUSY"") S.msg = ""The wall was busy: try again."";" + NL
     t = t + "    else S.msg = ""That isn't a square on the wall."";" + NL
     t = t + "    redraw();" + NL
@@ -724,10 +727,14 @@ SUB File37 ()
     t = t + "'" + NL
     t = t + "' The wall is 64 by 64 pixels in SIM95's 16 colours, one hex digit each:" + NL
     t = t + "' C:\WALLDATA\WALL.TXT is 64 lines of 64 digits. Anyone may set one pixel" + NL
-    t = t + "' every COOLDOWN seconds (each machine, by its address)." + NL
+    t = t + "' every COOLDOWN seconds (each machine, by its address), and each 16 by 16" + NL
+    t = t + "' part of the wall takes one pixel every PARTCOOL seconds from anyone, so a" + NL
+    t = t + "' crowd of machines (one person with many tabs) can't fill a part any faster" + NL
+    t = t + "' than one person could. Other parts stay open meanwhile." + NL
     t = t + "'   VER.TXT    a number that goes up with every pixel, so a page can tell" + NL
     t = t + "'              whether the wall has changed" + NL
-    t = t + "'   COOL.TXT   address|when (seconds since 1970) each machine last placed one" + NL
+    t = t + "'   COOL.TXT   address|when (seconds since 1970) each machine last placed one," + NL
+    t = t + "'              and part<r>|when each part last took one" + NL
     t = t + "'   LOG.TXT    the latest pixels, oldest first: name|x|y|colour|clock" + NL
     t = t + "'   NAMES.TXT  machine names by address (NAME ADDRESS), and when they were" + NL
     t = t + "'              last looked up, so the log can say who" + NL
@@ -738,6 +745,7 @@ SUB File37 ()
     t = t + "CONST SIZE = 64" + NL
     t = t + "CONST TILE = 16" + NL
     t = t + "CONST COOLDOWN = 15" + NL
+    t = t + "CONST PARTCOOL = 15             ' seconds between two pixels in one part, from anyone" + NL
     t = t + "CONST LOGKEEP = 40" + NL
     t = t + "CONST FEEDROWS = 8" + NL
     t = t + "CONST HEXDIGITS = ""0123456789ABCDEF""" + NL
@@ -843,6 +851,31 @@ SUB File37 ()
     t = t + "    RETURN 0" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
+    t = t + "' Seconds before part r (0-15) takes another pixel (0: now)." + NL
+    t = t + "FUNCTION PartLeft (r AS Integer) AS Integer" + NL
+    t = t + "    VAR line AS String" + NL
+    t = t + "    VAR left AS Integer" + NL
+    t = t + "    FOR EACH line IN ReadOr(DATADIR + ""\COOL.TXT"", """").Split(Chr(10))" + NL
+    t = t + "        IF line.StartsWith(""part"" + Str(r) + ""|"") THEN" + NL
+    t = t + "            left = Int(Val(line.Split(""|"")[1])) + PARTCOOL - TIME.Now" + NL
+    t = t + "            IF left > PARTCOOL THEN RETURN 0" + NL
+    t = t + "            IF left > 0 THEN RETURN left" + NL
+    t = t + "            RETURN 0" + NL
+    t = t + "        END IF" + NL
+    t = t + "    NEXT" + NL
+    t = t + "    RETURN 0" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' The part of the wall a pixel is in." + NL
+    t = t + "FUNCTION PartOf (x AS Integer, y AS Integer) AS Integer" + NL
+    t = t + "    RETURN Int(y / TILE) * 4 + Int(x / TILE)" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
+    t = t + "' Seconds before addr may place a pixel in part r: its own wait or the part's." + NL
+    t = t + "FUNCTION WaitFor (addr AS String, r AS Integer) AS Integer" + NL
+    t = t + "    RETURN MATH.Max(CoolLeft(addr), PartLeft(r))" + NL
+    t = t + "END FUNCTION" + NL
+    t = t + "" + NL
     t = t + "' The latest pixels, newest first, as ""NAME put Red at 12,40 (14:05)""." + NL
     t = t + "FUNCTION Feed () AS Array OF String" + NL
     t = t + "    VAR lines AS Array OF String" + NL
@@ -862,7 +895,7 @@ SUB File37 ()
     t = t + "' What a page polls for, and what placing a pixel answers with: the version," + NL
     t = t + "' the seconds to wait, region r's digits, then the feed, a line each." + NL
     t = t + "FUNCTION State (r AS Integer, addr AS String) AS String" + NL
-    t = t + "    RETURN Str(Version()) + Chr(10) + Str(CoolLeft(addr)) + Chr(10) + RegionDigits(WallRows(), r) + Chr(10) + Feed().Join(Chr(10))" + NL
+    t = t + "    RETURN Str(Version()) + Chr(10) + Str(WaitFor(addr, r)) + Chr(10) + RegionDigits(WallRows(), r) + Chr(10) + Feed().Join(Chr(10))" + NL
     t = t + "END FUNCTION" + NL
     t = t + "" + NL
     t = t + "' The machine at addr, by name. Looking every machine up takes a moment, so" + NL
@@ -926,7 +959,8 @@ SUB File37 ()
     t = t + "    END TRY" + NL
     t = t + "END SUB" + NL
     t = t + "" + NL
-    t = t + "' A pixel from addr: ""OK"", ""WAIT"" (too soon) or ""BUSY"" (the wall couldn't" + NL
+    t = t + "' A pixel from addr: ""OK"", ""WAIT"" (too soon), ""HOLD"" (that part of the wall" + NL
+    t = t + "' took a pixel too recently, from anyone) or ""BUSY"" (the wall couldn't" + NL
     t = t + "' be had)." + NL
     t = t + "FUNCTION Place (addr AS String, x AS Integer, y AS Integer, c AS Integer) AS String" + NL
     t = t + "    VAR rows AS Array OF String" + NL
@@ -935,20 +969,26 @@ SUB File37 ()
     t = t + "    VAR logRows AS Array OF String" + NL
     t = t + "    VAR who AS String" + NL
     t = t + "    IF CoolLeft(addr) > 0 THEN RETURN ""WAIT""" + NL
+    t = t + "    IF PartLeft(PartOf(x, y)) > 0 THEN RETURN ""HOLD""" + NL
     t = t + "    who = WhoIs(addr)" + NL
     t = t + "    IF NOT TakeLock() THEN RETURN ""BUSY""" + NL
     t = t + "    IF CoolLeft(addr) > 0 THEN" + NL
     t = t + "        DropLock()" + NL
     t = t + "        RETURN ""WAIT""" + NL
     t = t + "    END IF" + NL
+    t = t + "    IF PartLeft(PartOf(x, y)) > 0 THEN" + NL
+    t = t + "        DropLock()" + NL
+    t = t + "        RETURN ""HOLD""" + NL
+    t = t + "    END IF" + NL
     t = t + "    rows = WallRows()" + NL
     t = t + "    rows[y] = rows[y].Substring(0, x) + HEXDIGITS.CharAt(c) + rows[y].Substring(x + 1, SIZE - x - 1)" + NL
     t = t + "    FS.Write(DATADIR + ""\WALL.TXT"", rows.Join(Chr(10)) + Chr(10))" + NL
     t = t + "    FS.Write(DATADIR + ""\VER.TXT"", Str(Version() + 1))" + NL
     t = t + "    cool.Add(addr + ""|"" + Str(TIME.Now))" + NL
+    t = t + "    cool.Add(""part"" + Str(PartOf(x, y)) + ""|"" + Str(TIME.Now))" + NL
     t = t + "    FOR EACH line IN ReadOr(DATADIR + ""\COOL.TXT"", """").Replace(Chr(13), """").Split(Chr(10))" + NL
     t = t + "        ' (others who are still waiting; the rest are forgotten)" + NL
-    t = t + "        IF line.Contains(""|"") AND NOT line.StartsWith(addr + ""|"") THEN" + NL
+    t = t + "        IF line.Contains(""|"") AND NOT line.StartsWith(addr + ""|"") AND NOT line.StartsWith(""part"" + Str(PartOf(x, y)) + ""|"") THEN" + NL
     t = t + "            IF TIME.Now - Int(Val(line.Split(""|"")[1])) < COOLDOWN THEN cool.Add(line)" + NL
     t = t + "        END IF" + NL
     t = t + "    NEXT" + NL

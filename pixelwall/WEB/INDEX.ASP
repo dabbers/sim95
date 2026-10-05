@@ -24,12 +24,14 @@ VAR line AS String
 VAR mark AS String
 r = Num(REQUEST.Query("r"), 0, 15, 5)
 c = Num(REQUEST.Query("c"), 0, 15, 0)
-left = CoolLeft(REQUEST.From)
+left = WaitFor(REQUEST.From, r)
 SELECT CASE REQUEST.Query("m")
     CASE "ok"
         msg = "Placed: " + ColourName(c) + " at " + Str(Num(REQUEST.Query("x"), 0, SIZE - 1, 0)) + "," + Str(Num(REQUEST.Query("y"), 0, SIZE - 1, 0)) + "."
     CASE "wait"
         msg = "Not yet: one pixel every " + Str(COOLDOWN) + " seconds."
+    CASE "hold"
+        msg = "Someone just drew in this part of the wall: it takes one pixel every " + Str(PARTCOOL) + " seconds. Try another part, or wait."
     CASE "busy"
         msg = "The wall was busy: try again."
     CASE "bad"
@@ -40,7 +42,7 @@ IF Fancy() THEN
     here = SERVER.ScriptName.Substring(0, LastAt(SERVER.ScriptName, "\") + 1)
 %><html><head><title>The Pixel Wall</title><meta name="robots" content="nofollow"></head><body bgcolor="#C0C0C0">
 <script language="JavaScript">
-var S = {r:<%= r %>, c:<%= c %>, v:<%= Version() %>, cool:<%= COOLDOWN %>, rows:"<%= RegionDigits(rows, r) %>", due:0, left:<%= left %>, feed:unescape("<%= JsEscape(Feed().Join(Chr(10))) %>"), msg:unescape("<%= JsEscape(msg) %>")};
+var S = {r:<%= r %>, c:<%= c %>, v:<%= Version() %>, cool:<%= COOLDOWN %>, part:<%= PARTCOOL %>, rows:"<%= RegionDigits(rows, r) %>", due:0, left:<%= left %>, feed:unescape("<%= JsEscape(Feed().Join(Chr(10))) %>"), msg:unescape("<%= JsEscape(msg) %>")};
 var CODE = unescape("<%= JsEscape(ReadOr(here + "WALL.JS", "document.write('WALL.JS is missing.');")) %>");
 eval(CODE);
 </script>
@@ -66,7 +68,7 @@ SUB Page_Load ()
 END SUB
 </script>
 <center><font size="5"><b>The Pixel Wall</b></font><br>
-<font size="2">Everyone on the network shares this wall. Pick a colour, then click a square: one pixel every <%= COOLDOWN %> seconds.</font>
+<font size="2">Everyone on the network shares this wall. Pick a colour, then click a square: one pixel every <%= COOLDOWN %> seconds, and each part of the wall takes one every <%= PARTCOOL %> seconds from anyone.</font>
 <p><table cellspacing="10" border="0"><tr><td valign="top">
 <table cellspacing="1" cellpadding="0" border="0" bgcolor="#808080">
 <% FOR y = 0 TO TILE - 1 %><tr><% FOR x = 0 TO TILE - 1

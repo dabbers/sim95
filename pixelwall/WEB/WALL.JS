@@ -71,7 +71,7 @@ function body() {
 
 // S, written out as JavaScript for the next page
 function saved() {
-  return "{r:" + S.r + ",c:" + S.c + ",v:" + S.v + ",cool:" + S.cool + ",rows:\"" + S.rows + "\",due:" + S.due +
+  return "{r:" + S.r + ",c:" + S.c + ",v:" + S.v + ",cool:" + S.cool + ",part:" + S.part + ",rows:\"" + S.rows + "\",due:" + S.due +
     ",left:0,feed:unescape(\"" + escape(S.feed) + "\"),msg:unescape(\"" + escape(S.msg) + "\")}";
 }
 
@@ -113,13 +113,14 @@ function ask(method, url, body, done) {
 
 function put(x, y) {
   if (busy) return;
-  if (S.due > now()) { say("Not yet: one pixel every " + S.cool + " seconds."); return; }
+  if (S.due > now()) { say("Not yet: the next pixel here in " + Math.ceil((S.due - now()) / 1000) + " seconds."); return; }
   say("Placing " + NAMES[S.c] + " at " + x + "," + y + "...");
   ask("POST", "place.asp", "x=" + x + "&y=" + y + "&c=" + S.c + "&r=" + S.r, function (lines) {
     var said = lines[0];
     take(lines.slice(1));
     if (said == "OK") S.msg = "Placed: " + NAMES[S.c] + " at " + x + "," + y + ".";
     else if (said == "WAIT") S.msg = "Not yet: one pixel every " + S.cool + " seconds.";
+    else if (said == "HOLD") S.msg = "Someone just drew in this part of the wall: it takes one pixel every " + S.part + " seconds. Try another part, or wait.";
     else if (said == "BUSY") S.msg = "The wall was busy: try again.";
     else S.msg = "That isn't a square on the wall.";
     redraw();

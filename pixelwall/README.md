@@ -6,6 +6,11 @@ host: `http://starthere.56k.net/wall/`.
 
 * **Placing a pixel:** pick a colour, then click a square. Each machine can
   place one pixel every 15 seconds.
+* **Each part has a cooldown too:** a 16 by 16 part takes one pixel every 15
+  seconds from anyone. One person with a crowd of machines (many tabs) can't
+  fill a part any faster than one person could, while the other parts stay
+  open. Someone who tries a part that just took a pixel is told so, and to
+  try another part or wait.
 * **Seeing the wall:** a page shows a 16 by 16 part of it to click on, and the
   whole wall as a picture. Parts are named A1 to D4, like a map.
 * **Who drew what:** the latest pixels are listed under the colours, by
@@ -48,7 +53,8 @@ the bottom of the page.
 * The wall is kept in `C:\WALLDATA`:
   * `WALL.TXT` is 64 lines of 64 hex digits.
   * `VER.TXT` goes up with every pixel.
-  * `COOL.TXT` says when each machine last placed a pixel.
+  * `COOL.TXT` says when each machine last placed a pixel, and when each
+    part last took one (`part5|...`).
   * `LOG.TXT` has the latest pixels.
   * `NAMES.TXT` remembers machine names by address.
   * Two pixels at once wait their turn, behind a lock folder.

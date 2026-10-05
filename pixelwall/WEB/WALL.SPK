@@ -2,10 +2,14 @@
 '
 ' The wall is 64 by 64 pixels in SIM95's 16 colours, one hex digit each:
 ' C:\WALLDATA\WALL.TXT is 64 lines of 64 digits. Anyone may set one pixel
-' every COOLDOWN seconds (each machine, by its address).
+' every COOLDOWN seconds (each machine, by its address), and each 16 by 16
+' part of the wall takes one pixel every PARTCOOL seconds from anyone, so a
+' crowd of machines (one person with many tabs) can't fill a part any faster
+' than one person could. Other parts stay open meanwhile.
 '   VER.TXT    a number that goes up with every pixel, so a page can tell
 '              whether the wall has changed
-'   COOL.TXT   address|when (seconds since 1970) each machine last placed one
+'   COOL.TXT   address|when (seconds since 1970) each machine last placed one,
+'              and part<r>|when each part last took one
 '   LOG.TXT    the latest pixels, oldest first: name|x|y|colour|clock
 '   NAMES.TXT  machine names by address (NAME ADDRESS), and when they were
 '              last looked up, so the log can say who
@@ -16,6 +20,7 @@ CONST DATADIR = "C:\WALLDATA"
 CONST SIZE = 64
 CONST TILE = 16
 CONST COOLDOWN = 15
+CONST PARTCOOL = 15             ' seconds between two pixels in one part, from anyone
 CONST LOGKEEP = 40
 CONST FEEDROWS = 8
 CONST HEXDIGITS = "0123456789ABCDEF"
@@ -121,6 +126,31 @@ FUNCTION CoolLeft (addr AS String) AS Integer
     RETURN 0
 END FUNCTION
 
+' Seconds before part r (0-15) takes another pixel (0: now).
+FUNCTION PartLeft (r AS Integer) AS Integer
+    VAR line AS String
+    VAR left AS Integer
+    FOR EACH line IN ReadOr(DATADIR + "\COOL.TXT", "").Split(Chr(10))
+        IF line.StartsWith("part" + Str(r) + "|") THEN
+            left = Int(Val(line.Split("|")[1])) + PARTCOOL - TIME.Now
+            IF left > PARTCOOL THEN RETURN 0
+            IF left > 0 THEN RETURN left
+            RETURN 0
+        END IF
+    NEXT
+    RETURN 0
+END FUNCTION
+
+' The part of the wall a pixel is in.
+FUNCTION PartOf (x AS Integer, y AS Integer) AS Integer
+    RETURN Int(y / TILE) * 4 + Int(x / TILE)
+END FUNCTION
+
+' Seconds before addr may place a pixel in part r: its own wait or the part's.
+FUNCTION WaitFor (addr AS String, r AS Integer) AS Integer
+    RETURN MATH.Max(CoolLeft(addr), PartLeft(r))
+END FUNCTION
+
 ' The latest pixels, newest first, as "NAME put Red at 12,40 (14:05)".
 FUNCTION Feed () AS Array OF String
     VAR lines AS Array OF String
@@ -140,7 +170,7 @@ END FUNCTION
 ' What a page polls for, and what placing a pixel answers with: the version,
 ' the seconds to wait, region r's digits, then the feed, a line each.
 FUNCTION State (r AS Integer, addr AS String) AS String
-    RETURN Str(Version()) + Chr(10) + Str(CoolLeft(addr)) + Chr(10) + RegionDigits(WallRows(), r) + Chr(10) + Feed().Join(Chr(10))
+    RETURN Str(Version()) + Chr(10) + Str(WaitFor(addr, r)) + Chr(10) + RegionDigits(WallRows(), r) + Chr(10) + Feed().Join(Chr(10))
 END FUNCTION
 
 ' The machine at addr, by name. Looking every machine up takes a moment, so
@@ -204,7 +234,8 @@ SUB DropLock ()
     END TRY
 END SUB
 
-' A pixel from addr: "OK", "WAIT" (too soon) or "BUSY" (the wall couldn't
+' A pixel from addr: "OK", "WAIT" (too soon), "HOLD" (that part of the wall
+' took a pixel too recently, from anyone) or "BUSY" (the wall couldn't
 ' be had).
 FUNCTION Place (addr AS String, x AS Integer, y AS Integer, c AS Integer) AS String
     VAR rows AS Array OF String
@@ -213,20 +244,26 @@ FUNCTION Place (addr AS String, x AS Integer, y AS Integer, c AS Integer) AS Str
     VAR logRows AS Array OF String
     VAR who AS String
     IF CoolLeft(addr) > 0 THEN RETURN "WAIT"
+    IF PartLeft(PartOf(x, y)) > 0 THEN RETURN "HOLD"
     who = WhoIs(addr)
     IF NOT TakeLock() THEN RETURN "BUSY"
     IF CoolLeft(addr) > 0 THEN
         DropLock()
         RETURN "WAIT"
     END IF
+    IF PartLeft(PartOf(x, y)) > 0 THEN
+        DropLock()
+        RETURN "HOLD"
+    END IF
     rows = WallRows()
     rows[y] = rows[y].Substring(0, x) + HEXDIGITS.CharAt(c) + rows[y].Substring(x + 1, SIZE - x - 1)
     FS.Write(DATADIR + "\WALL.TXT", rows.Join(Chr(10)) + Chr(10))
     FS.Write(DATADIR + "\VER.TXT", Str(Version() + 1))
     cool.Add(addr + "|" + Str(TIME.Now))
+    cool.Add("part" + Str(PartOf(x, y)) + "|" + Str(TIME.Now))
     FOR EACH line IN ReadOr(DATADIR + "\COOL.TXT", "").Replace(Chr(13), "").Split(Chr(10))
         ' (others who are still waiting; the rest are forgotten)
-        IF line.Contains("|") AND NOT line.StartsWith(addr + "|") THEN
+        IF line.Contains("|") AND NOT line.StartsWith(addr + "|") AND NOT line.StartsWith("part" + Str(PartOf(x, y)) + "|") THEN
             IF TIME.Now - Int(Val(line.Split("|")[1])) < COOLDOWN THEN cool.Add(line)
         END IF
     NEXT
